@@ -39,9 +39,9 @@ ALL_CONTRACTS=(
   pol_vesting
   reserve_manager
   router
-  batch_router
   dex_aggregator
   batch_auction
+  batch_router
   cl_position_nft
   v2_to_v3_migration
 )

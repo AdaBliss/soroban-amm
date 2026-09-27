@@ -104,11 +104,12 @@ make test-all   # run tests for the whole workspace
 make fmt        # cargo fmt --all
 make lint       # cargo clippy --all -- -D warnings
 make check-docs # verify docs/error-codes.md matches #[contracterror] enums
+make check-deploy-scripts # fail if a contract has no scripts/deploy/ module
 make size       # print a WASM size report for all built contracts
 make size-check # fail if any contract WASM exceeds the size limit
 make doc        # build workspace docs with warnings denied
 make audit      # run a security audit of dependencies (cargo-audit)
-make check      # fmt + lint + test + check-docs + size-check + doc (run before pushing)
+make check      # fmt + lint + test + check-docs + check-deploy-scripts + size-check + doc (run before pushing)
 make bench      # hot-path benchmarks
 make deploy     # deploy contracts via scripts/deploy.sh
 make e2e        # run the end-to-end test suite

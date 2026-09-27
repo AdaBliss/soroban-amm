@@ -49,15 +49,17 @@ else
   die() { printf '[deploy][error] %s\n' "$*" >&2; exit 1; }
 fi
 
-# Source per-contract modules (all are sourceable and idempotent to source)
-for mod in token amm concentrated_liquidity factory pools governance \
-           staking incentive_campaigns pol_vesting reserve_manager \
-           oracle_aggregator twap_consumer router batch_router \
-           dex_aggregator batch_auction cl_position_nft v2_to_v3_migration; do
-  if [[ -f "${ROOT_DIR}/scripts/deploy/${mod}.sh" ]]; then
-    # shellcheck disable=SC1090
-    source "${ROOT_DIR}/scripts/deploy/${mod}.sh"
+# Source per-contract modules (all are sourceable and idempotent to source).
+# ALL_CONTRACTS in common.sh is the single list of deploy steps; a step with
+# no module is an error rather than a silent skip, and
+# scripts/check_deploy_scripts.sh fails CI when a deployable workspace
+# contract is missing from that list.
+for mod in "${ALL_CONTRACTS[@]}"; do
+  if [[ ! -f "${ROOT_DIR}/scripts/deploy/${mod}.sh" ]]; then
+    die "no deploy module for '${mod}': expected scripts/deploy/${mod}.sh"
   fi
+  # shellcheck disable=SC1090
+  source "${ROOT_DIR}/scripts/deploy/${mod}.sh"
 done
 
 # ── Argument parsing ───────────────────────────────────────────────────────
@@ -90,7 +92,7 @@ Available contract names (in deployment order):
   token, amm, concentrated_liquidity, factory, pools,
   governance, oracle_aggregator, twap_consumer, twal_consumer,
   staking, incentive_campaigns, pol_vesting, reserve_manager,
-  router, batch_router, dex_aggregator, batch_auction,
+  router, dex_aggregator, batch_auction, batch_router,
   cl_position_nft, v2_to_v3_migration
 
   Aliases: amm covers the AMM WASM artifact (pools via factory).
@@ -284,11 +286,11 @@ main() {
   deploy_pol_vesting
   deploy_reserve_manager
 
-  # 7. Routing
+  # 7. Routing (batch_router fronts batch_auction, so it follows it)
   deploy_router
-  deploy_batch_router
   deploy_dex_aggregator
   deploy_batch_auction
+  deploy_batch_router
 
   # 8. NFTs & migration
   deploy_cl_position_nft
