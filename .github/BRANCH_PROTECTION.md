@@ -29,12 +29,24 @@ Maintainers should configure the repository with the following settings:
 ## Testnet Smoke Test
 
 The [Testnet Smoke Test](workflows/smoke-test.yml) workflow is **not** a required PR check.
-It only runs on `workflow_dispatch` (manual trigger) and requires the `TESTNET_SECRET_KEY` secret to
-fund and sign real testnet transactions, so it cannot run automatically on pull requests or from forks.
+It needs the `TESTNET_SECRET_KEY` secret to sign real testnet transactions, so it cannot run on pull
+requests or from forks. Instead it runs:
 
-Maintainers should run it **manually before a release** or as part of the release process to verify
-deployed contracts behave correctly on testnet. It is a post-merge / pre-release quality gate, not a
-PR-blocking check.
+- **nightly** (04:17 UTC),
+- on **pushes to `main`** that touch contracts, `scripts/deploy*`, `scripts/e2e*`, the Cargo
+  manifests or the toolchain,
+- on every **published release**,
+- and on demand via `workflow_dispatch`.
+
+Before deploying anything it runs `scripts/e2e/preflight.sh`, which checks RPC health, re-creates the
+smoke-test account through friendbot if a testnet reset wiped it, and verifies the account balance.
+Each run's summary labels a failure as either an **infrastructure failure** (RPC outage, rate limit,
+friendbot, underfunded or missing account, CI setup) or a **protocol regression**.
+
+Failures from scheduled, push and release runs open an issue labelled `smoke-test-failure` (or comment
+on the open one), and the next passing run closes it. If the account runs low, top it up or rotate
+`TESTNET_SECRET_KEY` to a fresh key: friendbot only funds accounts that do not exist yet, and the next
+run creates the new one automatically.
 
 ## Settings drift
 

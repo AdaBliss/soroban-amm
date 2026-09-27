@@ -1,6 +1,36 @@
 name: Testnet Smoke Test
 
+# The only CI job that exercises a real network (XDR encoding, auth entries,
+# resource limits, cross-contract calls between deployed instances); every
+# other job runs against soroban_sdk's mock environment. It runs:
+#   - nightly, because testnet resets and drift in scripts/deploy* and
+#     scripts/e2e* only show up on a live network;
+#   - on pushes to main that touch what it deploys, so a break is attributed
+#     to the change that caused it rather than found days later;
+#   - on every published release;
+#   - on demand (workflow_dispatch).
+# Failures from scheduled, push and release runs open or update a tracking
+# issue, and the next passing run closes it — see the `report` job.
+
 on:
+  schedule:
+    # 04:17 UTC daily: off the top of the hour, when scheduled runs queue.
+    - cron: "17 4 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/**"
+      - "scripts/deploy.sh"
+      - "scripts/deploy/**"
+      - "scripts/e2e.sh"
+      - "scripts/e2e/**"
+      - "scripts/build_workspace.sh"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/smoke-test.yml"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       network:
@@ -8,11 +38,27 @@ on:
         default: testnet
         required: true
 
+# Every run signs with the same identity; two at once would race on its
+# sequence number (txBadSeq) and fail for reasons unrelated to the code.
+concurrency:
+  group: smoke-test-${{ inputs.network || 'testnet' }}
+  cancel-in-progress: false
+
 jobs:
   smoke-test:
+    # Forks have neither the secret nor a reason to run this on their pushes.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'promisszn/soroban-amm'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
+    env:
+      STELLAR_NETWORK: ${{ inputs.network || 'testnet' }}
+      SOURCE_ACCOUNT: ci-smoke
+    outputs:
+      category: ${{ steps.result.outputs.category }}
+      reason: ${{ steps.result.outputs.reason }}
+      network: ${{ env.STELLAR_NETWORK }}
     steps:
       - uses: actions/checkout@v7
 
@@ -27,20 +73,142 @@ jobs:
         uses: stellar/stellar-cli@v27.1.0
 
       - name: Import smoke test identity
+        id: identity
         shell: bash
         env:
           STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
         run: |
           if [ -z "$STELLAR_SECRET_KEY" ]; then
-            echo "TESTNET_SECRET_KEY is not configured"
+            reason="TESTNET_SECRET_KEY is not configured"
+            echo "::error title=Smoke test infrastructure failure::$reason"
+            echo "reason=$reason" >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          printf '%s\n' "$STELLAR_SECRET_KEY" | stellar keys add ci-smoke --secret-key
+          printf '%s\n' "$STELLAR_SECRET_KEY" | stellar keys add "$SOURCE_ACCOUNT" --secret-key
+
+      # RPC health, account existence (re-created via friendbot after a
+      # testnet reset) and balance. Fails here, as infrastructure, before
+      # any contract is deployed.
+      - name: Preflight (network and funding)
+        id: preflight
+        shell: bash
+        run: bash scripts/e2e/preflight.sh
 
       - name: Run e2e script
+        id: e2e
         shell: bash
-        run: bash scripts/e2e.sh
+        run: |
+          set -o pipefail
+          bash scripts/e2e.sh 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+
+      - name: Classify result
+        id: result
+        if: always()
+        shell: bash
         env:
-          STELLAR_NETWORK: ${{ inputs.network }}
-          STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
-          SOURCE_ACCOUNT: ci-smoke
+          IDENTITY_OUTCOME: ${{ steps.identity.outcome }}
+          IDENTITY_REASON: ${{ steps.identity.outputs.reason }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          PREFLIGHT_REASON: ${{ steps.preflight.outputs.reason }}
+          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+        run: |
+          if [ "$IDENTITY_OUTCOME" = failure ]; then
+            printf 'category=infrastructure\nreason=%s\n' "$IDENTITY_REASON" > "$RUNNER_TEMP/result"
+          elif [ "$PREFLIGHT_OUTCOME" = failure ]; then
+            printf 'category=infrastructure\nreason=%s\n' "${PREFLIGHT_REASON:-preflight failed; see its step log}" > "$RUNNER_TEMP/result"
+          elif [ "$E2E_OUTCOME" = failure ]; then
+            bash scripts/e2e/classify_failure.sh "$RUNNER_TEMP/e2e.log" > "$RUNNER_TEMP/result"
+          elif [ "$E2E_OUTCOME" = success ]; then
+            printf 'category=pass\nreason=all e2e flows passed\n' > "$RUNNER_TEMP/result"
+          else
+            # A setup step (toolchain, CLI install) failed before the suite ran.
+            printf 'category=infrastructure\nreason=CI setup failed before the suite ran; see the failing step\n' > "$RUNNER_TEMP/result"
+          fi
+          cat "$RUNNER_TEMP/result" >> "$GITHUB_OUTPUT"
+
+          category="$(sed -n 's/^category=//p' "$RUNNER_TEMP/result")"
+          reason="$(sed -n 's/^reason=//p' "$RUNNER_TEMP/result")"
+          pipe='\|'; reason="${reason//|/$pipe}"  # keep log excerpts from breaking the table
+          case "$category" in
+            pass)           headline="Passed" ;;
+            infrastructure) headline="Infrastructure failure (network, funding or CI setup — not a protocol regression)" ;;
+            *)              headline="Protocol regression (the code under test failed on a live network)" ;;
+          esac
+          {
+            echo "## Testnet smoke test: $headline"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Network | \`$STELLAR_NETWORK\` |"
+            echo "| Trigger | \`${{ github.event_name }}\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo "| Detail | $reason |"
+            if grep -qs '^Summary$' "$RUNNER_TEMP/e2e.log"; then
+              echo
+              echo '```'
+              sed -n '/^Summary$/,$p' "$RUNNER_TEMP/e2e.log"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Surfaces failures outside the Actions tab: one open issue tracks the
+  # current breakage, each failing run comments on it with its category, and
+  # the first passing run closes it. Manual runs close the issue on success
+  # but do not open one on failure — whoever started them is watching.
+  report:
+    needs: smoke-test
+    if: >-
+      always()
+      && github.repository == 'promisszn/soroban-amm'
+      && (needs.smoke-test.result == 'success' || needs.smoke-test.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RESULT: ${{ needs.smoke-test.result }}
+      CATEGORY: ${{ needs.smoke-test.outputs.category }}
+      REASON: ${{ needs.smoke-test.outputs.reason }}
+      NETWORK: ${{ needs.smoke-test.outputs.network }}
+      EVENT: ${{ github.event_name }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SHA: ${{ github.sha }}
+      LABEL: smoke-test-failure
+    steps:
+      - name: Open, update or close the tracking issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          open_issue="$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')"
+
+          if [ "$RESULT" = success ]; then
+            if [ -n "$open_issue" ]; then
+              gh issue close "$open_issue" --comment "Testnet smoke test passed again on \`$NETWORK\` ($EVENT, \`$SHA\`): $RUN_URL"
+            fi
+            exit 0
+          fi
+
+          if [ "$EVENT" = workflow_dispatch ]; then
+            echo "Manual run failed; not filing an issue."
+            exit 0
+          fi
+
+          case "$CATEGORY" in
+            infrastructure) kind="Infrastructure failure — network, funding or CI setup; not a protocol regression." ;;
+            *)              kind="**Protocol regression** — the code under test failed on a live network." ;;
+          esac
+          detail="${REASON:-see the run log}"
+          pipe='\|'; detail="${detail//|/$pipe}"  # keep log excerpts from breaking the table
+          body="$(printf '%s\n\n| | |\n|---|---|\n| Network | `%s` |\n| Trigger | `%s` |\n| Commit | `%s` |\n| Detail | %s |\n| Run | %s |\n' \
+            "$kind" "$NETWORK" "$EVENT" "$SHA" "$detail" "$RUN_URL")"
+
+          if [ -n "$open_issue" ]; then
+            gh issue comment "$open_issue" --body "$body"
+          else
+            gh label create "$LABEL" --color B60205 \
+              --description "Opened and closed automatically by the Testnet Smoke Test workflow" --force
+            gh issue create --label "$LABEL" \
+              --title "Testnet smoke test failing on $NETWORK" \
+              --body "$(printf '%s\n\nThis issue is managed by `.github/workflows/smoke-test.yml`: later failing runs comment here and the next passing run closes it.\n\ncc @promisszn' "$body")"
+          fi

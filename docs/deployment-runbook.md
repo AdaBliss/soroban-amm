@@ -462,6 +462,19 @@ Run this against the same `NETWORK` and `SOURCE_ACCOUNT` after a deployment
 to confirm the core path is healthy. For a production deployment, consider a
 testnet run before targeting mainnet.
 
+To tell a network or funding problem apart from a real failure before
+spending a deployment on it, run the preflight first:
+
+```sh
+SOURCE_ACCOUNT=<identity> bash scripts/e2e/preflight.sh
+# Exits 75 on an infrastructure problem: unhealthy RPC, friendbot rate limit,
+# or a missing/underfunded account (re-created via friendbot after a reset)
+```
+
+CI runs the same preflight and suite nightly, on relevant pushes to `main` and
+on each release (`.github/workflows/smoke-test.yml`); see
+`.github/BRANCH_PROTECTION.md` for how its failures are reported.
+
 ---
 
 ## 5. Upgrade Procedure
