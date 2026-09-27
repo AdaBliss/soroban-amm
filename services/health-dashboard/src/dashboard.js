@@ -1,3 +1,4 @@
+// @ts-check
 export const DEFAULT_API_URL = "http://localhost:4000/graphql";
 export const DEFAULT_POLL_INTERVAL_MS = 5000;
 
@@ -53,6 +54,8 @@ const QUERY = {
 };
 
 function $(id) { return document.getElementById(id); }
+/** @param {string} id @returns {HTMLInputElement | HTMLSelectElement | null} */
+function field(id) { return /** @type {HTMLInputElement | HTMLSelectElement | null} */ ($(id)); }
 function setText(id, value) { const element = $(id); if (element) element.textContent = value; }
 function setSectionState(message) {
   const state = $("dashboard-state");
@@ -158,8 +161,11 @@ function addDashboardMessages() {
   if (!$("dashboard-state")) { const state = document.createElement("div"); state.id = "dashboard-state"; state.className = "dashboard-state"; state.setAttribute("role", "status"); document.querySelector("main")?.prepend(state); }
 }
 
+/** @param {{ apiUrl?: string, poolId?: string, pollIntervalMs?: number }} [options] */
 export function createDashboardController({ apiUrl, poolId, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS } = {}) {
+  /** @type {Array<{ poolId: string, metric: string, thresholdBps?: number, thresholdValue?: number }>} */
   let configs = [];
+  /** @type {ReturnType<typeof setInterval> | undefined} */
   let timer;
   let refreshing = false;
   const url = apiUrl || DEFAULT_API_URL;
@@ -170,43 +176,52 @@ export function createDashboardController({ apiUrl, poolId, pollIntervalMs = DEF
   async function refresh() {
     if (refreshing) return;
     refreshing = true;
-    setStatus("Connecting…", "");
-    setSectionState("Loading pool data…");
-    ["m-tvl", "m-vol", "m-fees", "m-swaps", "health-score-text"].forEach((id) => setText(id, "—"));
-    const currentUrl = $("api-url")?.value.trim() || url;
-    const currentPool = $("pool-id")?.value.trim() || pool;
-    const entries = Object.entries(QUERY).map(async ([key, query]) => [key, await gql(currentUrl, query, { poolId: currentPool })]);
-    const results = await Promise.allSettled(entries);
-    const data = {};
-    const failures = [];
-    results.forEach((result, index) => { const key = Object.keys(QUERY)[index]; if (result.status === "fulfilled") data[key] = result.value; else failures.push(`${key}: ${formatError(result.reason)}`); });
-    renderStats(data.stats?.poolStats); renderHealth(data.health?.poolHealth); renderEvents(data.events?.poolEvents); renderHistory(data.history?.priceHistory); renderHeatmap(data.events?.poolEvents); if (data.alerts?.alertConfigs) { configs = data.alerts.alertConfigs; renderAlertConfigs(configs, removeAlert); }
-    if (failures.length === Object.keys(QUERY).length) { setStatus("Error", "error", failures.join("; ")); setSectionState(`Unable to load dashboard data. ${failures[0]}`); $("btn-retry").hidden = false; }
-    // Retry is only useful when something failed; hide it on a fully successful refresh.
-    else { setStatus(failures.length ? "Degraded" : "Connected", failures.length ? "error" : "connected", failures.join("; ")); setSectionState(failures.length ? `Degraded: ${failures.join("; ")}` : data.stats?.poolStats?.length ? "" : "No pools indexed yet"); $("btn-retry").hidden = !failures.length; setText("last-updated", `Last updated ${new Date().toLocaleTimeString()}`); }
-    refreshing = false;
+    try {
+      setStatus("Connecting…", "");
+      setSectionState("Loading pool data…");
+      ["m-tvl", "m-vol", "m-fees", "m-swaps", "health-score-text"].forEach((id) => setText(id, "—"));
+      const currentUrl = field("api-url")?.value.trim() || url;
+      const currentPool = field("pool-id")?.value.trim() || pool;
+      const entries = Object.entries(QUERY).map(async ([key, query]) => [key, await gql(currentUrl, query, { poolId: currentPool })]);
+      const results = await Promise.allSettled(entries);
+      /** @type {Record<string, any>} */ const data = {};
+      /** @type {string[]} */ const failures = [];
+      results.forEach((result, index) => { const key = Object.keys(QUERY)[index]; if (result.status === "fulfilled") data[key] = result.value; else failures.push(`${key}: ${formatError(result.reason)}`); });
+      renderStats(data.stats?.poolStats); renderHealth(data.health?.poolHealth); renderEvents(data.events?.poolEvents); renderHistory(data.history?.priceHistory); renderHeatmap(data.events?.poolEvents); if (data.alerts?.alertConfigs) { configs = data.alerts.alertConfigs; renderAlertConfigs(configs, removeAlert); }
+      if (failures.length === Object.keys(QUERY).length) { setStatus("Error", "error", failures.join("; ")); setSectionState(`Unable to load dashboard data. ${failures[0]}`); const retry = $("btn-retry"); if (retry) retry.hidden = false; }
+      // Retry is only useful when something failed; hide it on a fully successful refresh.
+      else { setStatus(failures.length ? "Degraded" : "Connected", failures.length ? "error" : "connected", failures.join("; ")); setSectionState(failures.length ? `Degraded: ${failures.join("; ")}` : data.stats?.poolStats?.length ? "" : "No pools indexed yet"); const retry = $("btn-retry"); if (retry) retry.hidden = !failures.length; setText("last-updated", `Last updated ${new Date().toLocaleTimeString()}`); }
+    } finally {
+      // Released even if rendering throws, so one bad response cannot wedge the dashboard.
+      refreshing = false;
+    }
   }
 
-  async function mutate(query, variables) { return gql(url, query, variables); }
   async function addAlert() {
-    const metric = $("alert-metric").value; const threshold = Number($("alert-threshold").value); if (!metric || !Number.isFinite(threshold) || threshold < 0) return;
+    const metric = field("alert-metric")?.value; const thresholdInput = field("alert-threshold"); const threshold = Number(thresholdInput?.value); if (!metric || !Number.isFinite(threshold) || threshold < 0) return;
     // "price_deviation" is basis points; "tvl" and "volume24h" are raw values in the metric's native units.
     const thresholdBps = metric === "price_deviation" ? threshold : undefined;
     const thresholdValue = metric === "price_deviation" ? undefined : threshold;
-    const currentPool = $("pool-id")?.value.trim() || pool;
+    const currentPool = field("pool-id")?.value.trim() || pool;
     // Dedup by metric AND poolId — filtering by metric alone would drop other pools' alerts
     // for the same metric when the Pool ID field is blank (alertConfigs(poolId: undefined) spans all pools).
-    const previous = configs; const next = [...configs.filter((item) => !(item.metric === metric && item.poolId === currentPool)), { poolId: currentPool, metric, thresholdBps, thresholdValue }]; configs = next; renderAlertConfigs(configs, removeAlert); $("alert-threshold").value = "";
-    const currentUrl = $("api-url")?.value.trim() || url;
+    const previous = configs; const next = [...configs.filter((item) => !(item.metric === metric && item.poolId === currentPool)), { poolId: currentPool, metric, thresholdBps, thresholdValue }]; configs = next; renderAlertConfigs(configs, removeAlert); if (thresholdInput) thresholdInput.value = "";
+    const currentUrl = field("api-url")?.value.trim() || url;
     try { await gql(currentUrl, `mutation SetAlert($poolId: ID!, $metric: String!, $thresholdBps: Int, $thresholdValue: Float) { setAlertConfig(poolId: $poolId, metric: $metric, thresholdBps: $thresholdBps, thresholdValue: $thresholdValue) { poolId metric thresholdBps thresholdValue } }`, { poolId: currentPool, metric, thresholdBps, thresholdValue }); } catch (error) { configs = previous; renderAlertConfigs(configs, removeAlert); setSectionState(`Alert was not saved: ${formatError(error)}`); }
   }
   async function removeAlert(alert) {
     const previous = configs; configs = configs.filter((item) => !(item.metric === alert.metric && item.poolId === alert.poolId)); renderAlertConfigs(configs, removeAlert);
-    const currentUrl = $("api-url")?.value.trim() || url;
+    const currentUrl = field("api-url")?.value.trim() || url;
     try { await gql(currentUrl, `mutation RemoveAlert($poolId: ID!, $metric: String!) { removeAlertConfig(poolId: $poolId, metric: $metric) }`, { poolId: alert.poolId, metric: alert.metric }); } catch (error) { configs = previous; renderAlertConfigs(configs, removeAlert); setSectionState(`Alert deletion failed: ${formatError(error)}`); }
   }
 
-  return { refresh, addAlert, start() { addDashboardMessages(); $("api-url").value = apiUrl; $("pool-id").value = poolId; $("btn-refresh")?.addEventListener("click", refresh); $("btn-retry")?.addEventListener("click", refresh); $("btn-add-alert")?.addEventListener("click", addAlert); $("btn-auto")?.addEventListener("click", () => { const on = $("btn-auto").dataset.on !== "true"; $("btn-auto").dataset.on = String(on); $("btn-auto").textContent = `Auto-refresh: ${on ? "ON" : "OFF"}`; if (on) { refresh(); timer = setInterval(refresh, pollIntervalMs); } else clearInterval(timer); }); refresh(); renderAlertConfigs(configs, removeAlert); } };
+  // Listeners and timers drop the promise a handler returns, so route every
+  // background task through here and surface failures in the dashboard.
+  /** @param {() => Promise<void>} task */
+  const background = (task) => () => { task().catch((error) => setSectionState(`Dashboard error: ${formatError(error)}`)); };
+  const refreshInBackground = background(refresh);
+
+  return { refresh, addAlert, start() { addDashboardMessages(); const apiInput = field("api-url"); if (apiInput) apiInput.value = url; const poolInput = field("pool-id"); if (poolInput) poolInput.value = pool; $("btn-refresh")?.addEventListener("click", refreshInBackground); $("btn-retry")?.addEventListener("click", refreshInBackground); $("btn-add-alert")?.addEventListener("click", background(addAlert)); const auto = $("btn-auto"); auto?.addEventListener("click", () => { const on = auto.dataset.on !== "true"; auto.dataset.on = String(on); auto.textContent = `Auto-refresh: ${on ? "ON" : "OFF"}`; if (on) { refreshInBackground(); timer = setInterval(refreshInBackground, pollIntervalMs); } else clearInterval(timer); }); refreshInBackground(); renderAlertConfigs(configs, removeAlert); } };
 }
 
 if (typeof window !== "undefined") {

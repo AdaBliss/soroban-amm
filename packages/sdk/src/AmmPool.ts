@@ -8,7 +8,6 @@
 
 import {
   Contract,
-  Networks,
   rpc as StellarRpc,
   nativeToScVal,
   scValToNative,
@@ -18,16 +17,12 @@ import {
 import type {
   NetworkConfig,
   PoolInfo,
-  SwapParams,
   SwapSimulation,
-  AddLiquidityParams,
-  RemoveLiquidityParams,
-  LiquidityResult,
-  FlashLoanParams,
 } from "./types.js";
 import { AmmErrors, AmmErrorNames } from "./types.js";
 import type { AmmErrorCode, AmmErrorKey } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { toBigInt, toText } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -123,18 +118,18 @@ export class AmmPool {
     const raw = await this.simulate("get_info");
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      tokenA: String(native.token_a),
-      tokenB: String(native.token_b),
-      reserveA: BigInt(String(native.reserve_a ?? 0)),
-      reserveB: BigInt(String(native.reserve_b ?? 0)),
-      totalShares: BigInt(String(native.total_shares ?? 0)),
-      feeBps: BigInt(String(native.fee_bps ?? 0)),
-      protocolFeeBps: BigInt(String(native.protocol_fee_bps ?? 0)),
-      feeRecipient: native.fee_recipient ? String(native.fee_recipient) : null,
-      flashLoanFeeBps: BigInt(String(native.flash_loan_fee_bps ?? 0)),
-      admin: native.admin ? String(native.admin) : null,
+      tokenA: toText(native.token_a),
+      tokenB: toText(native.token_b),
+      reserveA: toBigInt(native.reserve_a),
+      reserveB: toBigInt(native.reserve_b),
+      totalShares: toBigInt(native.total_shares),
+      feeBps: toBigInt(native.fee_bps),
+      protocolFeeBps: toBigInt(native.protocol_fee_bps),
+      feeRecipient: native.fee_recipient ? toText(native.fee_recipient) : null,
+      flashLoanFeeBps: toBigInt(native.flash_loan_fee_bps),
+      admin: native.admin ? toText(native.admin) : null,
       isPaused: Boolean(native.is_paused),
-      name: native.name ? String(native.name) : null,
+      name: native.name ? toText(native.name) : null,
     };
   }
 
@@ -143,16 +138,16 @@ export class AmmPool {
     const raw = await this.simulate("get_accrued_fees");
     const native = scValToNative(raw) as [unknown, unknown];
     return {
-      accruedA: BigInt(String(native[0] ?? 0)),
-      accruedB: BigInt(String(native[1] ?? 0)),
+      accruedA: toBigInt(native[0]),
+      accruedB: toBigInt(native[1]),
     };
   }
 
   /** Return the human-readable pool name (or null). */
   async getName(): Promise<string | null> {
     const raw = await this.simulate("get_name");
-    const native = scValToNative(raw);
-    return native !== null ? String(native) : null;
+    const native: unknown = scValToNative(raw);
+    return native !== null && native !== undefined ? toText(native) : null;
   }
 
   /** Return the flash-loan fee in basis points. */

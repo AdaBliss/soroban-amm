@@ -1,0 +1,23 @@
+{
+  // Type-checks the dashboard without a compile step: the browser loads
+  // src/dashboard.js as-is. Files opt in to checking with `// @ts-check`
+  // (the shipped dashboard.js does; the tests and their DOM stub, which
+  // deliberately fake browser types, do not). The shared ESLint config also
+  // uses this project for its type-aware rules on every file under src/.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    // Plain JavaScript parameters carry no annotations; requiring JSDoc on
+    // every one would be noise. Every other strict check stays on.
+    "noImplicitAny": false,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.js"]
+}

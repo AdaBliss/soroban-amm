@@ -85,6 +85,25 @@ updates:
     directory: "/services/health-dashboard"
     schedule: { interval: weekly }
     groups: { patch-updates: { update-types: [patch] } }
+    ignore:
+      # Same @types/node rule as packages/sdk.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  # Shared ESLint toolchain used by every JS workspace (eslint.config.mjs).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      # typescript-eslint and @eslint/js track ESLint's own releases; bump
+      # them together so the config never loads against a mismatched core.
+      eslint:
+        patterns: ["eslint", "@eslint/*", "typescript-eslint", "globals"]
+    ignore:
+      # typescript-eslint supports TypeScript <6.1; move this only when its
+      # peer range allows the new major. It is independent of the compiler
+      # each workspace builds with.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: "/examples/client"
     schedule: { interval: weekly }

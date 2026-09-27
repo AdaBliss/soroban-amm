@@ -14,6 +14,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { toBigInt } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -110,9 +111,9 @@ export class ConcentratedLiquidityClient {
     const raw = await this.simulate("get_pool_state");
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      sqrtPrice: BigInt(String(native.sqrt_price ?? 0)),
+      sqrtPrice: toBigInt(native.sqrt_price),
       currentTick: Number(native.current_tick ?? 0),
-      activeLiquidity: BigInt(String(native.active_liquidity ?? 0)),
+      activeLiquidity: toBigInt(native.active_liquidity),
       tickSpacing: Number(native.tick_spacing ?? 1),
     };
   }
@@ -138,8 +139,8 @@ export class ConcentratedLiquidityClient {
     const raw = await this.simulate("get_tick_cumulative");
     const native = scValToNative(raw) as [unknown, unknown];
     return {
-      tickCumulative: BigInt(String(native[0] ?? 0)),
-      lastTimestamp: BigInt(String(native[1] ?? 0)),
+      tickCumulative: toBigInt(native[0]),
+      lastTimestamp: toBigInt(native[1]),
     };
   }
 
@@ -151,11 +152,11 @@ export class ConcentratedLiquidityClient {
     return {
       lowerTick: Number(native.lower_tick ?? lowerTick),
       upperTick: Number(native.upper_tick ?? upperTick),
-      liquidity: BigInt(String(native.liquidity ?? 0)),
-      feeGrowthInsideA: BigInt(String(native.fee_growth_inside_a ?? 0)),
-      feeGrowthInsideB: BigInt(String(native.fee_growth_inside_b ?? 0)),
-      tokensOwedA: BigInt(String(owed?.[0] ?? 0)),
-      tokensOwedB: BigInt(String(owed?.[1] ?? 0)),
+      liquidity: toBigInt(native.liquidity),
+      feeGrowthInsideA: toBigInt(native.fee_growth_inside_a),
+      feeGrowthInsideB: toBigInt(native.fee_growth_inside_b),
+      tokensOwedA: toBigInt(owed?.[0]),
+      tokensOwedB: toBigInt(owed?.[1]),
     };
   }
 
@@ -179,9 +180,9 @@ export class ConcentratedLiquidityClient {
     );
     const native = scValToNative(raw) as [unknown, unknown, unknown];
     return {
-      amountA: BigInt(String(native[0] ?? 0)),
-      amountB: BigInt(String(native[1] ?? 0)),
-      liquidity: BigInt(String(native[2] ?? 0)),
+      amountA: toBigInt(native[0]),
+      amountB: toBigInt(native[1]),
+      liquidity: toBigInt(native[2]),
     };
   }
 
@@ -204,19 +205,19 @@ export class ConcentratedLiquidityClient {
     );
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      amountIn: BigInt(String(native.amount_in ?? 0)),
-      amountInAfterFee: BigInt(String(native.amount_in_after_fee ?? 0)),
-      amountOut: BigInt(String(native.amount_out ?? 0)),
-      feeAmount: BigInt(String(native.fee_amount ?? 0)),
-      spotPriceBefore: BigInt(String(native.spot_price_before ?? 0)),
-      effectivePrice: BigInt(String(native.effective_price ?? 0)),
-      priceImpactBps: BigInt(String(native.price_impact_bps ?? 0)),
-      sqrtPriceBefore: BigInt(String(native.sqrt_price_before ?? 0)),
-      sqrtPriceAfter: BigInt(String(native.sqrt_price_after ?? 0)),
+      amountIn: toBigInt(native.amount_in),
+      amountInAfterFee: toBigInt(native.amount_in_after_fee),
+      amountOut: toBigInt(native.amount_out),
+      feeAmount: toBigInt(native.fee_amount),
+      spotPriceBefore: toBigInt(native.spot_price_before),
+      effectivePrice: toBigInt(native.effective_price),
+      priceImpactBps: toBigInt(native.price_impact_bps),
+      sqrtPriceBefore: toBigInt(native.sqrt_price_before),
+      sqrtPriceAfter: toBigInt(native.sqrt_price_after),
       tickBefore: Number(native.tick_before ?? 0),
       tickAfter: Number(native.tick_after ?? 0),
-      activeLiquidityBefore: BigInt(String(native.active_liquidity_before ?? 0)),
-      activeLiquidityAfter: BigInt(String(native.active_liquidity_after ?? 0)),
+      activeLiquidityBefore: toBigInt(native.active_liquidity_before),
+      activeLiquidityAfter: toBigInt(native.active_liquidity_after),
     };
   }
 
@@ -231,8 +232,8 @@ export class ConcentratedLiquidityClient {
     const raw = await this.simulate("fee_growth_inside", i32(lowerTick), i32(upperTick));
     const native = scValToNative(raw) as [unknown, unknown];
     return {
-      feeGrowthA: BigInt(String(native[0] ?? 0)),
-      feeGrowthB: BigInt(String(native[1] ?? 0)),
+      feeGrowthA: toBigInt(native[0]),
+      feeGrowthB: toBigInt(native[1]),
     };
   }
 

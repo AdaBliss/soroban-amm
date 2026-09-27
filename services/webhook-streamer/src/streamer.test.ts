@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { after, afterEach, before, beforeEach, describe, it } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebhookRegistry } from "./registry.js";
@@ -317,9 +317,9 @@ describe("local webhook delivery integration", () => {
 
                 const results = await d.dispatch(EVENT);
                 assert.equal(results.length, 1);
-                assert.equal(results[0]!.success, false);
-                assert.equal(results[0]!.timedOut, true);
-                assert.equal(results[0]!.failureKind, "timeout");
+                assert.equal(results[0].success, false);
+                assert.equal(results[0].timedOut, true);
+                assert.equal(results[0].failureKind, "timeout");
             } finally {
                 await srv.close();
             }
@@ -347,8 +347,8 @@ describe("local webhook delivery integration", () => {
                 reg.register(srv.url);
                 const d = makeDispatcher(reg);
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, true);
-                assert.equal(r!.statusCode, 200);
+                assert.equal(r.success, true);
+                assert.equal(r.statusCode, 200);
             } finally {
                 await srv.close();
             }
@@ -444,9 +444,9 @@ describe("local webhook delivery integration", () => {
                 reg.register(srv.url);
                 const d = makeDispatcher(reg, { maxRetries: 3 });
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, false);
+                assert.equal(r.success, false);
                 assert.equal(srv.hits(), 1);
-                assert.equal(r!.attempts!.length, 1);
+                assert.equal(r.attempts!.length, 1);
             } finally {
                 await srv.close();
             }
@@ -459,9 +459,9 @@ describe("local webhook delivery integration", () => {
                 reg.register(srv.url);
                 const d = makeDispatcher(reg, { maxRetries: 2 });
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, false);
+                assert.equal(r.success, false);
                 assert.equal(srv.hits(), 3); // initial + 2 retries
-                assert.equal(r!.attempts!.length, 3);
+                assert.equal(r.attempts!.length, 3);
             } finally {
                 await srv.close();
             }
@@ -476,7 +476,7 @@ describe("local webhook delivery integration", () => {
                 reg.register(srv.url);
                 const d = makeDispatcher(reg);
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, true);
+                assert.equal(r.success, true);
                 assert.equal(srv.hits(), 2);
             } finally {
                 await srv.close();
@@ -504,9 +504,9 @@ describe("local webhook delivery integration", () => {
             reg.register(url);
             const d = makeDispatcher(reg, { maxRetries: 2 });
             const [r] = await d.dispatch(EVENT);
-            assert.equal(r!.success, false);
-            assert.equal(r!.failureKind, "network");
-            assert.equal(r!.attempts!.length, 3);
+            assert.equal(r.success, false);
+            assert.equal(r.failureKind, "network");
+            assert.equal(r.attempts!.length, 3);
         });
 
         it("is iterative, not recursive — deep retry chains do not grow the stack", async () => {
@@ -517,8 +517,8 @@ describe("local webhook delivery integration", () => {
                 // A recursive implementation would nest 500 frames here.
                 const d = makeDispatcher(reg, { maxRetries: 500 });
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, false);
-                assert.equal(r!.attempts!.length, 501);
+                assert.equal(r.success, false);
+                assert.equal(r.attempts!.length, 501);
             } finally {
                 await srv.close();
             }
@@ -546,7 +546,7 @@ describe("local webhook delivery integration", () => {
             }
             assert.ok(
                 delays.size > 1,
-                `expected jittered delays to vary, got ${[...delays]}`,
+                `expected jittered delays to vary, got ${[...delays].join(", ")}`,
             );
         });
 
@@ -606,7 +606,7 @@ describe("local webhook delivery integration", () => {
                 headers:
                     hit === 1
                         ? { "retry-after": "1" }
-                        : ({} as Record<string, string>),
+                        : undefined,
             }));
             try {
                 const reg = new WebhookRegistry();
@@ -627,7 +627,7 @@ describe("local webhook delivery integration", () => {
                     },
                 });
                 const [r] = await d.dispatch(EVENT);
-                assert.equal(r!.success, true);
+                assert.equal(r.success, true);
                 // 1000ms from the header, not the <=5ms jitter ceiling.
                 assert.deepEqual(slept, [1_000]);
             } finally {
@@ -649,9 +649,9 @@ describe("local webhook delivery integration", () => {
                 });
                 const [r] = await d.dispatch(EVENT);
 
-                assert.equal(r!.deadLettered, true);
+                assert.equal(r.deadLettered, true);
                 assert.equal(dlq.size, 1);
-                const entry = dlq.list()[0]!;
+                const entry = dlq.list()[0];
                 assert.equal(entry.event.id, EVENT.id);
                 assert.equal(entry.subscription.url, srv.url);
                 assert.equal(entry.attempts.length, 2);
@@ -689,8 +689,8 @@ describe("local webhook delivery integration", () => {
             const kept = dlq.list().map((e) => e.event.id);
             assert.deepEqual(kept, ["e2", "e3", "e4"]);
             // The two oldest are gone.
-            assert.equal(dlq.get(ids[0]!), undefined);
-            assert.equal(dlq.get(ids[1]!), undefined);
+            assert.equal(dlq.get(ids[0]), undefined);
+            assert.equal(dlq.get(ids[1]), undefined);
         });
 
         it("rejects a non-positive capacity", () => {
@@ -726,11 +726,11 @@ describe("local webhook delivery integration", () => {
                 });
 
                 const [failed] = await d.dispatch(EVENT);
-                assert.equal(failed!.deadLettered, true);
+                assert.equal(failed.deadLettered, true);
                 assert.equal(dlq.size, 1);
 
                 recovered = true;
-                const replayed = await d.replay(failed!.deadLetterId!);
+                const replayed = await d.replay(failed.deadLetterId!);
                 assert.equal(replayed!.success, true);
                 assert.equal(dlq.size, 0);
             } finally {
@@ -749,7 +749,7 @@ describe("local webhook delivery integration", () => {
                     deadLetterQueue: dlq,
                 });
                 const [failed] = await d.dispatch(EVENT);
-                const originalId = failed!.deadLetterId!;
+                const originalId = failed.deadLetterId!;
 
                 const replayed = await d.replay(originalId);
                 assert.equal(replayed!.success, false);
@@ -803,7 +803,7 @@ describe("local webhook delivery integration", () => {
                 assert.equal(cb.stateOf(sub.id), "open");
 
                 const [second] = await d.dispatch(EVENT);
-                assert.equal(second!.failureKind, "circuit_open");
+                assert.equal(second.failureKind, "circuit_open");
                 assert.equal(
                     srv.hits(),
                     hitsAfterFirst,
@@ -944,12 +944,12 @@ describe("local webhook delivery integration", () => {
                 const d = makeDispatcher(reg);
                 await d.dispatch(EVENT);
 
-                assert.equal(srv.headers()[0]!["x-webhook-secret"], "s3cr3t");
+                assert.equal(srv.headers()[0]["x-webhook-secret"], "s3cr3t");
                 assert.equal(
-                    srv.headers()[0]!["content-type"],
+                    srv.headers()[0]["content-type"],
                     "application/json",
                 );
-                assert.deepEqual(JSON.parse(srv.bodies()[0]!), EVENT);
+                assert.deepEqual(JSON.parse(srv.bodies()[0]), EVENT);
             } finally {
                 await srv.close();
             }
@@ -962,7 +962,7 @@ describe("local webhook delivery integration", () => {
                 reg.register(srv.url);
                 const d = makeDispatcher(reg);
                 await d.dispatch(EVENT);
-                assert.equal(srv.headers()[0]!["x-webhook-secret"], undefined);
+                assert.equal(srv.headers()[0]["x-webhook-secret"], undefined);
             } finally {
                 await srv.close();
             }

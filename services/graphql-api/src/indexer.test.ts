@@ -10,7 +10,6 @@ import {
   InvalidMetricError,
   InvalidThresholdError,
   type PoolEvent,
-  type AlertMetric,
 } from "./indexer.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -63,9 +62,9 @@ describe("indexEvent", () => {
     );
 
     const [stats] = idx.getPoolStats("p1");
-    assert.equal(stats!.swapCount, 2);
-    assert.equal(stats!.volume24h, 800);
-    assert.equal(stats!.fees24h, 8);
+    assert.equal(stats.swapCount, 2);
+    assert.equal(stats.volume24h, 800);
+    assert.equal(stats.fees24h, 8);
   });
 
   it("swap records price data into history", () => {
@@ -74,7 +73,7 @@ describe("indexEvent", () => {
 
     const prices = idx.getPriceHistory("p1");
     assert.equal(prices.length, 1);
-    assert.equal(prices[0]!.price, 1.2);
+    assert.equal(prices[0].price, 1.2);
   });
 
   it("add_liquidity increases tvl", () => {
@@ -82,7 +81,7 @@ describe("indexEvent", () => {
     idx.indexEvent(addLiquidityEvent({ id: "a1", poolId: "p1" }));
 
     const [stats] = idx.getPoolStats("p1");
-    assert.equal(stats!.tvl, 30_000);
+    assert.equal(stats.tvl, 30_000);
   });
 
   it("remove_liquidity decreases tvl without going below zero", () => {
@@ -91,7 +90,7 @@ describe("indexEvent", () => {
     idx.indexEvent(removeLiquidityEvent({ id: "r1", poolId: "p1" }));
 
     let [stats] = idx.getPoolStats("p1");
-    assert.equal(stats!.tvl, 15_000);
+    assert.equal(stats.tvl, 15_000);
 
     // Remove more than available; tvl should clamp to 0.
     idx.indexEvent(
@@ -102,7 +101,7 @@ describe("indexEvent", () => {
       }),
     );
     [stats] = idx.getPoolStats("p1");
-    assert.equal(stats!.tvl, 0);
+    assert.equal(stats.tvl, 0);
   });
 });
 
@@ -120,7 +119,7 @@ describe("retention pruning", () => {
 
     const events = idx.getEvents("p1");
     assert.equal(events.length, 1);
-    assert.equal(events[0]!.id, "fresh");
+    assert.equal(events[0].id, "fresh");
   });
 
   it("prunes stale price history on the next indexEvent", () => {
@@ -155,10 +154,10 @@ describe("health alerts", () => {
 
     const health = idx.getPoolHealth("p1");
     assert.ok(health, "pool health should exist");
-    assert.equal(health!.alertsFired.length, 1);
-    assert.equal(health!.alertsFired[0]!.metric, "volume24h");
-    assert.equal(health!.alertsFired[0]!.threshold, 100);
-    assert.equal(health!.alertsFired[0]!.currentValue, 500);
+    assert.equal(health.alertsFired.length, 1);
+    assert.equal(health.alertsFired[0].metric, "volume24h");
+    assert.equal(health.alertsFired[0].threshold, 100);
+    assert.equal(health.alertsFired[0].currentValue, 500);
   });
 
   it("does not fire when the metric stays below the threshold", () => {
@@ -290,8 +289,8 @@ describe("getEvents", () => {
 
     const last2 = idx.getEvents("p1", 2);
     assert.equal(last2.length, 2);
-    assert.equal(last2[0]!.id, "e3");
-    assert.equal(last2[1]!.id, "e2");
+    assert.equal(last2[0].id, "e3");
+    assert.equal(last2[1].id, "e2");
   });
 });
 
@@ -304,6 +303,6 @@ describe("positions", () => {
     assert.equal(idx.getPositions().length, 2);
     const alicePos = idx.getPositions("alice");
     assert.equal(alicePos.length, 1);
-    assert.equal(alicePos[0]!.shares, 100);
+    assert.equal(alicePos[0].shares, 100);
   });
 });

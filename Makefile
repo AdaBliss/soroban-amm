@@ -6,7 +6,7 @@ WASM_DIR := target/wasm32v1-none/release
 
 SHELL := bash
 
-.PHONY: all help build release-build optimize test test-all fmt lint check check-docs \
+.PHONY: all help build release-build optimize test test-all fmt lint lint-js check check-docs \
         size size-check doc audit bench deploy e2e clean fuzz-cl
 
 # Bare `make` explains itself instead of building.
@@ -53,6 +53,9 @@ fmt: ## cargo fmt --all
 
 lint: ## cargo clippy --all -- -D warnings
 	cargo clippy --all -- -D warnings
+
+lint-js: ## ESLint every JS/TS workspace (run `npm ci` at the root and in each workspace first)
+	npm run lint
 
 check-docs: ## Verify docs/error-codes.md matches #[contracterror] enums
 	bash scripts/check_error_docs.sh

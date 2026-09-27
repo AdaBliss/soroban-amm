@@ -88,7 +88,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = req.url ?? "/";
   const method = req.method ?? "GET";
 
@@ -124,7 +124,7 @@ const server = createServer(async (req, res) => {
   // POST /dead-letters/:id/replay
   const replayMatch = url.match(/^\/dead-letters\/([^/]+)\/replay$/);
   if (method === "POST" && replayMatch) {
-    const id = replayMatch[1]!;
+    const id = replayMatch[1];
     const result = await dispatcher.replay(id);
     if (!result) {
       return json(res, 404, { error: "dead letter not found" });
@@ -135,7 +135,7 @@ const server = createServer(async (req, res) => {
   // DELETE /dead-letters/:id
   const deadLetterMatch = url.match(/^\/dead-letters\/([^/]+)$/);
   if (method === "DELETE" && deadLetterMatch) {
-    const removed = dispatcher.deadLetters.remove(deadLetterMatch[1]!);
+    const removed = dispatcher.deadLetters.remove(deadLetterMatch[1]);
     return json(res, removed ? 200 : 404, { removed });
   }
 
@@ -173,13 +173,27 @@ const server = createServer(async (req, res) => {
   // DELETE /webhooks/:id
   const deleteMatch = url.match(/^\/webhooks\/([^/]+)$/);
   if (method === "DELETE" && deleteMatch) {
-    const id = deleteMatch[1]!;
+    const id = deleteMatch[1];
     const removed = defaultRegistry.unregister(id);
     if (removed) dispatcher.circuitBreaker.forget(id);
     return json(res, removed ? 200 : 404, { removed });
   }
 
   json(res, 404, { error: "not found" });
+}
+
+// Node ignores the promise a request listener returns, so a rejection escaping
+// handleRequest would be unhandled and take the whole process down. Log it and
+// fail only the request that caused it.
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((err: unknown) => {
+    console.error(`[webhook-streamer] ${req.method ?? "GET"} ${req.url ?? "/"} failed:`, err);
+    if (res.headersSent) {
+      res.end();
+    } else {
+      json(res, 500, { error: "internal error" });
+    }
+  });
 });
 
 server.listen(PORT, () => {

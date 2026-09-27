@@ -15,7 +15,7 @@ export class InvalidWebhookUrlError extends Error {
 const ALLOWED_SCHEMES = new Set(["http:", "https:"]);
 
 function ipv4ToInt(parts: number[]): number {
-  return ((parts[0]! << 24) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
 }
 
 function inIpv4Range(ip: number, base: string, prefixLen: number): boolean {

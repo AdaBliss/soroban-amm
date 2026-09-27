@@ -164,10 +164,23 @@ jobs:
             # now commits a lockfile, so there is always something to install
             # from; regenerating one requires an explicit `npm install` in that
             # workspace, which keeps lockfile changes visible in review.
+            # The shared ESLint config (eslint.config.mjs) and its toolchain
+            # live at the repo root. npm puts every ancestor's
+            # node_modules/.bin on PATH, so each workspace's `npm run lint`
+            # picks up this one install.
+            - name: Install lint tooling
+              working-directory: .
+              run: npm ci
             - name: Install dependencies
               run: npm ci
             - name: Build
               run: npm run build
+            # Runs after Build because type-aware rules need resolvable
+            # imports (examples/client resolves @soroban-amm/sdk from the SDK
+            # its prebuild step compiles). Any lint error fails the job, the
+            # same as clippy's -D warnings on the Rust side.
+            - name: Lint
+              run: npm run lint
             - name: Test
               run: ${{ matrix.test_cmd }}
 

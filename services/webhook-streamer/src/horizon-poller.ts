@@ -118,7 +118,7 @@ export class HorizonPoller {
     const topicName = raw.topic[0] ?? "";
     const eventType = KNOWN_TOPICS[topicName] ?? topicName;
 
-    let payload: Record<string, unknown> = {};
+    let payload: Record<string, unknown>;
     try {
       payload = JSON.parse(raw.value) as Record<string, unknown>;
     } catch {

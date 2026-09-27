@@ -9,13 +9,13 @@ const defaultProps = {
   minPrice: 10,
   maxPrice: 1000,
   currentPrice: 100,
-  value: { lower: 80, upper: 120 } as PriceRange,
+  value: { lower: 80, upper: 120 },
   onChange: vi.fn(),
 };
 
 function Harness({
   onRangeChange,
-  initial = { lower: 80, upper: 120 } as PriceRange,
+  initial = { lower: 80, upper: 120 },
   ...rest
 }: {
   onRangeChange: (r: PriceRange) => void;
@@ -103,7 +103,7 @@ describe("RangeSelector", () => {
 
   it("emits a lower-bound change from the numeric input payload", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<NumericHarness onRangeChange={onChange} />);
     const minInput = screen.getByLabelText("Minimum price");
     await user.tripleClick(minInput);
@@ -114,7 +114,7 @@ describe("RangeSelector", () => {
 
   it("clamps a cleared upper-bound numeric input to just above the lower", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const maxInput = screen.getByLabelText("Maximum price");
     await user.clear(maxInput);
@@ -124,7 +124,7 @@ describe("RangeSelector", () => {
 
   it("emits an upper-bound change from the numeric input payload", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<NumericHarness onRangeChange={onChange} />);
     const maxInput = screen.getByLabelText("Maximum price");
     // The max input's minimum is lower + 0.000001; typing a value above it
@@ -137,7 +137,7 @@ describe("RangeSelector", () => {
   });
 
   it("moves the lower thumb on ArrowRight keyboard input", async () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const lower = screen.getByRole("slider", { name: /Lower bound/ });
     lower.focus();
@@ -147,7 +147,7 @@ describe("RangeSelector", () => {
   });
 
   it("moves the upper thumb on ArrowLeft keyboard input", async () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const upper = screen.getByRole("slider", { name: /Upper bound/ });
     upper.focus();
@@ -156,7 +156,7 @@ describe("RangeSelector", () => {
   });
 
   it("jumps the lower thumb to the minimum using Home", async () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const lower = screen.getByRole("slider", { name: /Lower bound/ });
     lower.focus();
@@ -165,7 +165,7 @@ describe("RangeSelector", () => {
   });
 
   it("prevents the thumbs from crossing (lower cannot exceed upper)", async () => {
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const lower = screen.getByRole("slider", { name: /Lower bound/ });
     lower.focus();
@@ -176,7 +176,7 @@ describe("RangeSelector", () => {
 
   it("clamps numeric lower input to the upper bound", async () => {
     const user = userEvent.setup();
-    const onChange = vi.fn();
+    const onChange = vi.fn<(r: PriceRange) => void>();
     render(<Harness onRangeChange={onChange} />);
     const minInput = screen.getByLabelText("Minimum price");
     await user.clear(minInput);

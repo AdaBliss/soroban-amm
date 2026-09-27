@@ -99,4 +99,10 @@ export async function startServer(port = 4000) {
   return url;
 }
 
-startServer().then((url) => console.log(`GraphQL API ready at ${url}`));
+startServer().then(
+  (url) => console.log(`GraphQL API ready at ${url}`),
+  (error: unknown) => {
+    console.error("GraphQL API failed to start:", error);
+    process.exitCode = 1;
+  },
+);

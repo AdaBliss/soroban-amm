@@ -14,6 +14,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { toText } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -64,8 +65,8 @@ export class FactoryClient {
    */
   async getPool(tokenA: string, tokenB: string): Promise<string | null> {
     const raw = await this.simulate("get_pool", addr(tokenA), addr(tokenB));
-    const native = scValToNative(raw);
-    return native !== null && native !== undefined ? String(native) : null;
+    const native: unknown = scValToNative(raw);
+    return native !== null && native !== undefined ? toText(native) : null;
   }
 
   /** Returns the addresses of all deployed AMM pools. */
@@ -78,8 +79,8 @@ export class FactoryClient {
   /** Returns the LP token address for a given pool, or `null` if not found. */
   async getLpToken(pool: string): Promise<string | null> {
     const raw = await this.simulate("get_lp_token", addr(pool));
-    const native = scValToNative(raw);
-    return native !== null && native !== undefined ? String(native) : null;
+    const native: unknown = scValToNative(raw);
+    return native !== null && native !== undefined ? toText(native) : null;
   }
 
   /**
@@ -88,8 +89,8 @@ export class FactoryClient {
    */
   async getGovernance(pool: string): Promise<string | null> {
     const raw = await this.simulate("get_governance", addr(pool));
-    const native = scValToNative(raw);
-    return native !== null && native !== undefined ? String(native) : null;
+    const native: unknown = scValToNative(raw);
+    return native !== null && native !== undefined ? toText(native) : null;
   }
 
   /** Returns the pool count (monotonic counter used to derive deployment salts). */

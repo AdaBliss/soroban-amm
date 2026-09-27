@@ -21,7 +21,6 @@ import fetch from "node-fetch";
 import type {
   AttemptOutcome,
   DeliveryResult,
-  FailureKind,
   MetricsSnapshot,
   PoolEvent,
   WebhookSubscription,
@@ -128,7 +127,7 @@ async function _mapWithConcurrency<T, R>(
   limit: number,
   fn: (item: T) => Promise<R>,
 ): Promise<PromiseSettledResult<R>[]> {
-  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  const results: PromiseSettledResult<R>[] = new Array<PromiseSettledResult<R>>(items.length);
   let cursor = 0;
 
   const workers = Array.from(
@@ -138,7 +137,7 @@ async function _mapWithConcurrency<T, R>(
         const idx = cursor++;
         if (idx >= items.length) return;
         try {
-          results[idx] = { status: "fulfilled", value: await fn(items[idx]!) };
+          results[idx] = { status: "fulfilled", value: await fn(items[idx]) };
         } catch (reason) {
           results[idx] = { status: "rejected", reason };
         }
@@ -203,12 +202,12 @@ export class WebhookDispatcher {
       if (r.status === "fulfilled") return r.value;
       // A rejection here is a dispatcher bug rather than a delivery failure,
       // but it must not take down the fan-out.
-      const sub = subs[i]!;
+      const sub = subs[i];
       return {
         subscriptionId: sub.id,
         url: sub.url,
         success: false,
-        failureKind: "network" as FailureKind,
+        failureKind: "network",
         error: String(r.reason),
         attemptedAt: Date.now(),
       };
