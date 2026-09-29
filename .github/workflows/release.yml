@@ -29,8 +29,13 @@ jobs:
         run: bash scripts/build_workspace.sh
       - name: Check contract sizes
         run: bash scripts/size_report.sh --fail-on-limit
+      # Same version as the Dockerfile, README.md and smoke-test.yml, installed
+      # the same way smoke-test.yml does. Building it with `cargo install`
+      # here compiled the CLI under rust-toolchain.toml, where the 23.0.0 pin
+      # locked an ethnum that no longer compiles (1.5.0), and needs system
+      # headers (libdbus, libudev) the runner is not guaranteed to have.
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli --version 23.0.0
+        uses: stellar/stellar-cli@v27.1.0
       - name: Optimize WASM artifacts
         shell: bash
         run: |

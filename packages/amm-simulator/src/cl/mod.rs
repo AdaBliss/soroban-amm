@@ -6,5 +6,8 @@
 pub mod analytics;
 pub mod math;
 pub mod pool;
+pub mod swap;
+pub mod swap_math;
 
 pub use pool::{ClPoolState, Position, Tick};
+pub use swap::ClSwapResult;

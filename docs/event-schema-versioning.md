@@ -107,27 +107,23 @@ that emit versioned events. Keep it synchronized with every
 hard-coded site count because tests and helper examples may also contain macro
 calls.
 
-`contracts/staking/src/lib.rs` already emits several plain
-(unversioned) events via `env.events().publish(...)` directly, predating
-this scheme -- it does not depend on `soroban_amm_sdk`, so it was left on
-its existing style rather than migrated to `emit_versioned_event!` as
-part of an unrelated change (see the new `boost_exp` event below, added
-for issue #699, which follows the same existing plain-event convention
-for consistency with the rest of the contract). A full migration of
-`staking` onto the versioned scheme is tracked separately and out of
-scope here.
+`contracts/staking/src/lib.rs` is now fully migrated onto the versioned
+scheme (issue #912). Every event it emits goes through
+`emit_versioned_event!`; there are no remaining raw `env.events().publish(...)`
+calls outside its test modules, and the crate now depends on
+`soroban_amm_sdk`. An indexer therefore reads a leading `schema_version`
+on every staking event, exactly as it does for the AMM, CL, governance,
+and factory contracts.
 
-`contracts/twal_consumer/src/lib.rs` is intentionally out of scope. It
-already emitted an unversioned `snapshot_deleted` event before this
-migration, and the tracked-pool lifecycle events added in #695
-(`pool_add`, `pool_remove`) follow that same existing, unversioned
-convention rather than mixing versioning schemes within one contract.
-Migrating `twal_consumer` to `emit_versioned_event!` — all three event
-sites at once — is left as a follow-up.
+`contracts/twal_consumer/src/lib.rs` is now migrated (#919): its
+`snapshot_deleted` event and the tracked-pool lifecycle events added in #695
+(`pool_add`, `pool_remove`) all emit through `emit_versioned_event!`, so the
+whole contract carries `EVENT_SCHEMA_VERSION`. See the twal_consumer section in
+the catalogue below.
 
 Test files in each of those crates were updated to decode the
-versioned payload shape; see `__ver_N_locals+ assert_eq(!version,
-EVENT_SCHEMA_VERSION)` assertions added by `migrate_tests.py`.
+versioned payload shape and assert the leading field equals
+`EVENT_SCHEMA_VERSION`.
 
 ## New events in this change
 
@@ -250,6 +246,45 @@ a representative call sequence and asserts every pool event carries the leading
 | `governance_transferred` | — | `(new_governance: Address)` |
 | `res_warn` | — | `(unhealthy: Vec<Address>)` |
 
+### POL Vesting — `contracts/pol_vesting/src/lib.rs`
+
+| Event | Topics | Payload |
+|---|---|---|
+| `governance_proposed` | — | `(current_governance: Address, new_governance: Address)` |
+| `governance_transferred` | — | `(old_governance: Address, new_governance: Address)` |
+| `treasury_proposed` | — | `(governance: Address, new_treasury: Address)` |
+| `treasury_transferred` | — | `(old_treasury: Address, new_treasury: Address)` |
+| `vesting_created` | — | `(beneficiary: Address, schedule_id: u32, total: i128, start_ledger: u32, cliff_ledger: u32, end_ledger: u32)` |
+| `released` | — | `(beneficiary: Address, schedule_id: u32, amount: i128)` |
+| `beneficiary_changed` | — | `(old_beneficiary: Address, old_schedule_id: u32, new_beneficiary: Address, new_schedule_id: u32)` |
+| `vesting_revoked` | — | `(beneficiary: Address, schedule_id: u32, to_beneficiary: i128, to_treasury: i128)` |
+
+### Incentive Campaigns — `contracts/incentive_campaigns/src/lib.rs`
+
+| Event | Topics | Payload |
+|---|---|---|
+| `governance_proposed` | — | `(caller: Address, new_governance: Address)` |
+| `governance_transferred` | — | `(old_governance: Address, new_governance: Address)` |
+| `campaign_created` | — | `(id: u64, pool: Address, reward_token: Address, start_time: u64, end_time: u64, reward_rate: i128)` |
+| `rate_updated` | — | `(campaign_id: u64, new_rate: i128)` |
+| `leftover_recovered` | — | `(campaign_id: u64, recipient: Address, leftover: i128)` |
+| `reward_distributed` | — | `(campaign_id: u64, provider: Address, amount: i128, dist_id: u64)` |
+
+### TWAL consumer — `contracts/twal_consumer/src/lib.rs`
+
+| Event | Topics | Payload |
+|---|---|---|
+| `pool_add` | — | `pool: Address` |
+| `pool_remove` | — | `pool: Address` |
+| `snapshot_deleted` | — | `(pool: Address, ledger_ts: u64)` |
+
+### TWAP consumer — `contracts/twap_consumer/src/lib.rs`
+
+| Event | Topics | Payload |
+|---|---|---|
+| `snap_del` | `pool` | `ledger_ts: u64` |
+| `pruned` | `pool` | `(removed_count: u32, oldest_remaining_ts: u64)` |
+
 ### BatchRouter — `contracts/batch_router/src/lib.rs`
 
 | Event | Payload |
@@ -324,14 +359,25 @@ carries the output the pools actually returned, not the quoted amount.
 `pause` / `unpause` (#937, #938) are emitted by the admin pause switch on both
 the router and the DEX aggregator, after the stored-admin check passes.
 
-### Staking — `contracts/staking/src/lib.rs` (unversioned, plain events)
+### Staking — `contracts/staking/src/lib.rs` (versioned events)
 
-Staking predates this scheme and is not yet migrated (see note above), so
-its events carry no `schema_version` prefix -- the payload below is the
-on-wire shape as-is, not `(schema_version, payload)`.
+Migrated to `emit_versioned_event!` (issue #912). Every row below has the
+on-wire data shape `(schema_version, payload)`.
 
 | Event | Topics | Payload |
 |---|---|---|
+| `staked` | — | `(staker: Address, amount: i128, boost: i128, lock_expiry: u64)` |
+| `unstaked` | — | `(staker: Address, amount: i128, rewards: i128)` |
+| `lock_extended` | — | `(staker: Address, boost: i128, lock_expiry: u64)` |
+| `claimed` | — | `(staker: Address, rewards: i128)` |
+| `rewards_added` | — | `(admin: Address, amount: i128)` |
+| `rewards_updated` | — | `(distributable: i128)` |
+| `rewards_clamped` | — | `(requested: i128, pool_balance: i128)` |
+| `max_reward_pool_balance_set` | — | `(admin: Address, max_balance: i128)` |
+| `paused` | — | `(admin: Address)` |
+| `unpaused` | — | `(admin: Address)` |
+| `emergency_mode` | — | `(admin: Address, enabled: bool)` |
+| `emergency_withdraw` | — | `(staker: Address, amount: i128)` |
 | `boost_exp` | — | `(staker: Address, previous_boost: i128, settled_boost: i128)` |
 
 `boost_exp` (issue #699) is emitted by `settle_boost`/`settle_boost_batch`
@@ -388,12 +434,11 @@ for it is listed in the Concentrated-liquidity AMM event table above.
 
 ## Update (#689)
 
-`contracts/oracle_aggregator/src/lib.rs` gained a new unversioned `src_wt`
-event emitted by `set_source_weight`, consistent with the oracle aggregator's
-existing plain-event convention (predating the `emit_versioned_event!` scheme).
-The event is emitted via `env.events().publish(...)` directly.
+`contracts/oracle_aggregator/src/lib.rs` gained a new `src_wt` event emitted
+by `set_source_weight`. It has since been migrated onto the versioned scheme
+(see #916 below).
 
-### Oracle Aggregator — `contracts/oracle_aggregator/src/lib.rs` (unversioned, plain events)
+### Oracle Aggregator — `contracts/oracle_aggregator/src/lib.rs`
 
 | Event | Topics | Payload |
 |---|---|---|
@@ -436,3 +481,54 @@ test modules.
 
 All event rows for these contracts are listed in the catalogue above under the
 Factory, Token, Reserve Manager, and Batch Auction sections.
+
+## Update (#913 #914 #919 #920)
+
+Four more contracts that emitted their entire event surface through raw
+`env.events().publish(...)` calls are now fully versioned. No raw publish call
+remains in any of their `src/` trees outside test modules, and each has one
+test per event topic decoding the payload as a `(u32, T)` pair and asserting the
+leading field equals `EVENT_SCHEMA_VERSION`.
+
+- `contracts/pol_vesting/src/lib.rs` (#913): eight events covering the
+  governance/treasury handover, schedule lifecycle, releases, and revocations.
+- `contracts/incentive_campaigns/src/lib.rs` (#914): six events covering
+  governance handover, campaign creation, rate updates, leftover recovery, and
+  reward distribution.
+- `contracts/twal_consumer/src/lib.rs` (#919): `pool_add`, `pool_remove`, and
+  `snapshot_deleted`.
+- `contracts/twap_consumer/src/lib.rs` (#920): `snap_del` and `pruned`.
+
+All event rows for these contracts are listed in the catalogue above under the
+POL Vesting, Incentive Campaigns, TWAL consumer, and TWAP consumer sections.
+
+## Update (#916)
+
+`contracts/oracle_aggregator/src/lib.rs` is now fully migrated onto the
+versioned scheme. All four raw `env.events().publish(...)` sites
+(`price`, `src_wt`, `stale_src`, `deviant`) now emit through
+`emit_versioned_event!`, with one test per topic decoding the payload as a
+version-stamped `(u32, T)` pair in the style of `last_versioned_event` from
+the governance test module. No raw `env.events().publish` call remains in
+`contracts/oracle_aggregator/src/` outside test modules. The event row for
+this contract, listed above under Oracle Aggregator, is unchanged except for
+the leading `schema_version` field now present on the wire.
+
+## Update (#915)
+
+`contracts/cl_position_nft/src/lib.rs` is now fully migrated onto the
+versioned scheme. All five raw `env.events().publish(...)` sites
+(`nft_mint`, `nft_burn`, `approve`, `approval_for_all`, `transfer`) now emit
+through `emit_versioned_event!`, with one test per topic decoding the payload
+as a version-stamped `(u32, T)` pair. No raw `env.events().publish` call
+remains in `contracts/cl_position_nft/src/` outside test modules.
+
+### CL Position NFT — `contracts/cl_position_nft/src/lib.rs`
+
+| Event | Topics | Payload |
+|---|---|---|
+| `nft_mint` | `to` | `(token_id: u64,)` |
+| `nft_burn` | `owner` | `(token_id: u64,)` |
+| `approve` | `caller`, `approved` | `(token_id: u64,)` |
+| `approval_for_all` | `owner`, `operator` | `(approved: bool,)` |
+| `transfer` | `from`, `to` | `(token_id: u64,)` |

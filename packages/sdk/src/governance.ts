@@ -14,6 +14,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { toBigInt, toText, toVariant } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -106,18 +107,18 @@ export class GovernanceClient {
     const id = Number(native.id ?? fallbackId ?? 0);
     return {
       id,
-      proposer: String(native.proposer ?? ""),
-      snapshotTotalSupply: BigInt(String(native.snapshot_total_supply ?? 0)),
-      voteStart: BigInt(String(native.vote_start ?? 0)),
-      voteEnd: BigInt(String(native.vote_end ?? 0)),
-      executeAfter: BigInt(String(native.execute_after ?? 0)),
-      expiresAt: BigInt(String(native.expires_at ?? 0)),
-      votesFor: BigInt(String(native.votes_for ?? 0)),
-      votesAgainst: BigInt(String(native.votes_against ?? 0)),
-      votesAbstain: BigInt(String(native.votes_abstain ?? 0)),
+      proposer: toText(native.proposer ?? ""),
+      snapshotTotalSupply: toBigInt(native.snapshot_total_supply),
+      voteStart: toBigInt(native.vote_start),
+      voteEnd: toBigInt(native.vote_end),
+      executeAfter: toBigInt(native.execute_after),
+      expiresAt: toBigInt(native.expires_at),
+      votesFor: toBigInt(native.votes_for),
+      votesAgainst: toBigInt(native.votes_against),
+      votesAbstain: toBigInt(native.votes_abstain),
       executed: Boolean(native.executed),
       cancelled: Boolean(native.cancelled),
-      status: String(native.status ?? "Active") as ProposalStatus,
+      status: toVariant(native.status, "Active") as ProposalStatus,
     };
   }
 
@@ -128,10 +129,10 @@ export class GovernanceClient {
     const raw = await this.simulate("get_params");
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      votingPeriodSecs: BigInt(String(native.voting_period_secs ?? 0)),
-      timelockSecs: BigInt(String(native.timelock_secs ?? 0)),
-      quorumBps: BigInt(String(native.quorum_bps ?? 0)),
-      minProposerStakeBps: BigInt(String(native.min_proposer_stake_bps ?? 0)),
+      votingPeriodSecs: toBigInt(native.voting_period_secs),
+      timelockSecs: toBigInt(native.timelock_secs),
+      quorumBps: toBigInt(native.quorum_bps),
+      minProposerStakeBps: toBigInt(native.min_proposer_stake_bps),
     };
   }
 
@@ -155,7 +156,7 @@ export class GovernanceClient {
   /** Returns `None` (via `null`) if the proposal id is unknown. */
   async tryGetProposal(proposalId: number): Promise<Proposal | null> {
     const raw = await this.simulate("try_get_proposal", u32(proposalId));
-    const native = scValToNative(raw);
+    const native: unknown = scValToNative(raw);
     if (native === null || native === undefined) return null;
     return this.proposalFromNative(native as Record<string, unknown>, proposalId);
   }
@@ -225,9 +226,9 @@ export class GovernanceClient {
     const raw = await this.simulate("list_voters", u32(proposalId), u32(offset), u32(limit));
     const native = scValToNative(raw) as Array<Record<string, unknown>>;
     return native.map((n) => ({
-      voter: String(n.voter ?? ""),
-      vote: String(n.vote ?? "DidNotVote") as VoteRecord,
-      weight: BigInt(String(n.weight ?? 0)),
+      voter: toText(n.voter ?? ""),
+      vote: toVariant(n.vote, "DidNotVote") as VoteRecord,
+      weight: toBigInt(n.weight),
     }));
   }
 
@@ -246,15 +247,15 @@ export class GovernanceClient {
   /** Returns the vote record for `voter` on `proposalId`. */
   async getVoteRecord(proposalId: number, voter: string): Promise<VoteRecord> {
     const raw = await this.simulate("get_vote_record", u32(proposalId), addr(voter));
-    const native = scValToNative(raw);
-    return String(native) as VoteRecord;
+    const native: unknown = scValToNative(raw);
+    return toVariant(native, "DidNotVote") as VoteRecord;
   }
 
   /** Returns the delegation target for `from`, or `null` if not delegated. */
   async getDelegate(from: string): Promise<string | null> {
     const raw = await this.simulate("get_delegate", addr(from));
-    const native = scValToNative(raw);
-    return native !== null && native !== undefined ? String(native) : null;
+    const native: unknown = scValToNative(raw);
+    return native !== null && native !== undefined ? toText(native) : null;
   }
 
   // ── Write-method parameter types ───────────────────────────────────────────

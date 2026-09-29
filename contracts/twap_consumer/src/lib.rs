@@ -93,7 +93,32 @@ impl TwapConsumer {
     /// Maximum number of eligible snapshots opportunistically pruned during save_snapshot.
     pub const AMORTIZED_PRUNE_LIMIT: u32 = 2;
 
+    /// Instance-storage TTL: below this many remaining ledgers, `extend_ttl`
+    /// renews the entry; each renewal bumps it back up to `INSTANCE_TTL_BUMP_TO`.
+    ///
+    /// The instance entry holds the keeper address and retention policy —
+    /// the state every entrypoint needs just to authorize or read. Oracle
+    /// consumers like this one are read by other protocols sporadically
+    /// rather than driven by steady user traffic (see #910), so the
+    /// threshold can't assume frequent calls will keep it alive on their
+    /// own. `172_800` ledgers (~10 days at 5s/ledger) is the same floor
+    /// `contracts/amm` uses for its own instance entry, chosen so a renewal
+    /// still has slack before the ~30-day (`518_400`-ledger) archival
+    /// horizon docs generally assume for a "recently touched" contract.
+    pub const INSTANCE_TTL_THRESHOLD: u32 = 172_800;
+    pub const INSTANCE_TTL_BUMP_TO: u32 = 518_400;
+
+    /// Extends the contract's **instance** storage TTL (keeper, retention
+    /// policy). Safe to call on every entrypoint — `extend_ttl` is a no-op
+    /// until the entry's remaining TTL drops below `INSTANCE_TTL_THRESHOLD`.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(Self::INSTANCE_TTL_THRESHOLD, Self::INSTANCE_TTL_BUMP_TO);
+    }
+
     pub fn initialize(env: Env, keeper: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Keeper) {
             return Err(TwapError::AlreadyInitialized);
         }
@@ -102,6 +127,7 @@ impl TwapConsumer {
     }
 
     pub fn get_keeper(env: Env) -> Result<Address, TwapError> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Keeper)
@@ -120,6 +146,7 @@ impl TwapConsumer {
         admin: Address,
         policy: RetentionPolicy,
     ) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
         let keeper = Self::get_keeper(env.clone())?;
         if admin != keeper {
             return Err(TwapError::Unauthorized);
@@ -139,6 +166,7 @@ impl TwapConsumer {
     /// Returns the active retention policy, or a default policy with
     /// `max_age_seconds = 604_800` (7 days) and `max_snapshots_per_pool = 0` (unlimited).
     pub fn get_retention_policy(env: Env) -> RetentionPolicy {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::RetentionPolicy)
@@ -150,6 +178,7 @@ impl TwapConsumer {
 
     /// Returns the number of snapshots tracked in the index for `pool`.
     pub fn get_snapshot_count(env: Env, pool: Address) -> u32 {
+        Self::extend_instance_ttl(&env);
         let timestamps: Vec<u64> = env
             .storage()
             .persistent()
@@ -160,6 +189,7 @@ impl TwapConsumer {
 
     /// Returns a paginated slice of snapshot timestamps for `pool`.
     pub fn list_snapshot_timestamps(env: Env, pool: Address, offset: u32, limit: u32) -> Vec<u64> {
+        Self::extend_instance_ttl(&env);
         let timestamps: Vec<u64> = env
             .storage()
             .persistent()
@@ -185,6 +215,7 @@ impl TwapConsumer {
         to_ts: u64,
         limit: u32,
     ) -> Vec<(u64, PriceSnapshot)> {
+        Self::extend_instance_ttl(&env);
         let timestamps: Vec<u64> = env
             .storage()
             .persistent()
@@ -211,6 +242,7 @@ impl TwapConsumer {
     }
 
     pub fn save_snapshot(env: Env, pool: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
         let (cum_a, cum_b, pool_ts) = AmmPoolOracleClient::new(&env, &pool).get_price_cumulative();
         let ledger_ts = env.ledger().timestamp();
@@ -260,6 +292,7 @@ impl TwapConsumer {
     /// Deletes a price snapshot from persistent storage.
     /// Returns `TwapError::NoSnapshotFound` and emits no event if the snapshot does not exist.
     pub fn delete_snapshot(env: Env, pool: Address, ledger_ts: u64) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
         let key = DataKey::Snapshot(pool.clone(), ledger_ts);
         if !env.storage().persistent().has(&key) {
@@ -267,8 +300,11 @@ impl TwapConsumer {
         }
         env.storage().persistent().remove(&key);
         Self::remove_snapshot_timestamp(&env, &pool, ledger_ts);
-        env.events()
-            .publish((symbol_short!("snap_del"), pool), ledger_ts);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (symbol_short!("snap_del"), pool),
+            ledger_ts
+        );
         Ok(())
     }
 
@@ -320,9 +356,10 @@ impl TwapConsumer {
                 Self::SNAPSHOT_TTL_LEDGERS,
             );
             let oldest_remaining_ts = remaining_timestamps.first().unwrap_or(0);
-            env.events().publish(
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
                 (symbol_short!("pruned"), pool.clone()),
-                (remove_count, oldest_remaining_ts),
+                (remove_count, oldest_remaining_ts)
             );
         }
 
@@ -331,12 +368,14 @@ impl TwapConsumer {
 
     /// Permissionless bounded pruning for a pool according to the active retention policy.
     pub fn prune_snapshots(env: Env, pool: Address, max_to_remove: u32) -> u32 {
+        Self::extend_instance_ttl(&env);
         Self::prune_snapshots_internal(&env, &pool, max_to_remove)
     }
 
     /// Permissionless sweep across all tracked pools, removing up to `max_to_remove_per_pool`
     /// eligible snapshots per pool. Fault-isolated so one pool cannot abort the sweep.
     pub fn prune_all(env: Env, max_to_remove_per_pool: u32) -> u32 {
+        Self::extend_instance_ttl(&env);
         let tracked: Vec<Address> = Self::get_tracked_pools(env.clone());
         let mut total_removed = 0u32;
         for i in 0..tracked.len() {
@@ -413,6 +452,7 @@ impl TwapConsumer {
     }
 
     pub fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError> {
+        Self::extend_instance_ttl(&env);
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
@@ -475,6 +515,7 @@ impl TwapConsumer {
         spot_price: i128,
         max_deviation_bps: i128,
     ) -> Result<PriceValidation, TwapError> {
+        Self::extend_instance_ttl(&env);
         let twap_price = Self::get_twap_price(env, pool, window_seconds)?;
         Self::validate_price(spot_price, twap_price, max_deviation_bps)
     }
@@ -487,6 +528,7 @@ impl TwapConsumer {
         max_deviation_bps: i128,
         collateral_amount: i128,
     ) -> Result<i128, TwapError> {
+        Self::extend_instance_ttl(&env);
         if collateral_amount < 0 {
             return Err(TwapError::NegativeCollateral);
         }
@@ -508,6 +550,7 @@ impl TwapConsumer {
         pool: Address,
         window_seconds: u64,
     ) -> Result<(i128, i128), TwapError> {
+        Self::extend_instance_ttl(&env);
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
@@ -536,6 +579,7 @@ impl TwapConsumer {
     }
 
     pub fn get_tracked_pools(env: Env) -> Vec<Address> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .persistent()
             .get(&DataKey::TrackedPoolsPersistent)
@@ -543,6 +587,7 @@ impl TwapConsumer {
     }
 
     pub fn get_twap_all(env: Env, window_seconds: u64) -> Result<Vec<(Address, i128)>, TwapError> {
+        Self::extend_instance_ttl(&env);
         let tracked: Vec<Address> = Self::get_tracked_pools(env.clone());
         let mut results: Vec<(Address, i128)> = Vec::new(&env);
         for i in 0..tracked.len() {
@@ -554,6 +599,7 @@ impl TwapConsumer {
     }
 
     pub fn get_cl_twap(env: Env, pool: Address, window_seconds: u64) -> Result<i64, TwapError> {
+        Self::extend_instance_ttl(&env);
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
@@ -580,6 +626,7 @@ impl TwapConsumer {
     }
 
     pub fn save_cl_snapshot(env: Env, pool: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
         let (tick_cum, pool_ts) = ClPoolOracleClient::new(&env, &pool).get_tick_cumulative();
         let ledger_ts = env.ledger().timestamp();
@@ -654,7 +701,7 @@ mod tests {
 
     use amm::{AmmPool, AmmPoolClient};
     use soroban_sdk::{
-        testutils::{Address as _, Events as _, Ledger},
+        testutils::{storage::Instance as _, Address as _, Events as _, Ledger},
         token::{StellarAssetClient, TokenClient as StellarTokenClient},
         Address, Env, IntoVal,
     };
@@ -1365,7 +1412,10 @@ mod tests {
         expected_topics.push_back(symbol_short!("snap_del").into_val(&env));
         expected_topics.push_back(pool.clone().into_val(&env));
         assert_eq!(topics, expected_topics);
-        let data_ts: u64 = data.into_val(&env);
+        // Issue #920: the payload is version-stamped as `(EVENT_SCHEMA_VERSION, T)`.
+        let (version, data_ts): (u32, u64) = data.into_val(&env);
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
         assert_eq!(data_ts, ledger_ts);
     }
 
@@ -1951,8 +2001,109 @@ mod tests {
         expected_topics.push_back(pool.clone().into_val(&env));
         assert_eq!(topics, expected_topics);
 
-        let (count_val, oldest_ts_val): (u32, u64) = data.into_val(&env);
+        // Issue #920: the payload is version-stamped as `(EVENT_SCHEMA_VERSION, T)`.
+        let (version, (count_val, oldest_ts_val)): (u32, (u32, u64)) = data.into_val(&env);
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
         assert_eq!(count_val, 2);
         assert_eq!(oldest_ts_val, 200_000);
+    }
+
+    // ── Issue #910: instance storage TTL is never extended ──────────────────
+    //
+    // `twap_consumer` used to extend only its persistent snapshot entries,
+    // never the instance entry holding the keeper address and retention
+    // policy. A low-traffic oracle consumer that goes unread for long
+    // enough would let that instance entry's TTL lapse and get archived,
+    // trapping every subsequent call until someone restores it. These tests
+    // pin `extend_instance_ttl` in place on the read and write entrypoints.
+
+    fn instance_ttl(env: &Env, consumer: &TwapConsumerClient<'_>) -> u32 {
+        env.as_contract(&consumer.address, || env.storage().instance().get_ttl())
+    }
+
+    /// Advances the ledger sequence number far enough that the instance
+    /// entry's remaining TTL drops below `INSTANCE_TTL_THRESHOLD`, simulating
+    /// a long quiet stretch between calls to a sparsely-read oracle consumer.
+    fn lower_instance_ttl_below_threshold(env: &Env, consumer: &TwapConsumerClient<'_>) {
+        env.ledger().with_mut(|l| {
+            l.sequence_number +=
+                TwapConsumer::INSTANCE_TTL_BUMP_TO - TwapConsumer::INSTANCE_TTL_THRESHOLD + 1
+        });
+        let ttl = instance_ttl(env, consumer);
+        assert!(
+            ttl < TwapConsumer::INSTANCE_TTL_THRESHOLD,
+            "test setup should lower instance TTL below the threshold, got {ttl}"
+        );
+    }
+
+    fn assert_instance_ttl_bumped(env: &Env, consumer: &TwapConsumerClient<'_>) {
+        let ttl = instance_ttl(env, consumer);
+        assert!(
+            ttl >= TwapConsumer::INSTANCE_TTL_BUMP_TO - 1,
+            "instance TTL {ttl} should be bumped toward INSTANCE_TTL_BUMP_TO"
+        );
+    }
+
+    #[test]
+    fn test_initialize_extends_instance_ttl() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwapConsumer);
+        let consumer = TwapConsumerClient::new(&env, &consumer_addr);
+
+        consumer.initialize(&admin);
+
+        assert_instance_ttl_bumped(&env, &consumer);
+    }
+
+    /// A read-only entrypoint (`get_keeper`) still restores a lapsed
+    /// instance TTL — this is the failure mode the issue calls out: a
+    /// read-only path is often the only traffic this contract sees for long
+    /// stretches, so it must extend the TTL too, not just the writes.
+    #[test]
+    fn test_get_keeper_restores_lapsed_instance_ttl_and_still_responds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwapConsumer);
+        let consumer = TwapConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&admin);
+
+        lower_instance_ttl_below_threshold(&env, &consumer);
+
+        // The call must still succeed rather than trap on an archived
+        // instance entry, and it must restore the TTL for the next caller.
+        let keeper = consumer.get_keeper();
+        assert_eq!(keeper, admin);
+        assert_instance_ttl_bumped(&env, &consumer);
+    }
+
+    /// A state-mutating entrypoint (`set_retention_policy`) restores a
+    /// lapsed instance TTL as its first statement, before the keeper check
+    /// even runs.
+    #[test]
+    fn test_set_retention_policy_restores_lapsed_instance_ttl_and_still_responds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwapConsumer);
+        let consumer = TwapConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&admin);
+
+        lower_instance_ttl_below_threshold(&env, &consumer);
+
+        // Must still succeed rather than trap on an archived instance entry.
+        consumer.set_retention_policy(
+            &admin,
+            &RetentionPolicy {
+                max_age_seconds: TwapConsumer::LONGEST_TWAP_WINDOW,
+                max_snapshots_per_pool: 100,
+            },
+        );
+
+        assert_instance_ttl_bumped(&env, &consumer);
+        assert_eq!(consumer.get_retention_policy().max_snapshots_per_pool, 100);
     }
 }

@@ -217,102 +217,94 @@ pub fn sqrt_price_x96_to_tick(sqrt_price: u128) -> i32 {
 // Amount deltas
 // ---------------------------------------------------------------------------
 
+// These four conversions back the position path (mint, burn, quote). Every
+// one is evaluated over a 256-bit intermediate via `mul_div`, so a product
+// such as `liquidity * (sqrt_b - sqrt_a)` is never truncated to 128 bits: the
+// sqrt-price difference grows exponentially with tick magnitude and exceeds
+// `u128` for ordinary ranges such as [100_000, 200_000] (#963).
+//
+// Rounding: every result rounds toward zero (floor of the magnitude), the same
+// direction these functions have always used. Liquidity derived from a deposit
+// is therefore never more than the deposit pays for, and an amount paid out
+// for a given liquidity is never more than that liquidity is worth.
+//
+// Each returns `None` when the result does not fit in an `i128`, or when an
+// intermediate stage of a two-stage evaluation does not fit in a `u128`, so
+// the caller can surface a typed error instead of acting on a wrapped value.
+
 /// Token A amount for a position in [sqrt_a, sqrt_b] with given liquidity.
-/// Mirrors Uniswap V3: amount0 = liquidity * (sqrt_b - sqrt_a) / (sqrt_a * sqrt_b / 2^96)
-/// Returns 0 if sqrt_a >= sqrt_b.
-pub fn get_amount0_delta(mut sqrt_a: u128, mut sqrt_b: u128, liquidity: i128) -> i128 {
-    if sqrt_a > sqrt_b {
-        core::mem::swap(&mut sqrt_a, &mut sqrt_b);
-    }
-    if sqrt_a == 0 || sqrt_b == 0 || liquidity == 0 || sqrt_a == sqrt_b {
-        return 0;
-    }
-    let abs_liq = liquidity.unsigned_abs();
-    // amount0 = abs_liq * (sqrt_b - sqrt_a) * 2^96 / (sqrt_b * sqrt_a / 2^96)
-    //         = abs_liq * (sqrt_b - sqrt_a) * 2^192 / (sqrt_b * sqrt_a)
-    // Use wide arithmetic via splitting to stay in u128.
-    let numerator = mul_u128_u96(abs_liq, sqrt_b - sqrt_a); // abs_liq * (sqrt_b - sqrt_a) * 2^96
-                                                            // Compute sqrt_a * sqrt_b / Q96 without overflow using mul_shift128
-    let denominator = mul_shift128(sqrt_a, sqrt_b).wrapping_shl(32);
-    let abs_result = numerator.checked_div(denominator).unwrap_or(0);
-    if liquidity >= 0 {
-        abs_result as i128
-    } else {
-        -(abs_result as i128)
-    }
+/// Mirrors Uniswap V3: amount0 = liquidity * (sqrt_b - sqrt_a) * 2^96 / (sqrt_a * sqrt_b)
+///
+/// Order-independent in `sqrt_a` / `sqrt_b`; returns `Some(0)` if they are
+/// equal. The sign of the result follows the sign of `liquidity`. The
+/// magnitude is at most 1 below the exact floor (see [`amount0_delta_exact`]).
+/// `None` if the result does not fit in an `i128`, or if the first stage
+/// `|liquidity| * 2^96 / sqrt_lower` does not fit in a `u128`.
+pub fn get_amount0_delta(sqrt_a: u128, sqrt_b: u128, liquidity: i128) -> Option<i128> {
+    let abs_result = amount0_delta_exact(sqrt_a, sqrt_b, liquidity.unsigned_abs(), false);
+    with_sign(abs_result, liquidity < 0)
 }
 
 /// Token B amount for a position in [sqrt_a, sqrt_b] with given liquidity.
 /// Mirrors Uniswap V3: amount1 = liquidity * (sqrt_b - sqrt_a) / 2^96
-pub fn get_amount1_delta(mut sqrt_a: u128, mut sqrt_b: u128, liquidity: i128) -> i128 {
-    if sqrt_a > sqrt_b {
-        core::mem::swap(&mut sqrt_a, &mut sqrt_b);
-    }
-    if liquidity == 0 || sqrt_a == sqrt_b {
-        return 0;
-    }
-    let abs_liq = liquidity.unsigned_abs();
-    // amount1 = abs_liq * (sqrt_b - sqrt_a) / 2^96
-    let abs_result = mul_u128_u96(abs_liq, sqrt_b - sqrt_a) / Q96;
-    if liquidity >= 0 {
-        abs_result as i128
-    } else {
-        -(abs_result as i128)
-    }
+///
+/// The magnitude is the exact floor; the sign follows `liquidity`.
+pub fn get_amount1_delta(sqrt_a: u128, sqrt_b: u128, liquidity: i128) -> Option<i128> {
+    let abs_result = amount1_delta_exact(sqrt_a, sqrt_b, liquidity.unsigned_abs(), false);
+    with_sign(abs_result, liquidity < 0)
 }
 
 /// Liquidity from a token-A amount in [sqrt_a, sqrt_b].
 /// liquidity = amount0 * sqrt_a * sqrt_b / ((sqrt_b - sqrt_a) * 2^96)
-pub fn get_liquidity_for_amount0(mut sqrt_a: u128, mut sqrt_b: u128, amount0: i128) -> i128 {
+///
+/// Evaluated as `floor(floor(amount0 * sqrt_b / delta) * sqrt_a / 2^96)`.
+/// Dividing by `delta` first keeps the intermediate at least as large as
+/// `amount0`, so the relative error of the inner floor is at most
+/// `1 / amount0`. Both stages round down, so the result never exceeds the
+/// exact liquidity. `None` if the result does not fit in an `i128`, or if the
+/// first stage does not fit in a `u128`.
+pub fn get_liquidity_for_amount0(
+    mut sqrt_a: u128,
+    mut sqrt_b: u128,
+    amount0: i128,
+) -> Option<i128> {
     if sqrt_a > sqrt_b {
         core::mem::swap(&mut sqrt_a, &mut sqrt_b);
     }
     if sqrt_b == sqrt_a || amount0 == 0 {
-        return 0;
+        return Some(0);
     }
     let abs_amt = amount0.unsigned_abs();
-    // liq = abs_amt * (sqrt_a * sqrt_b / Q96) / (sqrt_b - sqrt_a)
-    // Compute sqrt_a * sqrt_b / Q96 without u128 overflow using mul_shift128:
-    //   mul_shift128(a, b) = floor(a*b / 2^128)
-    //   a*b / 2^96 = (a*b / 2^128) << 32 = mul_shift128(a, b) << 32
-    let product = mul_shift128(sqrt_a, sqrt_b).wrapping_shl(32); // = sqrt_a * sqrt_b / Q96
-    let abs_result = mul_u128_u96(abs_amt, product) / (sqrt_b - sqrt_a);
-    if amount0 >= 0 {
-        abs_result as i128
-    } else {
-        -(abs_result as i128)
-    }
+    let abs_result =
+        mul_div(abs_amt, sqrt_b, sqrt_b - sqrt_a).and_then(|t| mul_div(t, sqrt_a, Q96));
+    with_sign(abs_result, amount0 < 0)
 }
 
 /// Liquidity from a token-B amount in [sqrt_a, sqrt_b].
 /// liquidity = amount1 * 2^96 / (sqrt_b - sqrt_a)
-pub fn get_liquidity_for_amount1(mut sqrt_a: u128, mut sqrt_b: u128, amount1: i128) -> i128 {
+///
+/// The magnitude is the exact floor; the sign follows `amount1`.
+pub fn get_liquidity_for_amount1(
+    mut sqrt_a: u128,
+    mut sqrt_b: u128,
+    amount1: i128,
+) -> Option<i128> {
     if sqrt_a > sqrt_b {
         core::mem::swap(&mut sqrt_a, &mut sqrt_b);
     }
     if sqrt_b == sqrt_a || amount1 == 0 {
-        return 0;
+        return Some(0);
     }
-    let abs_amt = amount1.unsigned_abs();
-    // liq = abs_amt * Q96 / (sqrt_b - sqrt_a)
-    let abs_result = mul_u128_u96(abs_amt, Q96) / (sqrt_b - sqrt_a);
-    if amount1 >= 0 {
-        abs_result as i128
-    } else {
-        -(abs_result as i128)
-    }
+    let abs_result = mul_div(amount1.unsigned_abs(), Q96, sqrt_b - sqrt_a);
+    with_sign(abs_result, amount1 < 0)
 }
 
-/// Compute (a * b) where a is u128 and b is a Q96 value (u128 ≤ 2^128).
-/// Returns the product / 2^0 — i.e., the raw u128 product without overflow
-/// by only keeping the low 128 bits (wrapping). Safe when the true product
-/// fits in u128, which holds for our use cases (liq < 2^63, price < 2^128).
+/// Narrow an unsigned magnitude to an `i128` carrying the requested sign.
+/// `None` if the magnitude was already `None` or does not fit in an `i128`.
 #[inline(always)]
-fn mul_u128_u96(a: u128, b: u128) -> u128 {
-    // Split b into low 64 and high 64.
-    let b_lo = b & 0xFFFFFFFFFFFFFFFF;
-    let b_hi = b >> 64;
-    (a * b_lo).wrapping_add((a * b_hi).wrapping_shl(64))
+fn with_sign(abs: Option<u128>, negative: bool) -> Option<i128> {
+    let v = i128::try_from(abs?).ok()?;
+    Some(if negative { -v } else { v })
 }
 
 // ---------------------------------------------------------------------------
@@ -408,9 +400,11 @@ pub fn mul_div_ceil(a: u128, b: u128, d: u128) -> Option<u128> {
 /// two `mul_div` stages so the `L * Q96 * delta` numerator never has to fit in
 /// a `u128`. `round_up` rounds toward the pool.
 ///
-/// This is the swap path's counterpart to [`get_amount0_delta`], which still
-/// routes through the wrapping `mul_u128_u96` and is inaccurate for wide or
-/// high-magnitude tick ranges (tracked separately).
+/// With `round_up == false` the result is either the exact floor or one
+/// below it: the first stage floors `L * Q96 / sqrt_a`, which costs strictly
+/// less than one unit after the second stage multiplies by
+/// `delta / sqrt_b < 1`. The swap path calls this directly; the position path
+/// reaches it through [`get_amount0_delta`].
 pub fn amount0_delta_exact(
     mut sqrt_a: u128,
     mut sqrt_b: u128,
@@ -744,8 +738,8 @@ mod tests {
         let sp_low = tick_to_sqrt_price_x96(-100);
         let sp_high = tick_to_sqrt_price_x96(100);
         let liq = 1_000_000_i128;
-        let a = get_amount0_delta(sp_low, sp_high, liq);
-        let b = get_amount0_delta(sp_high, sp_low, liq);
+        let a = get_amount0_delta(sp_low, sp_high, liq).unwrap();
+        let b = get_amount0_delta(sp_high, sp_low, liq).unwrap();
         assert_eq!(a, b, "get_amount0_delta should be order-independent");
     }
 
@@ -754,8 +748,8 @@ mod tests {
         let sp_low = tick_to_sqrt_price_x96(-100);
         let sp_high = tick_to_sqrt_price_x96(100);
         let liq = 1_000_000_i128;
-        let a = get_amount1_delta(sp_low, sp_high, liq);
-        let b = get_amount1_delta(sp_high, sp_low, liq);
+        let a = get_amount1_delta(sp_low, sp_high, liq).unwrap();
+        let b = get_amount1_delta(sp_high, sp_low, liq).unwrap();
         assert_eq!(a, b);
     }
 
@@ -765,9 +759,9 @@ mod tests {
         let sp_low = tick_to_sqrt_price_x96(-200);
         let sp_high = tick_to_sqrt_price_x96(-100);
         let liq_in = 1_000_000_i128;
-        let amount0 = get_amount0_delta(sp_low, sp_high, liq_in);
+        let amount0 = get_amount0_delta(sp_low, sp_high, liq_in).unwrap();
         if amount0 > 0 {
-            let liq_out = get_liquidity_for_amount0(sp_low, sp_high, amount0);
+            let liq_out = get_liquidity_for_amount0(sp_low, sp_high, amount0).unwrap();
             // Allow 1% rounding tolerance
             assert!(
                 (liq_out - liq_in).abs() * 100 <= liq_in,
@@ -781,9 +775,9 @@ mod tests {
         let sp_low = tick_to_sqrt_price_x96(-100);
         let sp_high = tick_to_sqrt_price_x96(100);
         let liq_in = 1_000_000_i128;
-        let amount1 = get_amount1_delta(sp_low, sp_high, liq_in);
+        let amount1 = get_amount1_delta(sp_low, sp_high, liq_in).unwrap();
         if amount1 > 0 {
-            let liq_out = get_liquidity_for_amount1(sp_low, sp_high, amount1);
+            let liq_out = get_liquidity_for_amount1(sp_low, sp_high, amount1).unwrap();
             assert!(
                 (liq_out - liq_in).abs() * 100 <= liq_in,
                 "amount1 roundtrip: got {liq_out} expected ~{liq_in}"
@@ -795,8 +789,175 @@ mod tests {
     fn negative_liquidity_returns_negative_delta() {
         let sp_low = tick_to_sqrt_price_x96(-100);
         let sp_high = tick_to_sqrt_price_x96(100);
-        let a = get_amount0_delta(sp_low, sp_high, 1_000_000);
-        let b = get_amount0_delta(sp_low, sp_high, -1_000_000);
+        let a = get_amount0_delta(sp_low, sp_high, 1_000_000).unwrap();
+        let b = get_amount0_delta(sp_low, sp_high, -1_000_000).unwrap();
         assert_eq!(a, -b);
+    }
+
+    // ── #963: position-path conversions over high-magnitude ranges ───────────
+
+    /// One pinned tick range: the sqrt prices `tick_to_sqrt_price_x96` yields
+    /// for its bounds, and exact-precision floors of each conversion computed
+    /// independently with arbitrary-precision integers:
+    ///
+    ///   amount0 = floor(L * 2^96 * (sb - sa) / (sa * sb))
+    ///   amount1 = floor(L * (sb - sa) / 2^96)
+    ///   liq0    = floor(X * sa * sb / (2^96 * (sb - sa)))
+    ///   liq1    = floor(X * 2^96 / (sb - sa))
+    ///
+    /// with `L = 1_000_000` and a deposit of `X = 10^12`.
+    struct PinnedRange {
+        ticks: (i32, i32),
+        sqrt: (u128, u128),
+        amount0: i128,
+        amount1: i128,
+        liq0: i128,
+        liq1: i128,
+    }
+
+    const PINNED_L: i128 = 1_000_000;
+    const PINNED_X: i128 = 1_000_000_000_000;
+
+    /// The three ranges from #963. `L * (sb - sa)` fits in a u128 for the
+    /// first and is 5.09x and 755x over `u128::MAX` for the other two, which
+    /// is where the removed wrapping multiply returned values 55.7x and 1753x
+    /// too small.
+    const PINNED: [PinnedRange; 3] = [
+        PinnedRange {
+            ticks: (0, 100_000),
+            sqrt: (
+                79_228_162_514_264_337_593_543_950_336,
+                11_755_562_826_496_067_164_730_007_758_967,
+            ),
+            amount0: 993_260,
+            amount1: 147_376_062,
+            liq0: 1_006_785_362_427,
+            liq1: 6_785_362_427,
+        },
+        PinnedRange {
+            ticks: (100_000, 200_000),
+            sqrt: (
+                11_755_562_826_496_067_164_730_007_758_967,
+                1_744_244_129_640_337_381_386_292_646_062_446,
+            ),
+            amount0: 6_694,
+            amount1: 21_867_079_985,
+            liq0: 149_382_848_285_501,
+            liq1: 45_730_842,
+        },
+        PinnedRange {
+            ticks: (200_000, 300_000),
+            sqrt: (
+                1_744_244_129_640_337_381_386_292_646_062_446,
+                258_804_076_732_718_222_382_219_765_876_867_990,
+            ),
+            amount0: 45,
+            amount1: 3_244_551_235_891,
+            liq0: 22_164_838_896_837_700,
+            liq1: 308_209,
+        },
+    ];
+
+    #[test]
+    fn pinned_ranges_use_the_expected_sqrt_prices() {
+        for r in PINNED.iter() {
+            assert_eq!(tick_to_sqrt_price_x96(r.ticks.0), r.sqrt.0);
+            assert_eq!(tick_to_sqrt_price_x96(r.ticks.1), r.sqrt.1);
+        }
+        // The last two ranges are the ones the old wrapping product broke.
+        let overflows = |r: &PinnedRange| {
+            (PINNED_L as u128)
+                .checked_mul(r.sqrt.1 - r.sqrt.0)
+                .is_none()
+        };
+        assert!(!overflows(&PINNED[0]));
+        assert!(overflows(&PINNED[1]));
+        assert!(overflows(&PINNED[2]));
+    }
+
+    /// `get_amount1_delta` is the exact floor; `get_amount0_delta` rounds down
+    /// and is at most one unit below the exact floor (the documented cost of
+    /// its two-stage evaluation). Neither ever exceeds the exact value, so an
+    /// amount paid out for a given liquidity never over-pays.
+    #[test]
+    fn amount_deltas_match_exact_values_and_round_down() {
+        for r in PINNED.iter() {
+            let (sa, sb) = r.sqrt;
+            let a1 = get_amount1_delta(sa, sb, PINNED_L).unwrap();
+            assert_eq!(a1, r.amount1, "amount1 over {:?}", r.ticks);
+            let a0 = get_amount0_delta(sa, sb, PINNED_L).unwrap();
+            assert!(
+                a0 <= r.amount0 && a0 >= r.amount0 - 1,
+                "amount0 over {:?}: got {a0}, exact floor {}",
+                r.ticks,
+                r.amount0
+            );
+            // Order-independent and sign-mirrored.
+            assert_eq!(get_amount0_delta(sb, sa, PINNED_L).unwrap(), a0);
+            assert_eq!(get_amount1_delta(sb, sa, PINNED_L).unwrap(), a1);
+            assert_eq!(get_amount0_delta(sa, sb, -PINNED_L).unwrap(), -a0);
+            assert_eq!(get_amount1_delta(sa, sb, -PINNED_L).unwrap(), -a1);
+        }
+    }
+
+    /// `get_liquidity_for_amount1` is the exact floor; `get_liquidity_for_amount0`
+    /// rounds down, losing at most `sa / 2^96 + 1` to its inner floor. Neither
+    /// ever exceeds the exact value, so a deposit is never credited with more
+    /// liquidity than it pays for.
+    #[test]
+    fn liquidity_for_amounts_match_exact_values_and_round_down() {
+        for r in PINNED.iter() {
+            let (sa, sb) = r.sqrt;
+            let l1 = get_liquidity_for_amount1(sa, sb, PINNED_X).unwrap();
+            assert_eq!(l1, r.liq1, "liq1 over {:?}", r.ticks);
+            let l0 = get_liquidity_for_amount0(sa, sb, PINNED_X).unwrap();
+            let slack = (sa / Q96) as i128 + 1;
+            assert!(
+                l0 <= r.liq0 && l0 >= r.liq0 - slack,
+                "liq0 over {:?}: got {l0}, exact floor {}",
+                r.ticks,
+                r.liq0
+            );
+            assert_eq!(get_liquidity_for_amount0(sb, sa, PINNED_X).unwrap(), l0);
+            assert_eq!(get_liquidity_for_amount1(sa, sb, -PINNED_X).unwrap(), -l1);
+        }
+    }
+
+    /// Converting a deposit to liquidity and back never returns more than was
+    /// deposited, and on these ranges returns it to within a relative 1e-6.
+    #[test]
+    fn deposit_round_trip_is_tight_on_pinned_ranges() {
+        for r in PINNED.iter() {
+            let (sa, sb) = r.sqrt;
+            let l0 = get_liquidity_for_amount0(sa, sb, PINNED_X).unwrap();
+            let back0 = get_amount0_delta(sa, sb, l0).unwrap();
+            let l1 = get_liquidity_for_amount1(sa, sb, PINNED_X).unwrap();
+            let back1 = get_amount1_delta(sa, sb, l1).unwrap();
+            for back in [back0, back1] {
+                assert!(back <= PINNED_X, "{:?}: {back} > deposit", r.ticks);
+                assert!(
+                    (PINNED_X - back) * 1_000_000 <= PINNED_X,
+                    "{:?}: {back} not within 1e-6 of {PINNED_X}",
+                    r.ticks
+                );
+            }
+        }
+    }
+
+    /// A result that genuinely does not fit in an i128 is reported as `None`
+    /// rather than wrapped.
+    #[test]
+    fn unrepresentable_results_are_none_not_truncated() {
+        let sa = tick_to_sqrt_price_x96(MIN_TICK);
+        let sb = tick_to_sqrt_price_x96(MIN_TICK + 1);
+        // A one-tick range at the bottom of the price range: 2^96 / delta is
+        // enormous, so a large deposit maps to more liquidity than an i128.
+        assert_eq!(get_liquidity_for_amount1(sa, sb, i128::MAX), None);
+        // Full-range liquidity at i128::MAX is worth more token B than exists.
+        let hi = tick_to_sqrt_price_x96(MAX_TICK);
+        assert_eq!(get_amount1_delta(sa, hi, i128::MAX), None);
+        // Zero-width and zero-input cases stay exactly zero.
+        assert_eq!(get_amount0_delta(sa, sa, i128::MAX), Some(0));
+        assert_eq!(get_liquidity_for_amount0(sa, sb, 0), Some(0));
     }
 }

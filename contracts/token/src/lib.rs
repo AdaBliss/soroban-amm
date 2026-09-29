@@ -105,6 +105,28 @@ impl LpToken {
     pub const BUMP_TO: u32 = 2_419_200;
     pub const MAX_CHECKPOINTS: u32 = 1024;
 
+    /// Extend the contract's **instance** storage TTL.
+    ///
+    /// The instance entry holds the executable plus every `storage().instance()`
+    /// value (admin, locker, metadata, total supply, pending admin). If it is
+    /// allowed to lapse the entry is archived and every call into this token
+    /// traps until someone restores it — freezing mint/burn/transfer for every
+    /// AMM pool that holds LP shares.
+    ///
+    /// Reuses the same threshold/bump the persistent LP-token entries already use
+    /// (`MIN_TTL` / `BUMP_TO`), so instance and persistent state age together at
+    /// one horizon. At the ~5s/ledger Stellar cadence:
+    /// - `MIN_TTL` = 120_960 ledgers ≈ 7 days: only extend when fewer than a
+    ///   week of life remains, so hot paths skip a redundant write.
+    /// - `BUMP_TO` = 2_419_200 ledgers ≈ 140 days: renew the entry to roughly the
+    ///   maximum persistent-entry rent window, so a single call keeps the
+    ///   contract live for months.
+    fn extend_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(Self::MIN_TTL, Self::BUMP_TO);
+    }
+
     /// Initialize the token with metadata and an admin that can mint/burn.
     ///
     /// `admin` is the only address authorized to call `mint` and `burn`.
@@ -116,6 +138,7 @@ impl LpToken {
         symbol: String,
         decimals: u32,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(TokenError::AlreadyInitialized);
         }
@@ -132,21 +155,25 @@ impl LpToken {
 
     /// Returns the token name.
     pub fn name(env: Env) -> String {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Name).unwrap()
     }
 
     /// Returns the token symbol.
     pub fn symbol(env: Env) -> String {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Symbol).unwrap()
     }
 
     /// Returns the number of decimal places used to represent token amounts.
     pub fn decimals(env: Env) -> u32 {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Decimals).unwrap()
     }
 
     /// Returns the total number of tokens currently in circulation.
     pub fn total_supply(env: Env) -> i128 {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::TotalSupply)
@@ -155,6 +182,7 @@ impl LpToken {
 
     /// Returns the token balance of `id`. Returns `0` if the account has no balance.
     pub fn balance(env: Env, id: Address) -> i128 {
+        Self::extend_ttl(&env);
         env.storage()
             .persistent()
             .get(&DataKey::Balance(id))
@@ -169,6 +197,7 @@ impl LpToken {
     /// preferred over silently returning an incorrect (possibly zero) value
     /// that would corrupt governance snapshots.
     pub fn balance_at(env: Env, id: Address, ledger: u32) -> Result<i128, TokenError> {
+        Self::extend_ttl(&env);
         let key = DataKey::Checkpoints(id.clone());
         let checkpoints: Vec<Checkpoint> = env
             .storage()
@@ -231,6 +260,7 @@ impl LpToken {
     /// Returns the SEP-41 allowance value for `spender` over `from`.
     /// Returns `{ amount: 0, live_until_ledger: 0 }` if expired or unset.
     pub fn allowance(env: Env, from: Address, spender: Address) -> AllowanceValue {
+        Self::extend_ttl(&env);
         let key = DataKey::Allowance(from, spender);
         let val: AllowanceValue = env
             .storage()
@@ -257,6 +287,7 @@ impl LpToken {
     /// Requires authorization from `from`.
     /// Panics if `from` has insufficient balance.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -276,6 +307,7 @@ impl LpToken {
         to: Address,
         amount: i128,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -306,6 +338,7 @@ impl LpToken {
         amount: i128,
         live_until_ledger: u32,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         from.require_auth();
         if amount < 0 {
             return Err(TokenError::InvalidAmount);
@@ -325,6 +358,7 @@ impl LpToken {
 
     /// Mint new tokens — admin only (called by the AMM contract).
     pub fn mint(env: Env, to: Address, amount: i128) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -348,6 +382,7 @@ impl LpToken {
 
     /// Burn tokens — admin only (called by the AMM contract).
     pub fn burn(env: Env, from: Address, amount: i128) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -377,11 +412,13 @@ impl LpToken {
 
     /// Returns the admin address that is authorized to mint and burn tokens.
     pub fn admin(env: Env) -> Address {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Admin).unwrap()
     }
 
     /// Address allowed to lock/unlock balances (governance).
     pub fn locker(env: Env) -> Address {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Locker).unwrap()
     }
 
@@ -391,6 +428,7 @@ impl LpToken {
         current_admin: Address,
         new_admin: Address,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -413,6 +451,7 @@ impl LpToken {
 
     /// Accept a pending admin nomination.
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         new_admin.require_auth();
         let pending: Option<Address> = env
             .storage()
@@ -435,6 +474,7 @@ impl LpToken {
     /// The new WASM must already be uploaded to the network.
     /// State is preserved; only bytecode is replaced.
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -449,6 +489,7 @@ impl LpToken {
 
     /// Admin-only locker update.
     pub fn set_locker(env: Env, locker: Address) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -461,6 +502,7 @@ impl LpToken {
 
     /// Returns currently locked balance for `id`.
     pub fn locked_balance(env: Env, id: Address) -> i128 {
+        Self::extend_ttl(&env);
         env.storage()
             .persistent()
             .get(&DataKey::Locked(id))
@@ -473,6 +515,7 @@ impl LpToken {
     /// unlock can be authorised by the same locker later, even if `set_locker` has
     /// rotated the active locker in the meantime.
     pub fn lock(env: Env, holder: Address, amount: i128) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -516,6 +559,7 @@ impl LpToken {
         locker: Address,
         amount: i128,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         if amount <= 0 {
             return Err(TokenError::InvalidAmount);
         }
@@ -560,6 +604,7 @@ impl LpToken {
         locker: Address,
         amount: i128,
     ) -> Result<(), TokenError> {
+        Self::extend_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -754,7 +799,7 @@ impl LpToken {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger},
+        testutils::{storage::Instance as _, Address as _, Ledger},
         Env,
     };
 
@@ -780,6 +825,78 @@ mod tests {
             admin,
             contract_addr,
         }
+    }
+
+    // ── Instance TTL regression (issue #903) ────────────────────────────────
+    // The instance entry holds the executable, admin, locker, metadata and
+    // total supply. If its TTL lapses the contract is archived and every call
+    // traps. These helpers mirror the pattern used in `staking`: read the live
+    // instance TTL, drive the ledger far enough forward to drop it below
+    // `MIN_TTL`, then confirm an entrypoint bumps it back toward `BUMP_TO`.
+
+    fn instance_ttl(ts: &TestSetup) -> u32 {
+        ts.env
+            .as_contract(&ts.contract_addr, || ts.env.storage().instance().get_ttl())
+    }
+
+    fn lower_instance_ttl_below_min(ts: &TestSetup) {
+        ts.env
+            .ledger()
+            .with_mut(|l| l.sequence_number += LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+        let ttl = instance_ttl(ts);
+        assert!(
+            ttl < LpToken::MIN_TTL,
+            "test setup should lower instance TTL below MIN_TTL, got {ttl}"
+        );
+    }
+
+    fn assert_instance_ttl_bumped(ts: &TestSetup) {
+        let ttl = instance_ttl(ts);
+        assert!(
+            ttl >= LpToken::BUMP_TO - 1,
+            "instance TTL {ttl} should be bumped toward BUMP_TO, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn test_initialize_extends_instance_ttl() {
+        let ts = setup();
+        // `setup` already calls `initialize`, which must have bumped the TTL.
+        assert_instance_ttl_bumped(&ts);
+    }
+
+    #[test]
+    fn test_read_entrypoint_restores_lapsed_instance_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let user = Address::generate(&ts.env);
+        client.mint(&user, &1_000_i128);
+
+        lower_instance_ttl_below_min(&ts);
+
+        // A pure read is the only traffic a token may see for long stretches;
+        // it must still respond *and* restore the instance TTL. `total_supply`
+        // reads only the instance entry, so the assertion isolates instance-TTL
+        // behaviour from persistent per-account entries.
+        assert_eq!(client.total_supply(), 1_000);
+        assert_instance_ttl_bumped(&ts);
+    }
+
+    #[test]
+    fn test_write_entrypoint_restores_lapsed_instance_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let locker = Address::generate(&ts.env);
+
+        lower_instance_ttl_below_min(&ts);
+
+        // `set_locker` writes only instance state, so it exercises the write
+        // path's TTL bump without depending on any persistent entry surviving
+        // the long ledger advance.
+        client.set_locker(&locker);
+
+        assert_eq!(client.locker(), locker);
+        assert_instance_ttl_bumped(&ts);
     }
 
     #[test]

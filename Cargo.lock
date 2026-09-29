@@ -31,6 +31,7 @@ dependencies = [
 name = "amm_fuzz"
 version = "0.1.0"
 dependencies = [
+ "num-bigint",
  "proptest",
  "soroban-sdk",
 ]
@@ -194,6 +195,7 @@ dependencies = [
  "batch_auction",
  "cl_position_nft",
  "concentrated_liquidity",
+ "dex_aggregator",
  "factory",
  "governance",
  "incentive_campaigns",
@@ -286,6 +288,7 @@ name = "cl_position_nft"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "soroban_amm_sdk",
 ]
 
 [[package]]
@@ -650,6 +653,7 @@ dependencies = [
  "amm",
  "concentrated_liquidity",
  "governance",
+ "pool_interfaces",
  "soroban-sdk",
  "soroban_amm_sdk",
  "token",
@@ -876,6 +880,7 @@ version = "0.1.0"
 dependencies = [
  "amm",
  "soroban-sdk",
+ "soroban_amm_sdk",
  "token",
 ]
 
@@ -1131,6 +1136,7 @@ name = "pol_vesting"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "soroban_amm_sdk",
 ]
 
 [[package]]
@@ -1749,11 +1755,13 @@ name = "soroban_amm_simulator"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "concentrated_liquidity",
  "csv",
  "rand 0.10.3",
  "rand_pcg",
  "serde",
  "serde_json",
+ "soroban-sdk",
  "thiserror",
 ]
 
@@ -1778,6 +1786,7 @@ name = "staking"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "soroban_amm_sdk",
  "token",
 ]
 
@@ -1926,6 +1935,7 @@ version = "0.1.0"
 dependencies = [
  "amm",
  "soroban-sdk",
+ "soroban_amm_sdk",
  "token",
 ]
 
@@ -1935,6 +1945,7 @@ version = "0.1.0"
 dependencies = [
  "amm",
  "soroban-sdk",
+ "soroban_amm_sdk",
  "token",
 ]
 

@@ -3,20 +3,34 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM_DIR="${WASM_DIR:-$ROOT_DIR/target/wasm32v1-none/release}"
-MAX_BYTES="${WASM_MAX_BYTES:-204800}"
+# Network cap from CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES on testnet/mainnet.
+# Unoptimized artifacts are measured here for a quick pre-optimization guard;
+# the deploy pipeline optimizes with `stellar contract optimize` before upload,
+# so the real enforcement is in CI's optimized-artifact check.
+MAX_BYTES="${WASM_MAX_BYTES:-131072}"
 FAIL_ON_LIMIT=false
+OPTIMIZED=false
 
-if [[ "${1:-}" == "--fail-on-limit" ]]; then
-  FAIL_ON_LIMIT=true
-elif [[ $# -gt 0 ]]; then
-  echo "Usage: $0 [--fail-on-limit]" >&2
-  exit 2
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --fail-on-limit) FAIL_ON_LIMIT=true ;;
+    --optimized)     OPTIMIZED=true ;;
+    *) echo "Usage: $0 [--fail-on-limit] [--optimized]" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+if $OPTIMIZED; then
+  WASM_DIR="${WASM_DIR_OPTIMIZED:-$ROOT_DIR/target/wasm32v1-none/release/optimized}"
 fi
 
 shopt -s nullglob
 artifacts=("$WASM_DIR"/*.wasm)
 
 printf 'Contract WASM size report\n'
+if $OPTIMIZED; then
+  printf '(optimized artifacts)\n'
+fi
 printf '%s\n' '-------------------------'
 
 if [[ ${#artifacts[@]} -eq 0 ]]; then
@@ -28,8 +42,6 @@ status=0
 for wasm in "${artifacts[@]}"; do
   size=$(wc -c < "$wasm")
   human=$(numfmt --to=iec-i --suffix=B --format='%.1f' "$size" 2>/dev/null || printf '%sB' "$size")
-  # Plain prefix strip rather than `realpath --relative-to`, which is GNU-only
-  # and aborts this script on macOS/BSD.
   relative="${wasm#"$ROOT_DIR"/}"
   if (( size > MAX_BYTES )); then
     printf '%s: %s (%s bytes) EXCEEDS LIMIT (%s bytes)\n' "$relative" "$human" "$size" "$MAX_BYTES"

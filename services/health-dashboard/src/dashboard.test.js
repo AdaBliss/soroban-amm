@@ -510,3 +510,22 @@ test("refresh prefers the live api-url and pool-id inputs over the constructor v
   assert.ok(urls.every((u) => u === "http://live.test"));
   assert.ok(pools.every((p) => p === "pool-live"));
 });
+
+test("a refresh that throws does not block the next refresh", async () => {
+  const doc = setupRefreshTestDom();
+  installFakeFetch([]);
+  const controller = createDashboardController({ apiUrl: "http://api.test", poolId: "pool-a" });
+
+  const renderTarget = doc.getElementById("m-tvl");
+  const originalGet = doc.getElementById.bind(doc);
+  doc.getElementById = (id) => {
+    if (id === "m-tvl") throw new Error("render failed");
+    return originalGet(id);
+  };
+  await assert.rejects(controller.refresh(), /render failed/);
+
+  doc.getElementById = originalGet;
+  await controller.refresh();
+  assert.equal(renderTarget.textContent, "—");
+  assert.equal(doc.getElementById("connection-status").textContent, "Connected");
+});

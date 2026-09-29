@@ -4,17 +4,21 @@
   "private": true,
   "type": "module",
   "description": "Push-based webhook service that subscribes to Soroban contract events via Horizon and fans them out to registered webhooks (issue #306).",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "node --test dist/streamer.test.js"
+    "test": "node --test dist/streamer.test.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "node-fetch": "3.3.2"
   },
   "devDependencies": {
-    "@types/node": "26.5.0",
+    "@types/node": "^22.20.4",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   }

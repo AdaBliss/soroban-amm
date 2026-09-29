@@ -50,6 +50,22 @@ const MIN_PERSISTENT_TTL: u32 = 172_800; // ~10 days at 5s/ledger
 /// Target TTL to extend per-pair requirements to on write.
 const PERSISTENT_TTL_BUMP_TO: u32 = 259_200; // ~15 days at 5s/ledger
 
+/// Below this many remaining ledgers, `extend_ttl` renews the contract's
+/// **instance** entry (governance address, factory address, pool-kind
+/// overrides); each renewal bumps it back up to `INSTANCE_TTL_BUMP_TO`.
+///
+/// This contract custodies protocol-owned liquidity and its "off-chain
+/// caller" design (see the module doc comment) means it is invoked at the
+/// pace of dashboards, bots, and multisig governance rather than steady
+/// user traffic (see #909). The instance entry holds the governance address
+/// itself, so if it lapses, the address needed to authorize a restore is
+/// exactly what's archived. `172_800` ledgers (~10 days at 5s/ledger)
+/// matches the floor `contracts/amm` uses for its own instance entry, and
+/// `518_400` ledgers (~30 days at 5s/ledger) gives every renewal a full
+/// month of slack before the next one is due.
+const INSTANCE_TTL_THRESHOLD: u32 = 172_800;
+const INSTANCE_TTL_BUMP_TO: u32 = 518_400;
+
 // ── Pagination / batching ────────────────────────────────────────────────────
 
 /// Upper bound on the number of entries a single paginated read or batch health
@@ -191,6 +207,15 @@ pub struct ReserveManager;
 
 #[contractimpl]
 impl ReserveManager {
+    /// Extends the contract's **instance** storage TTL. Safe to call on
+    /// every entrypoint — `extend_ttl` is a no-op until the entry's
+    /// remaining TTL drops below `INSTANCE_TTL_THRESHOLD`.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_BUMP_TO);
+    }
+
     // ── Setup ─────────────────────────────────────────────────────────────────
 
     /// One-time setup. `governance` is the only address permitted to call
@@ -200,6 +225,7 @@ impl ReserveManager {
         governance: Address,
         factory: Address,
     ) -> Result<(), ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Governance) {
             return Err(ReserveManagerError::AlreadyInitialized);
         }
@@ -222,6 +248,7 @@ impl ReserveManager {
         current_governance: Address,
         new_governance: Address,
     ) -> Result<(), ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if Self::is_paused(env.clone()) {
             return Err(ReserveManagerError::Paused);
         }
@@ -247,6 +274,7 @@ impl ReserveManager {
     /// transaction. On success the stored governance is updated, the pending
     /// nominee is cleared, and a `governance_transferred` event is emitted.
     pub fn accept_governance(env: Env, new_governance: Address) -> Result<(), ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if Self::is_paused(env.clone()) {
             return Err(ReserveManagerError::Paused);
         }
@@ -276,6 +304,7 @@ impl ReserveManager {
 
     /// Return the pending governance nominee, if any.
     pub fn get_pending_governance(env: Env) -> Option<Address> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::PendingGovernance)
@@ -397,6 +426,7 @@ impl ReserveManager {
         min_reserve_a: i128,
         min_reserve_b: i128,
     ) -> Result<(), ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if Self::is_paused(env.clone()) {
             return Err(ReserveManagerError::Paused);
         }
@@ -444,6 +474,7 @@ impl ReserveManager {
 
     /// Number of pairs that currently have a non-zero requirement configured.
     pub fn get_configured_pair_count(env: Env) -> u32 {
+        Self::extend_instance_ttl(&env);
         Self::configured_pairs(&env).len()
     }
 
@@ -453,6 +484,7 @@ impl ReserveManager {
     /// count yields an empty `Vec` rather than panicking. Pairs are returned
     /// normalised, i.e. the lexicographically smaller address comes first.
     pub fn list_configured_pairs(env: Env, offset: u32, limit: u32) -> Vec<(Address, Address)> {
+        Self::extend_instance_ttl(&env);
         let pairs = Self::configured_pairs(&env);
         let count = pairs.len();
         let mut page: Vec<(Address, Address)> = Vec::new(&env);
@@ -472,6 +504,7 @@ impl ReserveManager {
     /// will eventually be checked against it — see
     /// [`ReserveManager::set_min_reserve`].
     pub fn get_min_reserve(env: Env, token_a: Address, token_b: Address) -> ReserveRequirement {
+        Self::extend_instance_ttl(&env);
         let (ta, tb) = Self::normalize(token_a, token_b);
         env.storage()
             .persistent()
@@ -507,6 +540,7 @@ impl ReserveManager {
     ///
     /// Does not modify any state.
     pub fn check_reserves(env: Env, pool: Address) -> bool {
+        Self::extend_instance_ttl(&env);
         let (token_a, token_b, reserve_a, reserve_b) = match Self::pool_kind_of(&env, &pool) {
             Some(PoolKind::Amm) => Self::read_amm_reserves(&env, &pool),
             Some(PoolKind::ConcentratedLiquidity) => Self::read_balance_reserves(&env, &pool),
@@ -548,6 +582,7 @@ impl ReserveManager {
         pool: Address,
         kind: PoolKind,
     ) -> Result<(), ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if Self::is_paused(env.clone()) {
             return Err(ReserveManagerError::Paused);
         }
@@ -561,6 +596,7 @@ impl ReserveManager {
 
     /// Return the recorded kind for `pool`, or `None` if it is auto-detected.
     pub fn get_pool_kind(env: Env, pool: Address) -> Option<PoolKind> {
+        Self::extend_instance_ttl(&env);
         Self::pool_kind_of(&env, &pool)
     }
 
@@ -574,6 +610,7 @@ impl ReserveManager {
     ///
     /// Does not modify any state.
     pub fn check_reserves_detailed(env: Env, pool: Address) -> ReserveReport {
+        Self::extend_instance_ttl(&env);
         let info = AmmPoolClient::new(&env, &pool).get_info();
         Self::build_report(&env, &pool, &info)
     }
@@ -594,6 +631,7 @@ impl ReserveManager {
         env: Env,
         pools: Vec<Address>,
     ) -> Result<Vec<ReserveReport>, ReserveManagerError> {
+        Self::extend_instance_ttl(&env);
         if pools.len() > MAX_PAGE {
             return Err(ReserveManagerError::BatchTooLarge);
         }
@@ -621,11 +659,13 @@ impl ReserveManager {
 
     /// Return the governance address.
     pub fn get_governance(env: Env) -> Address {
+        Self::extend_instance_ttl(&env);
         env.storage().instance().get(&DataKey::Governance).unwrap()
     }
 
     /// Return the factory address.
     pub fn get_factory(env: Env) -> Address {
+        Self::extend_instance_ttl(&env);
         env.storage().instance().get(&DataKey::Factory).unwrap()
     }
 
@@ -786,7 +826,7 @@ impl ReserveManager {
 mod tests {
     use amm::AmmPool;
     use soroban_sdk::{
-        testutils::{Address as _, Events as _},
+        testutils::{storage::Instance as _, Address as _, Events as _, Ledger as _},
         token::StellarAssetClient,
         Env, IntoVal, String,
     };
@@ -1431,6 +1471,43 @@ mod tests {
         assert_eq!(data, (new_gov,));
     }
 
+    // ── Issue #909: instance storage TTL is never extended ──────────────────
+    //
+    // `reserve_manager` used to extend only its per-pair persistent
+    // requirements, never the instance entry holding governance, factory,
+    // and pool-kind overrides. This contract is driven by off-chain
+    // dashboards, bots, and multisig governance rather than steady user
+    // traffic, so a long-enough quiet stretch would let that instance entry
+    // lapse and get archived, trapping every subsequent call — including
+    // the one governance would need to restore it. These tests pin
+    // `extend_instance_ttl` in place on the read and write entrypoints.
+
+    fn instance_ttl(env: &Env, rm_addr: &Address) -> u32 {
+        env.as_contract(rm_addr, || env.storage().instance().get_ttl())
+    }
+
+    /// Advances the ledger sequence number far enough that the instance
+    /// entry's remaining TTL drops below `INSTANCE_TTL_THRESHOLD`,
+    /// simulating a long quiet stretch between calls.
+    fn lower_instance_ttl_below_threshold(env: &Env, rm_addr: &Address) {
+        env.ledger()
+            .with_mut(|l| l.sequence_number += INSTANCE_TTL_BUMP_TO - INSTANCE_TTL_THRESHOLD + 1);
+        let ttl = instance_ttl(env, rm_addr);
+        assert!(
+            ttl < INSTANCE_TTL_THRESHOLD,
+            "test setup should lower instance TTL below the threshold, got {ttl}"
+        );
+    }
+
+    fn assert_instance_ttl_bumped(env: &Env, rm_addr: &Address) {
+        let ttl = instance_ttl(env, rm_addr);
+        assert!(
+            ttl >= INSTANCE_TTL_BUMP_TO - 1,
+            "instance TTL {ttl} should be bumped toward INSTANCE_TTL_BUMP_TO"
+        );
+    }
+
+
     #[test]
     fn test_pause_and_unpause_requires_auth() {
         let s = setup();
@@ -1472,6 +1549,59 @@ mod tests {
             rm.try_accept_governance(&new_gov),
             Err(Ok(ReserveManagerError::Paused))
         );
+    }
+
+    #[test]
+    fn test_initialize_extends_instance_ttl() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let gov = Address::generate(&env);
+        let factory = Address::generate(&env);
+        let rm_addr = env.register_contract(None, ReserveManager);
+        let rm = ReserveManagerClient::new(&env, &rm_addr);
+
+        rm.initialize(&gov, &factory);
+
+        assert_instance_ttl_bumped(&env, &rm_addr);
+    }
+
+    /// A read-only entrypoint (`get_governance`) still restores a lapsed
+    /// instance TTL — this is the failure mode the issue calls out: the
+    /// admin address needed to authorize a restore is itself in the
+    /// archived instance entry, so read paths must extend the TTL too.
+    #[test]
+    fn test_get_governance_restores_lapsed_instance_ttl_and_still_responds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let gov = Address::generate(&env);
+        let factory = Address::generate(&env);
+        let rm_addr = env.register_contract(None, ReserveManager);
+        let rm = ReserveManagerClient::new(&env, &rm_addr);
+        rm.initialize(&gov, &factory);
+
+        lower_instance_ttl_below_threshold(&env, &rm_addr);
+
+        // Must still succeed rather than trap on an archived instance entry.
+        let read_back = rm.get_governance();
+        assert_eq!(read_back, gov);
+        assert_instance_ttl_bumped(&env, &rm_addr);
+    }
+
+    /// A state-mutating entrypoint (`set_min_reserve`) restores a lapsed
+    /// instance TTL as its first statement, before the governance check
+    /// even runs.
+    #[test]
+    fn test_set_min_reserve_restores_lapsed_instance_ttl_and_still_responds() {
+        let s = setup();
+        let rm = ReserveManagerClient::new(&s.env, &s.rm_addr);
+
+        lower_instance_ttl_below_threshold(&s.env, &s.rm_addr);
+
+        // Must still succeed rather than trap on an archived instance entry.
+        rm.set_min_reserve(&s.ta, &s.tb, &10_i128, &10_i128);
+
+        assert_instance_ttl_bumped(&s.env, &s.rm_addr);
+        assert!(rm.check_reserves(&s.pool));
     }
 
     #[test]

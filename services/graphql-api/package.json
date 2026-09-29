@@ -3,22 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "node --test 'dist/**/*.test.js'",
-    "test:watch": "tsx watch src/index.ts"
+    "test:watch": "tsx watch src/index.ts",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@apollo/server": "^5.5.1",
     "graphql": "^16.9.0",
-    "graphql-subscriptions": "^2.0.0",
+    "graphql-subscriptions": "^3.0.0",
     "node-fetch": "^3.3.0"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
     "@types/better-sqlite3": "^7.6.5",
+    "@types/node": "^22.20.4",
     "better-sqlite3": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2"

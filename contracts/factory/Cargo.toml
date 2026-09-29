@@ -13,6 +13,7 @@ testutils = ["soroban-sdk/testutils", "amm/testutils", "token/testutils", "conce
 [dependencies]
 soroban-sdk = { workspace = true }
 soroban_amm_sdk = { path = "../amm-sdk" }
+pool_interfaces = { path = "../pool_interfaces" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
@@ -20,4 +21,3 @@ amm = { path = "../amm", features = ["testutils"] }
 token = { path = "../token", features = ["testutils"] }
 governance = { path = "../governance", features = ["testutils"] }
 concentrated_liquidity = { path = "../concentrated_liquidity", features = ["testutils"] }
-

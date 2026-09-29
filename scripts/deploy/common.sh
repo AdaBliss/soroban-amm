@@ -3,10 +3,24 @@
 # Sourceable: `source scripts/deploy/common.sh`
 # All functions are importable; no side effects on source.
 
+# ── Bash version guard ────────────────────────────────────────────────────────
+# Associative arrays (declare -A) require bash 4+. macOS ships bash 3.2.
+# Fail immediately with a clear message rather than an unbound-variable trap
+# deep in the script.
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  printf '[deploy][error] bash 4 or newer is required (found %s).\n' "${BASH_VERSION:-unknown}" >&2
+  printf '[deploy][error] macOS ships bash 3.2. Install a newer version:\n' >&2
+  printf '[deploy][error]   brew install bash   # then invoke with /opt/homebrew/bin/bash\n' >&2
+  printf '[deploy][error]   or: sudo port install bash\n' >&2
+  exit 1
+fi
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 WASM_TARGET="wasm32v1-none"
 WASM_DIR="target/${WASM_TARGET}/release"
+# Directory written by scripts/optimize_contracts.sh / `make optimize`.
+OPTIMIZED_DIR="optimized-artifacts"
 
 # Recommended defaults (see docs/deployment-runbook.md)
 DEFAULT_FEE_BPS=30
@@ -261,14 +275,44 @@ invoke_read() {
 
 # ── WASM path helpers ─────────────────────────────────────────────────────
 
+# wasm_path CONTRACT
+# Returns the path to the WASM artifact that should be uploaded for CONTRACT.
+# Prefers the optimized artifact under OPTIMIZED_DIR when it exists (written
+# by `make optimize` / scripts/optimize_contracts.sh), and falls back to the
+# unoptimized release artifact.  Logs which file it resolved to.
 wasm_path() {
   local contract="$1"
   local fname="${WASM_FILE[$contract]:-}"
   if [[ -z "$fname" ]]; then
-    # Fallback: contract name itself
     fname="${contract}.wasm"
   fi
-  printf '%s/%s' "${ROOT_DIR}/${WASM_DIR}" "$fname"
+
+  local optimized="${ROOT_DIR}/${OPTIMIZED_DIR}/${fname}"
+  local unoptimized="${ROOT_DIR}/${WASM_DIR}/${fname}"
+
+  if [[ -f "$optimized" ]]; then
+    log "wasm_path: using optimized artifact for ${contract}: ${optimized#"${ROOT_DIR}/"}"
+    printf '%s' "$optimized"
+  else
+    printf '%s' "$unoptimized"
+  fi
+}
+
+# CONTRACT_MAX_SIZE_BYTES — testnet/mainnet CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES
+CONTRACT_MAX_SIZE_BYTES=131072
+
+# check_wasm_size WASM_PATH CONTRACT_NAME
+# Exits 1 with a clear message when the artifact exceeds the network cap.
+check_wasm_size() {
+  local wasm="$1"
+  local name="$2"
+  local size
+  size=$(wc -c < "$wasm")
+  if (( size > CONTRACT_MAX_SIZE_BYTES )); then
+    die "$(printf '%s (%d bytes) exceeds the %d-byte network cap. Run `make optimize` first.' \
+      "$name" "$size" "$CONTRACT_MAX_SIZE_BYTES")"
+  fi
+  log "size check ok: ${name} = ${size} bytes (limit ${CONTRACT_MAX_SIZE_BYTES})"
 }
 
 ensure_wasm_built() {
@@ -307,25 +351,25 @@ ensure_wasm_built() {
 
 # ── Verification helpers ──────────────────────────────────────────────────
 
+# verify_token CONTRACT_ID EXPECTED_ADMIN
+# Reads the admin from the token contract and asserts it equals EXPECTED_ADMIN.
+# Uses the correct Stellar address pattern [GC][A-Z2-7]{55} to match both
+# account (G…) and contract (C…) addresses; avoids the old C-only pattern that
+# matched the contract's own ID from CLI log output instead of the stored admin.
+# A mismatch is now fatal — it indicates the contract was front-run during the
+# deploy/initialize window and the wrong address controls the token.
 verify_token() {
   local contract_id="$1"
   local expected_admin="$2"
   local out admin
   out=$(invoke_read "$contract_id" -- admin 2>&1 || true)
-  admin=$(printf '%s\n' "$out" | grep -Eo 'C[A-Z0-9]{55}' | tail -n 1 || true)
+  # Match both G… (account) and C… (contract) addresses: base-32 alphabet [A-Z2-7]
+  admin=$(printf '%s\n' "$out" | grep -Eo '[GC][A-Z2-7]{55}' | tail -n 1 || true)
   if [[ -z "$admin" ]]; then
-    # Fallback: try balance/total_supply as liveness check
-    out=$(invoke_read "$contract_id" -- total_supply 2>&1 || true)
-    if echo "$out" | grep -qE '[0-9]+'; then
-      log "verified token $contract_id liveness (total_supply readable)"
-      return 0
-    fi
-    warn "could not verify token $contract_id — admin read returned empty: $out"
-    return 1
+    die "token $contract_id admin read returned empty — possible front-run or uninitialized contract: $out"
   fi
   if [[ "$admin" != "$expected_admin" ]]; then
-    warn "token $contract_id admin mismatch: expected $expected_admin got $admin"
-    return 1
+    die "token $contract_id admin mismatch: expected $expected_admin got $admin — possible front-run, aborting deploy"
   fi
   log "verified token $contract_id admin=$admin"
 }

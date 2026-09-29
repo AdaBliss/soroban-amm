@@ -7,7 +7,36 @@ Off-chain simulation engine for the Soroban AMM pool.
 - Simulates swaps with the same constant-product math as the on-chain pool
 - Replays historical trade logs for backtesting
 - Runs Monte Carlo stress tests over a trade set
+- Simulates concentrated-liquidity swaps across ticks (`cl` module, library only)
 - Exposes both a Rust library and a CLI
+
+## Concentrated liquidity
+
+`soroban_amm_simulator::cl::ClPoolState` models a `concentrated_liquidity`
+pool: price it with `initialize` (sqrt price) or `initialize_at_tick`, add
+liquidity to tick ranges with `add_liquidity`, and trade with `swap`, which
+steps through initialized ticks, applies each crossed tick's `liquidity_net`,
+accrues fee growth and flips `fee_growth_outside`, and stops at a price limit
+or where liquidity runs out.
+
+```rust
+use soroban_amm_simulator::cl::{swap_math, ClPoolState};
+
+let mut pool = ClPoolState::new("XLM", "USDC", 30, 10)?;
+pool.initialize_at_tick(0)?;
+pool.add_liquidity("lp", -600, 600, 10_000_000_000_000)?;
+let limit = swap_math::tick_to_sqrt_price_x96(-120) as i128; // 0 = no limit
+let result = pool.swap(true, 1_000_000_000, limit, 0)?;
+println!("out {} crossed {:?}", result.amount_out, result.ticks_crossed);
+```
+
+The swap is a port of the contract's own tick walk, integer rounding
+included, and uses the same tick/price mapping as the contract's swap path
+(`cl::swap_math`, not `cl::math`, which mirrors the contract's position math).
+`tests/cl_swap_parity.rs` runs the real contract beside it on shared fixtures
+and requires identical amounts, prices, ticks, liquidity and fee growth after
+every swap, with zero tolerance. The oracle-deviation guard, deadlines, auth
+and token transfers are not modelled.
 
 ## CLI
 

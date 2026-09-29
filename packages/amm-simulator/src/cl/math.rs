@@ -145,33 +145,30 @@ fn div_pow2(pow: u32, d: u128) -> u128 {
     quo
 }
 
-/// Convert a sqrt_price in Q64.96 format to its corresponding tick.
+/// Convert a sqrt_price in Q64.96 format to its floor tick: the largest tick
+/// whose sqrt price is at or below `sqrt_price_x96`.
 ///
-/// Inverse of tick_to_sqrt_price_x96.
+/// Mirrors contracts/concentrated_liquidity/src/math.rs:sqrt_price_x96_to_tick.
+/// Prices outside the representable range clamp to the nearest end tick.
 pub fn sqrt_price_x96_to_tick(sqrt_price_x96: i128) -> Result<i32> {
     if sqrt_price_x96 <= 0 {
         return Err(SimulationError::InvalidPrice);
     }
+    let sqrt_price = (sqrt_price_x96 as u128).clamp(MIN_SQRT_PRICE, MAX_SQRT_PRICE);
 
-    // Use binary search or logarithms (simplified; real implementation is more complex)
-    let mut low = MIN_TICK;
-    let mut high = MAX_TICK;
-
-    while low < high {
-        let mid = (low + high) / 2;
-        let mid_price = tick_to_sqrt_price_x96(mid)?;
-
-        if mid_price == sqrt_price_x96 {
-            return Ok(mid);
-        } else if mid_price < sqrt_price_x96 {
-            low = mid + 1;
+    let mut lo = MIN_TICK;
+    let mut hi = MAX_TICK;
+    while lo < hi {
+        // Bias mid upward so the loop terminates when lo + 1 == hi.
+        let mid = lo + (hi - lo + 1) / 2;
+        if tick_to_sqrt_price_x96_u128(mid) <= sqrt_price {
+            lo = mid;
         } else {
-            high = mid;
+            hi = mid - 1;
         }
     }
 
-    // Return the closest tick
-    Ok(low)
+    Ok(lo)
 }
 
 /// Calculate the amount of token0 and token1 corresponding to a given liquidity amount.
@@ -294,6 +291,17 @@ mod tests {
         let tick = 0;
         let price = tick_to_sqrt_price_x96(tick).unwrap();
         assert_eq!(price, Q96 as i128, "Tick 0 should map to price 1.0");
+    }
+
+    #[test]
+    fn sqrt_price_to_tick_is_floor() {
+        for tick in [-50_000, -887, -1, 0, 1, 887, 50_000] {
+            let price = tick_to_sqrt_price_x96(tick).unwrap();
+            assert_eq!(sqrt_price_x96_to_tick(price).unwrap(), tick);
+            // Just above a tick's price is still that tick, not the next one.
+            assert_eq!(sqrt_price_x96_to_tick(price + 1).unwrap(), tick);
+            assert_eq!(sqrt_price_x96_to_tick(price - 1).unwrap(), tick - 1);
+        }
     }
 
     #[test]

@@ -36,6 +36,7 @@ deploy_factory() {
       if [[ ! -f "$token_wasm" ]]; then
         die "token WASM not found: $token_wasm"
       fi
+      check_wasm_size "$token_wasm" "token"
       TOKEN_WASM_HASH=$(upload_wasm "$token_wasm")
       persist_var "TOKEN_WASM_HASH" "$TOKEN_WASM_HASH"
       log "token WASM hash: $TOKEN_WASM_HASH"
@@ -54,6 +55,7 @@ deploy_factory() {
       if [[ ! -f "$amm_wasm" ]]; then
         die "AMM WASM not found: $amm_wasm"
       fi
+      check_wasm_size "$amm_wasm" "amm"
       AMM_WASM_HASH=$(upload_wasm "$amm_wasm")
       persist_var "AMM_WASM_HASH" "$AMM_WASM_HASH"
       log "AMM WASM hash: $AMM_WASM_HASH"
@@ -73,6 +75,7 @@ deploy_factory() {
         warn "CL WASM not found at $cl_wasm — will register later if needed"
         CL_WASM_HASH=$(get_persisted CL_WASM_HASH || echo "")
       else
+        check_wasm_size "$cl_wasm" "concentrated_liquidity"
         CL_WASM_HASH=$(upload_wasm "$cl_wasm")
         persist_var "CL_WASM_HASH" "$CL_WASM_HASH"
         log "CL WASM hash: $CL_WASM_HASH"

@@ -23,7 +23,6 @@ import React, {
   useEffect,
   useRef,
   useCallback,
-  useId,
   type KeyboardEvent,
 } from "react";
 import type { BaseProps } from "./types.js";
@@ -279,7 +278,7 @@ function StatusBadge({ status }: { status: ProposalStatus }) {
 
 interface ToastItem { id: number; msg: string; type: "success" | "error" }
 
-function Toasts({ items, onRemove }: { items: ToastItem[]; onRemove: (id: number) => void }) {
+function Toasts({ items }: { items: ToastItem[] }) {
   return (
     <div style={{ position: "fixed", bottom: "1.5rem", right: "1.5rem", display: "flex", flexDirection: "column", gap: ".5rem", zIndex: 999 }}
          aria-live="polite" aria-atomic="true">
@@ -692,7 +691,7 @@ function ProposalWizard({ onSubmit, onToast }: {
             <div key={f.id} style={{ marginBottom: "1.25rem" }}>
               <label htmlFor={f.id} style={{ display: "block", fontSize: ".85rem", fontWeight: 500, marginBottom: ".4rem" }}>{f.label}</label>
               <select id={f.id} value={f.value} onChange={e => f.onChange(+e.target.value)} style={{ ...inputStyle, appearance: "none" as const }}>
-                {f.options!.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                {f.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </div>
           ))}
@@ -1053,7 +1052,7 @@ export function GovernanceForum({
       />
 
       {/* Toasts */}
-      <Toasts items={toasts} onRemove={id => setToasts(t => t.filter(x => x.id !== id))} />
+      <Toasts items={toasts} />
     </div>
   );
 }

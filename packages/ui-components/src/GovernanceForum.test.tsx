@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GovernanceForum } from "./GovernanceForum.js";
-import type { Proposal, VoteChoice } from "./types.js";
+import type { Proposal } from "./types.js";
+import type { GovernanceForumProps } from "./GovernanceForum.js";
 
 const proposal: Proposal = {
   id: "GIP-001",
@@ -169,7 +170,7 @@ describe("GovernanceForum", () => {
 describe("GovernanceForum proposal wizard", () => {
   it("submits a new proposal through the wizard", async () => {
     const user = userEvent.setup();
-    const onProposalSubmit = vi.fn();
+    const onProposalSubmit = vi.fn<NonNullable<GovernanceForumProps["onProposalSubmit"]>>();
     render(<GovernanceForum {...baseProps} onProposalSubmit={onProposalSubmit} />);
     await user.click(screen.getByRole("tab", { name: "+ New Proposal" }));
 
@@ -194,7 +195,7 @@ describe("GovernanceForum proposal wizard", () => {
 
   it("blocks advancing from step 1 when required fields are empty", async () => {
     const user = userEvent.setup();
-    const onProposalSubmit = vi.fn();
+    const onProposalSubmit = vi.fn<NonNullable<GovernanceForumProps["onProposalSubmit"]>>();
     render(<GovernanceForum {...baseProps} onProposalSubmit={onProposalSubmit} />);
     await user.click(screen.getByRole("tab", { name: "+ New Proposal" }));
     await user.click(screen.getByRole("button", { name: /Next/ }));

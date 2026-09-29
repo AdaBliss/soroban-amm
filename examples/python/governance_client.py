@@ -8,6 +8,7 @@ from stellar_sdk import Keypair, Network, scval
 from stellar_sdk.contract import ContractClient
 
 from common import (
+    decode_enum_variant,
     format_json,
     required_env,
     simulate_contract_call,
@@ -64,7 +65,7 @@ def main() -> int:
     print(format_json(proposal_info))
 
     # 4. Vote on the proposal (if active)
-    if status == "Active" or (isinstance(status, dict) and "Active" in status) or status == {"Active": []}:
+    if status == "Active":
         vote_choice = os.getenv("VOTE_CHOICE", "For")  # For, Against, Abstain
         print(f"\n4. Voting '{vote_choice}' on proposal {proposal_id}...")
         try:
@@ -72,6 +73,10 @@ def main() -> int:
             print("Vote cast successfully!")
         except Exception as e:
             print(f"Failed to cast vote: {e}")
+            client.server.close()
+            return 1
+    else:
+        print(f"\n4. Skipping vote — proposal status is '{status}', not 'Active'.")
 
     client.server.close()
     return 0
@@ -97,7 +102,7 @@ def vote(client: ContractClient, voter_kp: Keypair, proposal_id: int, choice: st
     # choice must be For, Against, or Abstain
     if choice not in ("For", "Against", "Abstain"):
         raise ValueError(f"Invalid vote choice '{choice}'. Must be For, Against, or Abstain.")
-    
+
     choice_scval = scval.to_symbol(choice)
     submit_contract_call(
         client,
@@ -119,15 +124,20 @@ def get_proposal(client: ContractClient, proposal_id: int) -> dict[str, Any]:
 
 
 def proposal_status(client: ContractClient, proposal_id: int) -> str:
+    """Return the proposal status as a plain variant-name string.
+
+    ``scval.to_native`` decodes a Soroban unit-enum variant such as
+    ``ProposalStatus::Active`` as ``['Active']``, not as the bare string
+    ``"Active"``.  ``decode_enum_variant`` normalises all shapes (list,
+    dict, and bare string) to a plain string so the caller can compare
+    with ``== "Active"``.
+    """
     result = simulate_contract_call(
         client,
         "proposal_status",
         scval.to_uint32(proposal_id),
     )
-    if isinstance(result, dict):
-        # Enums are parsed as dictionaries like {"Active": []} or "Active"
-        return next(iter(result.keys()))
-    return str(result)
+    return decode_enum_variant(result)
 
 
 if __name__ == "__main__":

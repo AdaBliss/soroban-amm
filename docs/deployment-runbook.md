@@ -39,6 +39,12 @@
 > with `--target wasm32v1-none` and warns if stale `wasm32-unknown-unknown`
 > artifacts are present.
 
+> **bash 4+ is required.** macOS ships `/bin/bash` 3.2, which does not support
+> associative arrays. `scripts/deploy/common.sh` checks the version at startup
+> and exits immediately with a clear error and install instructions if bash 3.2
+> is detected. Install bash 4+ via Homebrew (`brew install bash`) and invoke
+> the script with the full path: `/opt/homebrew/bin/bash scripts/deploy.sh`.
+
 The pinned Stellar CLI version (25.1.0) is the version used in CI and in the
 `Dockerfile` (`rust:1.93.0-slim` base). Newer CLI versions may change `stellar
 contract upload` / `invoke` flag names — pin to avoid silent breakage.
@@ -101,13 +107,16 @@ exist (testnet only).
 cargo build --release --target wasm32v1-none
 # Or via Make:
 make build
-# To shrink binaries 20–40% for upload limits:
+# Optimize artifacts (20–40% smaller) — REQUIRED for concentrated_liquidity
+# and factory, both of which exceed the 131 072-byte network cap unoptimized:
 make optimize
 ```
 
-The deploy script also builds automatically if any expected
-`target/wasm32v1-none/release/*.wasm` file is missing, but pre-building lets
-you verify the build succeeds before touching the network.
+The deploy script also builds automatically if any expected artifact is
+missing. **Run `make optimize` before deploying** — `scripts/deploy.sh` now
+prefers the optimized artifacts under `optimized-artifacts/` when they exist,
+and enforces the 131 072-byte network cap before each upload (failing early
+with a clear message instead of surfacing `TxSorobanInvalid` from the RPC).
 
 Expected artifacts (18 deployable crates):
 
@@ -372,6 +381,15 @@ Verifies `token_a/token_b` match or reverts `TokenMismatch`. Sentinel ticks `i32
 
 ## 4. Post-Deployment Verification
 
+> **Initialization window:** `token::initialize` performs no authorization
+> check — it only checks that the contract is not already initialized. Between
+> the deploy transaction and the initialize transaction there is a window in
+> which a third party could call `initialize` first and set themselves as admin.
+> `scripts/deploy/token.sh` closes this window by calling `initialize` in the
+> immediately following transaction and then asserting the admin with
+> `verify_token`, which now fails fatally on a mismatch. Factory-deployed pools
+> are not affected (factory deploys and initializes in one invocation).
+
 A deployment that "succeeded" (zero exit code) but left a contract
 uninitialized costs the most to debug later. Run these checks manually or rely
 on the script's built-in verification — every `invoke` in the script is
@@ -383,7 +401,7 @@ After each `initialize`, the script reads state and asserts:
 
 | Contract | Verification call | Asserts |
 |----------|-------------------|---------|
-| Token A/B/Reward | `name`, `total_supply`, `admin` | `admin == $SOURCE_PUBLIC_KEY`, `name` readable |
+| Token A/B/Reward | `admin` | `admin == $SOURCE_PUBLIC_KEY`; mismatch is **fatal** — indicates a front-run |
 | Factory | `get_pool_count`, `get_pools` | Hashes registered, count readable; `creation_paused == false` (unless paused) |
 | AMM Pool (via factory) | `get_info` | `token_a/b == expected`, `fee_bps == 30`, `total_shares == 0`, `admin == gov or factory_admin` |
 | LP Token | `admin` | `admin == AMM_POOL_CONTRACT_ID` |
@@ -402,11 +420,14 @@ After each `initialize`, the script reads state and asserts:
 | POL Vesting | `get_governance` | `governance == GOVERNANCE_CONTRACT_ID` |
 | Reserve Manager | `get_governance` | `governance == GOVERNANCE_CONTRACT_ID` |
 
-On failure the script prints `[deploy][warn]` but does not abort — review the
-log for warnings and re-run with `--force` after fixing the cause. The Batch
-Router and TWAL Consumer steps are stricter: a failed `initialize` or
-read-back aborts the run without recording the step as done, so a re-run
-retries it.
+For most contracts, failure prints `[deploy][warn]` but does not abort — review
+the log and re-run with `--force` after fixing the cause. **Token admin
+verification is an exception**: a mismatch is treated as a fatal error and
+aborts the deploy, because it indicates the contract was front-run between
+deploy and initialize. See §1 for notes on the initialization window.
+The Batch Router and TWAL Consumer steps are also strict: a failed
+`initialize` or read-back aborts the run without recording the step as done,
+so a re-run retries it.
 
 ### 4.2 Manual verification (operator checklist)
 
@@ -469,9 +490,31 @@ bash scripts/e2e.sh
 # Exits non-zero on any failed assertion; prints [PASS]/[FAIL] summary
 ```
 
+The flows live in `scripts/e2e/`. The shared flows (`v2`, `factory`, `cl`,
+`governance`, `staking`) run against the addresses `deploy.sh` persists. The
+self-contained flows (`token`, `router`, `dex_aggregator`,
+`oracle_aggregator`, `cl_position_nft`, `pol_vesting`, `twap_consumer`)
+deploy their own instances and can be run one at a time without a full
+deployment, e.g. `bash scripts/e2e/router.sh`. Select flows with
+`--only`/`--skip` (see `bash scripts/e2e/run.sh --help`); the self-contained
+flows fund extra signers through friendbot, so they target testnet.
+
 Run this against the same `NETWORK` and `SOURCE_ACCOUNT` after a deployment
 to confirm the core path is healthy. For a production deployment, consider a
 testnet run before targeting mainnet.
+
+To tell a network or funding problem apart from a real failure before
+spending a deployment on it, run the preflight first:
+
+```sh
+SOURCE_ACCOUNT=<identity> bash scripts/e2e/preflight.sh
+# Exits 75 on an infrastructure problem: unhealthy RPC, friendbot rate limit,
+# or a missing/underfunded account (re-created via friendbot after a reset)
+```
+
+CI runs the same preflight and suite nightly, on relevant pushes to `main` and
+on each release (`.github/workflows/smoke-test.yml`); see
+`.github/BRANCH_PROTECTION.md` for how its failures are reported.
 
 ---
 

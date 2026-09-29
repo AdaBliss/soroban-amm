@@ -45,14 +45,18 @@ The service is split into layers:
 - Detects retention window violations
 - Logs ingestion progress and failures
 
-**PoolIndexer** (`src/indexer-refactored.ts`)
-- Depends on `AnalyticsStore` interface, not concrete storage
-- Consumes events from `RpcIngester`
+**PoolIndexer** (`src/indexer.ts`)
+- The single indexer implementation, wired into the GraphQL resolvers in
+  `src/index.ts` and covered by `src/indexer.test.ts`
+- Holds its state in memory and prunes data older than 30 days
 - Computes and maintains:
   - Pool statistics (TVL, 24h volume, fees, swap count)
-  - Price history
+  - Price history and time-weighted average liquidity (TWAL)
+  - LP positions
   - Health scores
-  - Fired alerts
+  - Validated alert configurations and fired alerts
+- Does not yet read from `AnalyticsStore` or consume `RpcIngester`; moving
+  it onto the store interface is tracked under Future work below
 
 **AnalyticsStore** (`src/store/interface.ts`)
 - Abstract interface for all data storage
@@ -193,15 +197,13 @@ npm test
 ```
 
 Tests cover:
-- **Idempotency**: Same event processed twice = no duplicates
-- **Ordering**: Events applied in ledger order
-- **Metrics**: TVL, 24h volume, fees computed correctly
-- **Price history**: Price points recorded and queryable
-- **Alerts**: Fire when thresholds exceeded
-- **Cursor persistence**: Resume from saved state
-- **Multiple pools**: Tracked independently
+- **Indexer** (`src/indexer.test.ts`): TVL, 24h volume, fees, price history,
+  TWAL, retention pruning, health scoring, alert validation and firing,
+  multiple pools tracked independently
+- **Store** (`src/store/memory.test.ts`): idempotent event appends keyed by
+  `(ledger, txHash, eventIndex)`, event queries, cursor persistence
 
-All tests use the `MemoryStore` and Soroban test environment — **no network calls**.
+All tests run in memory — **no network calls**.
 
 ## Event schema versioning
 
@@ -244,12 +246,13 @@ Pool reserve increases to 1M + 5 XLM.
 
 ## Future work
 
-1. **Persistent SQLite storage** — Implement `SQLiteStore` for production deployments
-2. **Backfill capability** — Replay from an arbitrary ledger to recover lost history
-3. **Per-position tracking** — Track individual LP positions, not just pool-level stats
-4. **Governance event parsing** — Index proposal creation, voting, execution
-5. **Reorg handling** — Policy for handling Stellar finality (currently assumed final)
-6. **Standalone indexer** — Extract into a separate service for reuse
+1. **Store-backed indexer** — Move `PoolIndexer` onto `AnalyticsStore` so ingested events and metrics share one persistence layer
+2. **Persistent SQLite storage** — Implement `SQLiteStore` for production deployments
+3. **Backfill capability** — Replay from an arbitrary ledger to recover lost history
+4. **Per-position tracking** — Track individual LP positions, not just pool-level stats
+5. **Governance event parsing** — Index proposal creation, voting, execution
+6. **Reorg handling** — Policy for handling Stellar finality (currently assumed final)
+7. **Standalone indexer** — Extract into a separate service for reuse
 
 ## Troubleshooting
 

@@ -148,6 +148,7 @@ pub enum ClError {
     RangeOrderExists = 22,
     ExactOutNotFullyFilled = 23,
     NotInitialized = 24,
+    MathOverflow = 25,
 }
 
 #[contracttype]
@@ -193,4 +194,37 @@ pub trait ConcentratedLiquidityInterface {
         amount_in: i128,
         sqrt_price_limit_x96: u128,
     ) -> Result<PriceImpactEstimate, ClError>;
+}
+
+// ── factory / cl_pool ────────────────────────────────────────────────────────
+
+/// The on-chain state of a concentrated-liquidity pool, returned by
+/// `ClPoolInterface::get_pool_state`. Declared here so `factory` can use it
+/// via `pool_interfaces` instead of depending on the `concentrated_liquidity`
+/// contract crate directly (which would link the whole CL WASM into factory).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PoolState {
+    pub sqrt_price: u128,
+    pub current_tick: i32,
+    pub active_liquidity: i128,
+    pub tick_spacing: i32,
+}
+
+/// The subset of a concentrated-liquidity pool's interface that `factory`
+/// needs for deployment and post-deploy inspection.
+#[contractclient(name = "ClPoolClient")]
+pub trait ClPoolInterface {
+    #[allow(clippy::too_many_arguments)]
+    fn initialize(
+        env: Env,
+        admin: Address,
+        token_a: Address,
+        token_b: Address,
+        fee_bps: i128,
+        initial_tick: i32,
+        tick_spacing: i32,
+    );
+
+    fn get_pool_state(env: Env) -> PoolState;
 }

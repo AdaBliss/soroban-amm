@@ -9,6 +9,7 @@
 //! established on `main`.
 #![no_std]
 
+use soroban_amm_sdk::emit_versioned_event;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Vec,
 };
@@ -358,9 +359,8 @@ impl ClPositionNft {
         Self::index_add(&env, &to, token_id);
         Self::bump_instance(&env);
 
-        // Emit mint event: topic=(nft_mint, to), data=token_id.
-        env.events()
-            .publish((symbol_short!("nft_mint"), to), token_id);
+        // Emit mint event: topic=(nft_mint, to), data=(token_id,).
+        emit_versioned_event!(env, (symbol_short!("nft_mint"), to), (token_id,));
 
         Ok(token_id)
     }
@@ -414,9 +414,8 @@ impl ClPositionNft {
 
         Self::bump_instance(&env);
 
-        // Emit burn event: topic=(nft_burn, owner), data=token_id.
-        env.events()
-            .publish((symbol_short!("nft_burn"), owner), token_id);
+        // Emit burn event: topic=(nft_burn, owner), data=(token_id,).
+        emit_versioned_event!(env, (symbol_short!("nft_burn"), owner), (token_id,));
 
         Ok(())
     }
@@ -608,9 +607,10 @@ impl ClPositionNft {
         env.storage().persistent().set(&approved_key, &approved);
         Self::bump_persistent(&env, &approved_key);
 
-        env.events().publish(
+        emit_versioned_event!(
+            env,
             (soroban_sdk::Symbol::new(&env, "approve"), caller, approved),
-            token_id,
+            (token_id,)
         );
 
         Ok(())
@@ -622,13 +622,14 @@ impl ClPositionNft {
         let key = DataKey::OperatorApproval(owner.clone(), operator.clone());
         env.storage().persistent().set(&key, &approved);
         Self::bump_persistent(&env, &key);
-        env.events().publish(
+        emit_versioned_event!(
+            env,
             (
                 soroban_sdk::Symbol::new(&env, "approval_for_all"),
                 owner,
                 operator,
             ),
-            approved,
+            (approved,)
         );
     }
 
@@ -721,9 +722,10 @@ impl ClPositionNft {
         Self::index_add(&env, &to, token_id);
 
         // Emit transfer event
-        env.events().publish(
+        emit_versioned_event!(
+            env,
             (soroban_sdk::Symbol::new(&env, "transfer"), from, to),
-            token_id,
+            (token_id,)
         );
 
         Ok(())
@@ -1729,5 +1731,96 @@ mod tests {
         for (&id, &owner_idx) in &live {
             assert_eq!(client.owner_of(&id), owners[owner_idx]);
         }
+    }
+
+    // ── Issue #915: every event carries EVENT_SCHEMA_VERSION ────────────────
+    //
+    // `mint`, `burn`, `approve`, `set_approval_for_all`, and `transfer` used
+    // to call `env.events().publish(...)` directly, so their payloads were
+    // not version-stamped and an indexer reading `(version, ...rest)` would
+    // have decoded the first real field as the version number. These tests
+    // pin the stamp in place for all five.
+
+    /// Fetch the payload of the most recent event this contract published
+    /// under `topic`, decoded as a version-stamped `(u32, T)` pair.
+    fn last_versioned_event<T>(env: &Env, contract_id: &Address, topic: &str) -> (u32, T)
+    where
+        T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+    {
+        use soroban_sdk::{IntoVal, Symbol, TryFromVal};
+
+        let wanted = Symbol::new(env, topic);
+        let evt = env
+            .events()
+            .all()
+            .iter()
+            .rfind(|e| {
+                &e.0 == contract_id
+                    && e.1.get(0).and_then(|v| Symbol::try_from_val(env, &v).ok())
+                        == Some(wanted.clone())
+            })
+            .unwrap_or_else(|| panic!("no `{topic}` event found"));
+        evt.2.into_val(env)
+    }
+
+    #[test]
+    fn mint_emits_versioned_event() {
+        let (env, client, _admin, pool, user) = setup();
+        let id = client.mint(&user, &pool, &-100, &100);
+
+        let (version, (token_id,)): (u32, (u64,)) =
+            last_versioned_event(&env, &client.address, "nft_mint");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(token_id, id);
+    }
+
+    #[test]
+    fn burn_emits_versioned_event() {
+        let (env, client, _admin, pool, user) = setup();
+        let id = client.mint(&user, &pool, &-100, &100);
+        client.burn(&id);
+
+        let (version, (token_id,)): (u32, (u64,)) =
+            last_versioned_event(&env, &client.address, "nft_burn");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(token_id, id);
+    }
+
+    #[test]
+    fn approve_emits_versioned_event() {
+        let (env, client, _admin, pool, user) = setup();
+        let id = client.mint(&user, &pool, &-100, &100);
+        let approved_addr = Address::generate(&env);
+        client.approve(&user, &approved_addr, &id);
+
+        let (version, (token_id,)): (u32, (u64,)) =
+            last_versioned_event(&env, &client.address, "approve");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(token_id, id);
+    }
+
+    #[test]
+    fn set_approval_for_all_emits_versioned_event() {
+        let (env, client, _admin, _pool, user) = setup();
+        let operator = Address::generate(&env);
+        client.set_approval_for_all(&user, &operator, &true);
+
+        let (version, (approved,)): (u32, (bool,)) =
+            last_versioned_event(&env, &client.address, "approval_for_all");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert!(approved);
+    }
+
+    #[test]
+    fn transfer_emits_versioned_event() {
+        let (env, client, _admin, pool, user) = setup();
+        let id = client.mint(&user, &pool, &-100, &100);
+        let recipient = Address::generate(&env);
+        client.transfer(&user, &user, &recipient, &id);
+
+        let (version, (token_id,)): (u32, (u64,)) =
+            last_versioned_event(&env, &client.address, "transfer");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(token_id, id);
     }
 }

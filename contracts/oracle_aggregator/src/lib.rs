@@ -18,6 +18,7 @@
 //! The band defaults to [`DEFAULT_MAX_DEVIATION_BPS`] and is tunable by the
 //! admin via [`OracleAggregator::set_max_deviation_bps`].
 
+use soroban_amm_sdk::emit_versioned_event;
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, panic_with_error,
     symbol_short, Address, Env, Vec,
@@ -148,6 +149,7 @@ pub struct OracleAggregator;
 #[contractimpl]
 impl OracleAggregator {
     pub fn initialize(env: Env, admin: Address, max_staleness_seconds: u64) {
+        Self::extend_ttl(&env);
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, OracleError::AlreadyInitialized);
         }
@@ -227,6 +229,7 @@ impl OracleAggregator {
         source_type: OracleSourceType,
         weight: u32,
     ) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
 
         if weight == 0 || weight > MAX_SOURCE_WEIGHT {
@@ -251,6 +254,7 @@ impl OracleAggregator {
     }
 
     pub fn remove_source(env: Env, admin: Address, source_contract: Address) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
 
         let sources = read_sources(&env);
@@ -279,6 +283,7 @@ impl OracleAggregator {
     }
 
     pub fn get_price(env: Env, token_a: Address, token_b: Address) -> AggregatedPrice {
+        Self::extend_ttl(&env);
         if Self::is_paused(env.clone()) {
             panic_with_error!(&env, OracleError::Paused);
         }
@@ -287,9 +292,10 @@ impl OracleAggregator {
             panic_with_error!(&env, OracleError::InsufficientSources);
         }
 
-        env.events().publish(
+        emit_versioned_event!(
+            env,
             (symbol_short!("price"),),
-            (token_a, token_b, breakdown.price, breakdown.confidence),
+            (token_a, token_b, breakdown.price, breakdown.confidence)
         );
 
         AggregatedPrice {
@@ -299,6 +305,7 @@ impl OracleAggregator {
     }
 
     pub fn get_price_safe(env: Env, token_a: Address, token_b: Address) -> AggregatedPrice {
+        Self::extend_ttl(&env);
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         AggregatedPrice {
             price: breakdown.price,
@@ -313,6 +320,7 @@ impl OracleAggregator {
         token_a: Address,
         token_b: Address,
     ) -> (AggregatedPrice, Vec<SourceQuote>) {
+        Self::extend_ttl(&env);
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         let price = AggregatedPrice {
             price: breakdown.price,
@@ -324,6 +332,7 @@ impl OracleAggregator {
     /// Spread between the highest and lowest agreeing quote, in basis
     /// points. Returns 0 when fewer than two sources agree.
     pub fn get_price_spread_bps(env: Env, token_a: Address, token_b: Address) -> u32 {
+        Self::extend_ttl(&env);
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         let mut min_price: i128 = 0;
         let mut max_price: i128 = 0;
@@ -354,6 +363,7 @@ impl OracleAggregator {
     /// Admin: update the weight of a registered source.
     /// Emits a `src_wt` event with the old and new weight.
     pub fn set_source_weight(env: Env, admin: Address, source_contract: Address, weight: u32) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
 
         if weight == 0 || weight > MAX_SOURCE_WEIGHT {
@@ -370,9 +380,10 @@ impl OracleAggregator {
                 sources.set(i, source);
                 found = true;
 
-                env.events().publish(
+                emit_versioned_event!(
+                    env,
                     (symbol_short!("src_wt"),),
-                    (source_contract, old_weight, weight),
+                    (source_contract, old_weight, weight)
                 );
                 break;
             }
@@ -389,6 +400,7 @@ impl OracleAggregator {
     /// any pre-upgrade record missing a `weight` field to
     /// `DEFAULT_SOURCE_WEIGHT` (10_000 = 1.0×).
     pub fn migrate_sources(env: Env, admin: Address) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         let mut sources = read_sources(&env);
         let mut migrated = false;
@@ -470,8 +482,7 @@ impl OracleAggregator {
         }
 
         if !stale_sources.is_empty() {
-            env.events()
-                .publish((symbol_short!("stale_src"),), (stale_sources,));
+            emit_versioned_event!(env, (symbol_short!("stale_src"),), (stale_sources,));
         }
 
         if prices.len() < MIN_VALID_SOURCES {
@@ -508,8 +519,7 @@ impl OracleAggregator {
         }
 
         if !deviant_sources.is_empty() {
-            env.events()
-                .publish((symbol_short!("deviant"),), (deviant_sources.clone(),));
+            emit_versioned_event!(env, (symbol_short!("deviant"),), (deviant_sources.clone(),));
         }
 
         // Check minimum total agreeing weight.
@@ -577,10 +587,12 @@ impl OracleAggregator {
     }
 
     pub fn list_sources(env: Env) -> Vec<OracleSource> {
+        Self::extend_ttl(&env);
         read_sources(&env)
     }
 
     pub fn get_max_staleness(env: Env) -> u64 {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::MaxStaleness)
@@ -588,6 +600,7 @@ impl OracleAggregator {
     }
 
     pub fn set_max_staleness(env: Env, admin: Address, max_staleness_seconds: u64) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         if max_staleness_seconds == 0 {
             panic_with_error!(&env, OracleError::InvalidStaleness);
@@ -600,6 +613,7 @@ impl OracleAggregator {
     /// Returns the deviation band (in bps) a fresh quote must fall within of
     /// the median to be counted as agreeing.
     pub fn get_max_deviation_bps(env: Env) -> u32 {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::MaxDeviationBps)
@@ -608,6 +622,7 @@ impl OracleAggregator {
 
     /// Admin: set the agreement deviation band, in bps (must be `1..=10_000`).
     pub fn set_max_deviation_bps(env: Env, admin: Address, max_deviation_bps: u32) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         if max_deviation_bps == 0 || max_deviation_bps as i128 > BPS_DENOMINATOR {
             panic_with_error!(&env, OracleError::InvalidDeviation);
@@ -618,10 +633,31 @@ impl OracleAggregator {
     }
 
     pub fn get_admin(env: Env) -> Address {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Admin)
             .unwrap_or_else(|| panic_with_error!(&env, OracleError::NotInitialized))
+    }
+
+    /// Instance-storage TTL maintenance.
+    ///
+    /// The oracle aggregator keeps every entry (`Admin`, `MaxStaleness`,
+    /// `Sources`, `MaxDeviationBps`) in instance storage, so the instance entry
+    /// holds all of the contract's state as well as its executable. If that
+    /// entry's TTL lapses the contract is archived and every call traps until
+    /// someone restores it — and downstream pools reading this for price sanity
+    /// checks trap with it. Every public entrypoint therefore bumps the
+    /// instance TTL, including the read-only price and getter paths, which are
+    /// the only traffic a sporadically-read oracle may see for long stretches.
+    ///
+    /// The threshold and bump are in ledgers. At ~5 s per ledger, 172_800
+    /// ledgers is about 10 days (top up when less than this remains) and
+    /// 518_400 ledgers is about 30 days (the target live-until). These match
+    /// the `amm` reference contract so the whole workspace ages its instance
+    /// entries on one schedule.
+    fn extend_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(172_800, 518_400);
     }
 }
 

@@ -275,9 +275,10 @@ impl IncentiveCampaigns {
             .instance()
             .set(&DataKey::PendingGovernance, &Some(new_governance.clone()));
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "governance_proposed"),),
-            (caller, new_governance),
+            (caller, new_governance)
         );
         Ok(())
     }
@@ -304,9 +305,10 @@ impl IncentiveCampaigns {
             .instance()
             .set(&DataKey::PendingGovernance, &Option::<Address>::None);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "governance_transferred"),),
-            (old_governance, new_governance),
+            (old_governance, new_governance)
         );
         Ok(())
     }
@@ -417,9 +419,10 @@ impl IncentiveCampaigns {
         let contract = env.current_contract_address();
         TokenClient::new(&env, &reward_token).transfer(&caller, &contract, &funding_amount);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "campaign_created"),),
-            (id, pool, reward_token, start_time, end_time, reward_rate),
+            (id, pool, reward_token, start_time, end_time, reward_rate)
         );
         Ok(id)
     }
@@ -471,9 +474,10 @@ impl IncentiveCampaigns {
         env.storage().persistent().set(&campaign_key, &campaign);
         extend_persistent_ttl(&env, &campaign_key);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "rate_updated"),),
-            (campaign_id, new_rate),
+            (campaign_id, new_rate)
         );
         Ok(())
     }
@@ -532,9 +536,10 @@ impl IncentiveCampaigns {
         let contract = env.current_contract_address();
         TokenClient::new(&env, &campaign.reward_token).transfer(&contract, &recipient, &leftover);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "leftover_recovered"),),
-            (campaign_id, recipient.clone(), leftover),
+            (campaign_id, recipient.clone(), leftover)
         );
 
         Ok(leftover)
@@ -706,9 +711,10 @@ impl IncentiveCampaigns {
             .set(&by_provider_key, &by_provider);
         extend_persistent_ttl(&env, &by_provider_key);
 
-        env.events().publish(
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
             (Symbol::new(&env, "reward_distributed"),),
-            (campaign_id, provider, pending, dist_id),
+            (campaign_id, provider, pending, dist_id)
         );
         Ok(pending)
     }
@@ -2333,6 +2339,140 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // Issue #914: every incentive_campaigns event carries EVENT_SCHEMA_VERSION
+    //
+    // These publish sites used to call `env.events().publish(...)` directly, so
+    // their payloads were not version-stamped and an indexer reading
+    // `(version, ...rest)` would have decoded the first real field as the
+    // version number. Each test below pins the stamp for one topic.
+    // -------------------------------------------------------------------------
+
+    /// Fetch the payload of the most recent event `incentives` published under
+    /// `topic`, decoded as a version-stamped `(u32, T)` pair.
+    fn last_versioned_event<T>(env: &Env, incentives: &Address, topic: &str) -> (u32, T)
+    where
+        T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+    {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let wanted: soroban_sdk::Vec<soroban_sdk::Val> =
+            (Symbol::new(env, topic),).into_val(env);
+        let evt = env
+            .events()
+            .all()
+            .iter()
+            .rfind(|e| &e.0 == incentives && e.1 == wanted)
+            .unwrap_or_else(|| panic!("no `{topic}` event found"));
+        evt.2.into_val(env)
+    }
+
+    #[test]
+    fn test_governance_proposed_emits_versioned_event() {
+        let (env, incentives, _pool, _lp, _reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let new_governance = Address::generate(&env);
+
+        client.propose_governance(&gov, &new_governance);
+
+        let (version, data): (u32, (Address, Address)) =
+            last_versioned_event(&env, &incentives, "governance_proposed");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (gov, new_governance));
+    }
+
+    #[test]
+    fn test_governance_transferred_emits_versioned_event() {
+        let (env, incentives, _pool, _lp, _reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let new_governance = Address::generate(&env);
+
+        client.propose_governance(&gov, &new_governance);
+        client.accept_governance(&new_governance);
+
+        let (version, data): (u32, (Address, Address)) =
+            last_versioned_event(&env, &incentives, "governance_transferred");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (gov, new_governance));
+    }
+
+    #[test]
+    fn test_campaign_created_emits_versioned_event() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        let id = client.create_campaign(
+            &gov, &pool, &lp, &reward, &1_000, &11_000, &100, &1_000_000,
+        );
+
+        let (version, data): (u32, (u64, Address, Address, u64, u64, i128)) =
+            last_versioned_event(&env, &incentives, "campaign_created");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (id, pool, reward, 1_000, 11_000, 100));
+    }
+
+    #[test]
+    fn test_rate_updated_emits_versioned_event() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        let id = client.create_campaign(
+            &gov, &pool, &lp, &reward, &1_000, &20_000, &100, &2_000_000,
+        );
+        client.set_campaign_rate(&gov, &id, &200);
+
+        let (version, data): (u32, (u64, i128)) =
+            last_versioned_event(&env, &incentives, "rate_updated");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (id, 200));
+    }
+
+    #[test]
+    fn test_leftover_recovered_emits_versioned_event() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let treasury = Address::generate(&env);
+
+        // Campaign runs 1_000..5_000 at rate 100, funded 1_000_000; no claims.
+        let id = client.create_campaign(
+            &gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000,
+        );
+        env.ledger().with_mut(|l| l.timestamp = 9_000);
+        let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
+
+        let (version, data): (u32, (u64, Address, i128)) =
+            last_versioned_event(&env, &incentives, "leftover_recovered");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (id, treasury, recovered));
+    }
+
+    #[test]
+    fn test_reward_distributed_emits_versioned_event() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        let id = client.create_campaign(
+            &gov, &pool, &lp, &reward, &1_000, &11_000, &100, &1_000_000,
+        );
+        // First claim initialises the snapshot and emits nothing.
+        assert_eq!(client.claim_rewards(&provider, &id), 0);
+        // Advance and claim again: this distribution is the first audit record.
+        env.ledger().with_mut(|l| l.timestamp = 6_000);
+        let paid = client.claim_rewards(&provider, &id);
+        assert!(paid > 0);
+
+        let (version, data): (u32, (u64, Address, i128, u64)) =
+            last_versioned_event(&env, &incentives, "reward_distributed");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        assert_eq!(data, (id, provider, paid, 1));
+    }
+
     // #927: typed IncentiveError instead of opaque host traps
     // -------------------------------------------------------------------------
 

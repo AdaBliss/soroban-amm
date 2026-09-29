@@ -50,6 +50,9 @@
                     "hi": 0,
                     "lo": 50
                   }
+                },
+                {
+                  "u32": 100
                 }
               ]
             }
@@ -145,10 +148,27 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "i128": {
-                    "hi": 0,
-                    "lo": 50
-                  }
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 50
+                        }
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "live_until_ledger"
+                      },
+                      "val": {
+                        "u32": 100
+                      }
+                    }
+                  ]
                 }
               }
             },
@@ -271,7 +291,7 @@
             },
             "ext": "v0"
           },
-          4095
+          2419200
         ]
       ],
       [
@@ -379,7 +399,7 @@
             },
             "ext": "v0"
           },
-          4095
+          2419200
         ]
       ],
       [
@@ -433,7 +453,7 @@
             },
             "ext": "v0"
           },
-          4095
+          2419200
         ]
       ]
     ]
@@ -587,6 +607,9 @@
                     "hi": 0,
                     "lo": 50
                   }
+                },
+                {
+                  "u32": 100
                 }
               ]
             }
@@ -673,7 +696,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'insufficient allowance: available=50, requested=100' from contract function 'Symbol(obj#105)'"
+                  "string": "caught panic 'insufficient allowance: available=50, requested=100' from contract function 'Symbol(obj#113)'"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"

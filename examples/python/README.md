@@ -140,6 +140,18 @@ All examples import configuration, ScVal conversion, JSON formatting, and RPC wr
 
 The examples target **Soroban Testnet** by default. Override `STELLAR_RPC_URL` and `STELLAR_NETWORK_PASSPHRASE` when using another network. Every script accepts the shared settings `STELLAR_RPC_URL` and `STELLAR_NETWORK_PASSPHRASE`; the contract-specific variables are listed in each section above.
 
+## Exit-code contract
+
+Every example exits with one of the following codes:
+
+| Code | Meaning |
+|------|---------|
+| `0`  | All steps completed successfully. |
+| `1`  | An unexpected error occurred (contract call failed, missing config, etc.). |
+| `2`  | *(twap_client only)* No snapshot old enough exists yet — expected on the first run. Re-run after `WINDOW_SECONDS` have elapsed. |
+
+Scripts that encounter an expected transient condition (e.g. `twap_client.py` finding no old-enough snapshot) exit with the documented code for that condition rather than `0`, so callers and CI can distinguish "ran fine" from "ran but couldn't complete yet".
+
 Install exact runtime dependencies with:
 
 ```sh

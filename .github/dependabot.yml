@@ -27,7 +27,7 @@ updates:
       # v17 introduces ScValType changes that break src/governance.ts.
       - dependency-name: "@stellar/stellar-sdk"
         update-types: ["version-update:semver-major"]
-      # A major @types/node bump should move with node-version in ci.yml,
+      # A major @types/node bump should move with the Node major in .nvmrc,
       # not arrive on its own - types for a newer Node type-check APIs the
       # CI runtime does not have (#976).
       - dependency-name: "@types/node"
@@ -63,11 +63,13 @@ updates:
     schedule: { interval: weekly }
     groups:
       patch-updates: { update-types: [patch] }
+      # graphql 17 has to land together with the two libraries that peer it.
       graphql:
-        patterns: ["graphql", "@apollo/server"]
+        patterns: ["graphql", "@apollo/server", "graphql-subscriptions"]
     ignore:
-      # @apollo/server 5.x peers graphql ^16.11.0, so graphql 17 cannot
-      # install (#965). Remove once an @apollo/server release accepts 17.
+      # graphql 17 cannot install yet (#965): @apollo/server 5.x peers
+      # graphql ^16.11.0 and graphql-subscriptions 3.x peers ^15.7.2 || ^16.
+      # Remove once both accept 17; #984 tracks the upgrade.
       - dependency-name: "graphql"
         update-types: ["version-update:semver-major"]
       # Same @types/node rule as packages/sdk.
@@ -85,6 +87,25 @@ updates:
     directory: "/services/health-dashboard"
     schedule: { interval: weekly }
     groups: { patch-updates: { update-types: [patch] } }
+    ignore:
+      # Same @types/node rule as packages/sdk.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  # Shared ESLint toolchain used by every JS workspace (eslint.config.mjs).
+  - package-ecosystem: npm
+    directory: "/"
+    schedule: { interval: weekly }
+    groups:
+      # typescript-eslint and @eslint/js track ESLint's own releases; bump
+      # them together so the config never loads against a mismatched core.
+      eslint:
+        patterns: ["eslint", "@eslint/*", "typescript-eslint", "globals"]
+    ignore:
+      # typescript-eslint supports TypeScript <6.1; move this only when its
+      # peer range allows the new major. It is independent of the compiler
+      # each workspace builds with.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: "/examples/client"
     schedule: { interval: weekly }

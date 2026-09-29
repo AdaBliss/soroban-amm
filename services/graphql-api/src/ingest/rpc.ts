@@ -256,13 +256,13 @@ export class RpcIngester {
         if (typeof raw.value === "string") {
           payload = this._decodeXdr(raw.value);
         } else if (typeof raw.value === "object") {
-          payload = raw.value as Record<string, unknown>;
+          payload = raw.value;
         }
       }
 
       // Extract transaction hash and event index from paging token
       // Format: "123456789-0"
-      const [ledger, index] = raw.pagingToken.split("-").map(Number);
+      const [, index] = raw.pagingToken.split("-").map(Number);
 
       return {
         id: raw.id,
@@ -301,7 +301,7 @@ export class RpcIngester {
     }
   }
 
-  private _decodeXdr(xdr: string): Record<string, unknown> {
+  private _decodeXdr(_xdr: string): Record<string, unknown> {
     // Placeholder: real implementation would use stellar-sdk's XDR decoder
     // For now, return empty payload
     return {};

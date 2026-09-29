@@ -341,7 +341,9 @@ fn stale_src_event_emitted_when_sources_skipped() {
         .find(|e| e.0 == agg_id && e.1 == expected_topics)
         .expect("stale_src event must be emitted when sources are skipped");
 
-    let (stale_addrs,): (soroban_sdk::Vec<Address>,) = stale_event.2.into_val(&env);
+    let (version, (stale_addrs,)): (u32, (soroban_sdk::Vec<Address>,)) =
+        stale_event.2.into_val(&env);
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
     assert_eq!(stale_addrs.len(), 2);
     assert!(stale_addrs.contains(&s2));
     assert!(stale_addrs.contains(&s3));
@@ -495,7 +497,9 @@ fn deviant_event_lists_out_of_band_sources() {
         .find(|e| e.0 == agg_id && e.1 == expected_topics)
         .expect("deviant event must be emitted when a source is out of band");
 
-    let (deviant_addrs,): (soroban_sdk::Vec<Address>,) = deviant_event.2.into_val(&env);
+    let (version, (deviant_addrs,)): (u32, (soroban_sdk::Vec<Address>,)) =
+        deviant_event.2.into_val(&env);
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
     assert_eq!(deviant_addrs.len(), 1);
     assert!(deviant_addrs.contains(&s3));
 }
@@ -792,9 +796,35 @@ fn migration_backfills_default_weight() {
     assert_eq!(migrated.get_unchecked(1).weight, 20_000);
 }
 
-/// set_source_weight emits a src_wt event with old and new weight.
+// ── Issue #916: every oracle_aggregator event carries EVENT_SCHEMA_VERSION ──
+//
+// `get_price`, `set_source_weight`, and `aggregate_price`'s `stale_src` /
+// `deviant` events used to call `env.events().publish(...)` directly, so
+// their payloads were not version-stamped and an indexer reading
+// `(version, ...rest)` would have decoded the first real field as the
+// version number. These tests pin the stamp in place for all four.
+
+/// Fetch the payload of the most recent event this contract published under
+/// `topic`, decoded as a version-stamped `(u32, T)` pair.
+fn last_versioned_event<T>(env: &Env, contract_id: &Address, topic: &str) -> (u32, T)
+where
+    T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
+{
+    let wanted: soroban_sdk::Vec<soroban_sdk::Val> =
+        (soroban_sdk::Symbol::new(env, topic),).into_val(env);
+    let evt = env
+        .events()
+        .all()
+        .iter()
+        .rfind(|e| &e.0 == contract_id && e.1 == wanted)
+        .unwrap_or_else(|| panic!("no `{topic}` event found"));
+    evt.2.into_val(env)
+}
+
+/// set_source_weight emits a version-stamped src_wt event with old and new
+/// weight.
 #[test]
-fn set_source_weight_emits_event() {
+fn set_source_weight_emits_versioned_event() {
     let env = Env::default();
     let h = deploy(&env, 600);
     let s1 = deploy_source(&env, 100);
@@ -803,20 +833,126 @@ fn set_source_weight_emits_event() {
 
     h.aggregator.set_source_weight(&h.admin, &s1, &25_000);
 
-    let events = env.events().all();
-    let agg_id = h.aggregator.address.clone();
-    let expected_topics: soroban_sdk::Vec<soroban_sdk::Val> =
-        (symbol_short!("src_wt"),).into_val(&env);
-    let wt_event = events
-        .iter()
-        .find(|e| e.0 == agg_id && e.1 == expected_topics)
-        .expect("src_wt event must be emitted");
-
-    let (src_addr, old_w, new_w): (Address, u32, u32) = wt_event.2.into_val(&env);
+    let (version, (src_addr, old_w, new_w)): (u32, (Address, u32, u32)) =
+        last_versioned_event(&env, &h.aggregator.address, "src_wt");
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
     assert_eq!(src_addr, s1);
     assert_eq!(old_w, 10_000);
     assert_eq!(new_w, 25_000);
 }
+
+/// get_price emits a version-stamped price event with the aggregated price
+/// and confidence.
+#[test]
+fn get_price_emits_versioned_event() {
+    let env = Env::default();
+    let h = deploy(&env, 600);
+    let s1 = deploy_source(&env, 100);
+    let s2 = deploy_source(&env, 102);
+    h.aggregator
+        .register_source(&h.admin, &s1, &OracleSourceType::AmmTwap, &10_000);
+    h.aggregator
+        .register_source(&h.admin, &s2, &OracleSourceType::ClTwap, &10_000);
+    set_now(&env, 1_000);
+
+    let result = h.aggregator.get_price(&h.token_a, &h.token_b);
+
+    let (version, (token_a, token_b, price, confidence)): (u32, (Address, Address, i128, u32)) =
+        last_versioned_event(&env, &h.aggregator.address, "price");
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+    assert_eq!(token_a, h.token_a);
+    assert_eq!(token_b, h.token_b);
+    assert_eq!(price, result.price);
+    assert_eq!(confidence, result.confidence);
+}
+
+/// A stale (never-quoting) source triggers a version-stamped stale_src event.
+#[test]
+fn stale_source_emits_versioned_event() {
+    let env = Env::default();
+    let h = deploy(&env, 600);
+    let s1 = deploy_source(&env, 100);
+    let stale = deploy_source(&env, 0); // never reports a positive price
+    h.aggregator
+        .register_source(&h.admin, &s1, &OracleSourceType::AmmTwap, &10_000);
+    h.aggregator
+        .register_source(&h.admin, &stale, &OracleSourceType::External, &10_000);
+    set_now(&env, 1_000);
+
+    h.aggregator.get_price_safe(&h.token_a, &h.token_b);
+
+    let (version, (stale_sources,)): (u32, (soroban_sdk::Vec<Address>,)) =
+        last_versioned_event(&env, &h.aggregator.address, "stale_src");
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+    assert!(stale_sources.contains(&stale));
+}
+
+/// A source outside the deviation band triggers a version-stamped deviant
+/// event.
+#[test]
+fn deviant_source_emits_versioned_event() {
+    let env = Env::default();
+    let h = deploy(&env, 600);
+    let s1 = deploy_source(&env, 100);
+    let s2 = deploy_source(&env, 102);
+    let outlier = deploy_source(&env, 300);
+    h.aggregator
+        .register_source(&h.admin, &s1, &OracleSourceType::AmmTwap, &10_000);
+    h.aggregator
+        .register_source(&h.admin, &s2, &OracleSourceType::ClTwap, &10_000);
+    h.aggregator
+        .register_source(&h.admin, &outlier, &OracleSourceType::External, &10_000);
+    set_now(&env, 1_000);
+
+    h.aggregator.get_price_safe(&h.token_a, &h.token_b);
+
+    let (version, (deviant_sources,)): (u32, (soroban_sdk::Vec<Address>,)) =
+        last_versioned_event(&env, &h.aggregator.address, "deviant");
+    assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+    assert!(deviant_sources.contains(&outlier));
+}
+
+// ── #907: instance TTL is extended on every entrypoint ───────────────────────
+
+/// Advancing the ledger far past the default instance-entry TTL and then
+/// calling entrypoints must keep the contract responsive rather than trapping
+/// on an archived instance entry.
+///
+/// The oracle aggregator holds all of its state (admin, staleness, sources,
+/// deviation band) in instance storage, so if that entry lapses every call
+/// traps. Each entrypoint now bumps the instance TTL; this test walks the
+/// ledger forward in steps smaller than the bump window, calling in between,
+/// and asserts the reads still return. Without the extension the first call
+/// after the advance would trap.
+#[test]
+fn instance_ttl_is_extended_on_access_across_ledger_advance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 1_000;
+        li.max_entry_ttl = 6_312_000;
+    });
+
+    let aggregator_id = env.register_contract(None, OracleAggregator);
+    let aggregator = OracleAggregatorClient::new(&env, &aggregator_id);
+    let admin = Address::generate(&env);
+    aggregator.initialize(&admin, &3_600);
+
+    // Register a source so the read paths have state to walk as well.
+    let source = deploy_source(&env, 1_000);
+    aggregator.register_source(&admin, &source, &OracleSourceType::External, &10_000);
+
+    // Step forward in increments smaller than the TTL bump (518_400), calling
+    // an entrypoint each step. Each call re-bumps, so the next step stays live.
+    for _ in 0..4 {
+        env.ledger().with_mut(|li| li.sequence_number += 400_000);
+        assert_eq!(aggregator.get_admin(), admin);
+        assert_eq!(aggregator.list_sources().len(), 1);
+        assert_eq!(aggregator.get_max_staleness(), 3_600);
+    }
+}
+
+
 
 #[test]
 fn test_admin_rotation_happy_path() {

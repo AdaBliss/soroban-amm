@@ -78,6 +78,5 @@ export async function simulateRead(
   if (StellarRpc.Api.isSimulationError(result)) {
     throw decodeError(result.error);
   }
-  return (result as StellarRpc.Api.SimulateTransactionSuccessResponse).result!
-    .retval;
+  return result.result!.retval;
 }

@@ -29,4 +29,22 @@ for pkg in "${EXCLUDE_PACKAGES[@]}"; do
 done
 
 set -x
-cargo build --release --target wasm32v1-none --workspace "${exclude_flags[@]}" "$@"
+# Capture stderr so we can scan it for linker signature-mismatch warnings,
+# which indicate that two contract crates are linked together into one WASM.
+# Those warnings are not fatal by default but produce broken binaries
+# (neither initialize implementation is exported). Treat them as errors.
+LINKER_STDERR=$(mktemp)
+cargo build --release --target wasm32v1-none --workspace "${exclude_flags[@]}" "$@" \
+  2> >(tee "$LINKER_STDERR" >&2)
+
+if grep -q "function signature mismatch" "$LINKER_STDERR"; then
+  echo "" >&2
+  echo "ERROR: Linker detected a function signature mismatch — two contract crates" >&2
+  echo "       are being linked into the same WASM binary. This produces a broken" >&2
+  echo "       artifact with missing or colliding exports. Fix the dependency" >&2
+  echo "       (see contracts/pool_interfaces/src/lib.rs for the correct pattern)." >&2
+  rm -f "$LINKER_STDERR"
+  exit 1
+fi
+
+rm -f "$LINKER_STDERR"

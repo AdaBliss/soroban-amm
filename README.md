@@ -19,12 +19,9 @@ A full-stack AMM protocol built on Stellar's Soroban smart contract platform. It
   - [TWAP Consumer Contract](#twap-consumer-contract)
   - [Concentrated Liquidity Contract](#concentrated-liquidity-contract)
   - [Staking Contract](#staking-contract)
+- [Storage Layout and Upgrade Considerations](#storage-layout-and-upgrade-considerations)
 - [Error Codes](#error-codes)
-  - [AMM Pool Contract (`AmmError`)](#amm-pool-contract-ammerror)
-  - [Factory Contract (`FactoryError`)](#factory-contract-factoryerror)
-  - [Governance Contract (`GovernanceError`)](#governance-contract-governanceerror)
-  - [LP Token Contract](#lp-token-contract-errors)
-- [Math & Formulas](#math--formulas)
+- [Math and Formulas](#math-and-formulas)
 - [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Build](#build)
@@ -113,230 +110,18 @@ The V2 AMM contract depends on the token contract — adding or removing liquidi
 
 ## Contracts
 
----
-
-## Storage Layout
+The protocol consists of modular, composable smart contracts. Detailed machine-readable specifications of all public contract functions, argument types, return values, and events are maintained in **[`docs/abi.json`](docs/abi.json)**.
 
 ### AMM Pool Contract
 
-| Key | Storage Tier | Type | Description |
-|---|---|---|---|
-| `TokenA` | Instance | `Address` | First pool asset |
-| `TokenB` | Instance | `Address` | Second pool asset |
-| `LpToken` | Instance | `Address` | LP token contract |
-| `ReserveA` | Instance | `i128` | Current TokenA reserves |
-| `ReserveB` | Instance | `i128` | Current TokenB reserves |
-| `TotalShares` | Instance | `i128` | Total LP shares issued |
-| `FeeBps` | Instance | `i128` | Swap fee in basis points |
+Located in [`contracts/amm/src/lib.rs`](contracts/amm/src/lib.rs).
 
-### LP Token Contract
+The core V2 constant-product pool (`x * y = k`). It manages reserves for a token pair, executes swaps with configurable fees and slippage protection, mints and burns LP shares, accumulates TWAP price ratios, provides flash loans, and enforces emergency circuit breakers and pause controls.
 
-| Key | Storage Tier | Type | Description |
-|---|---|---|---|
-| `Admin` | Instance | `Address` | Contract administrator (the AMM pool) |
-| `Name` | Instance | `String` | Token name |
-| `Symbol` | Instance | `String` | Token symbol |
-| `Decimals` | Instance | `u32` | Token decimal places |
-| `TotalSupply` | Instance | `i128` | Total shares in circulation |
-| `Balance(Address)` | Persistent | `i128` | Individual user share balance |
-| `Allowance(Address, Address)` | Persistent | `i128` | Third-party spending allowance |
-
-### Concentrated Liquidity Contract
-
-| Key | Storage Tier | Type | Description |
-|---|---|---|---|
-| `TokenA` | Instance | `Address` | First pool asset |
-| `TokenB` | Instance | `Address` | Second pool asset |
-| `FeeBps` | Instance | `i128` | Pool fee in basis points |
-| `CurrentTick` | Instance | `i32` | Active tick index |
-| `FeeGrowthGlobalA` | Instance | `i128` | Cumulative fee per liquidity unit for token A |
-| `FeeGrowthGlobalB` | Instance | `i128` | Cumulative fee per liquidity unit for token B |
-| `ActiveLiquidity` | Instance | `i128` | Total liquidity active at the current tick |
-| `Position(Address, i32, i32)` | Instance | `Position` | Per-user position keyed by `(owner, lower_tick, upper_tick)` |
-
----
-
-## Upgrade Considerations
-
-- **Storage Immutability**: Critical setup parameters (e.g., `TokenA`, `TokenB`, `LpToken`) are immutable after `initialize`.
-- **Breaking Changes**: Modifying `DataKey` variants or data types constitutes a breaking change. Since Soroban storage is keyed by the enum's binary representation, any restructuring requires a new deployment or a careful migration strategy.
-- **State Migration**: Upgrading logic while preserving state is possible via contract code upgrades, but changing storage tiers (e.g., Instance to Persistent) requires manual data relocation.
-
----
-
-## Public Interface
-
-| Key | Type | Description |
-|---|---|---|
-| `TokenA` | `Address` | First pool asset |
-| `TokenB` | `Address` | Second pool asset |
-| `LpToken` | `Address` | LP token contract |
-| `ReserveA` | `i128` | Pool's current balance of TokenA |
-| `ReserveB` | `i128` | Pool's current balance of TokenB |
-| `TotalShares` | `i128` | Total LP shares outstanding |
-| `Shares(Address)` | `i128` | LP shares held by a specific provider |
-| `FeeBps` | `i128` | Swap fee in basis points (e.g. `30` = 0.30%) |
-| `Paused` | `bool` | Emergency circuit breaker state |
-| `FlashLoanFeeBps` | `i128` | Flash-loan fee in basis points; defaults to `FeeBps` |
-
-### AMM Pool Contract
-
-Located in [contracts/amm/src/lib.rs](contracts/amm/src/lib.rs).
-
-| Function | Description |
-|---|---|
-| `initialize(token_a, token_b, lp_token, fee_bps)` | One-time pool setup |
-| `initialize_with_flash_loan_fee(token_a, token_b, lp_token, fee_bps, flash_loan_fee_bps)` | One-time pool setup with a distinct flash-loan fee |
-| `pause(admin)` | Pause state-changing pool operations; requires `admin` auth |
-| `unpause(admin)` | Resume state-changing pool operations; requires `admin` auth |
-| `is_paused() → bool` | Read the current pause state |
-| `flash_loan(receiver, token, amount, data) → fee` | Borrow pool reserves and repay within the receiver callback |
-| `add_liquidity(provider, amount_a, amount_b, min_shares, deadline) → shares` | Deposit tokens, receive LP shares |
-| `remove_liquidity(provider, shares, min_a, min_b, deadline) → (a, b)` | Burn LP shares, withdraw tokens |
-| `swap(trader, token_in, amount_in, min_out, deadline) → amount_out` | Exchange tokens |
-| `swap_exact_out(trader, token_out, amount_out, max_in, deadline) → amount_in` | Buy an exact amount of output token |
-| `get_amount_out(token_in, amount_in) → amount_out` | Quote a swap without executing it |
-| `get_amount_in(token_out, amount_out) → amount_in` | Quote the input required for an exact output |
-| `simulate_swap(token_in, amount_in) → SwapSimulation` | Detailed quote including fee breakdown and price impact |
-| `get_info() → PoolInfo` | Read pool state — reserves, fees, total shares, admin, fee recipient, protocol fee |
-| `get_accrued_fees() → (i128, i128)` | Read pending protocol fees in `(token_a, token_b)` without moving funds |
-| `get_protocol_fee() → (Option<Address>, i128)` | Read the protocol fee recipient and rate |
-| `set_protocol_fee(admin, recipient, protocol_fee_bps)` | Configure protocol fee collection |
-| `withdraw_protocol_fees() → (i128, i128)` | Transfer accrued protocol fees to the recipient |
-| `shares_of(provider) → shares` | Read an LP's share balance |
-| `price_ratio() → (i128, i128)` | Read the spot price ratio for both directions |
-| `get_price_cumulative() → (i128, i128, u64)` | Read cumulative price accumulators for TWAP computation |
-| `update_fee(new_fee_bps)` | Update the swap fee (no-admin variant; emits event) |
-| `propose_admin(current_admin, new_admin)` | Nominate a new admin; emits `admin_nominated` |
-| `accept_admin(new_admin)` | Nominee accepts the role; emits `admin_changed` |
-| `upgrade(new_wasm_hash)` | Upgrade the contract code; requires admin auth |
-
-### Factory Contract
-
-Located in [contracts/factory/src/lib.rs](contracts/factory/src/lib.rs).
-
-A single-entry-point contract for creating and discovering AMM pools. The factory deploys a new AMM pool and its paired LP token in one transaction, enforces uniqueness per token pair, and maintains a registry of all pools it has deployed.
-
-#### Storage
-
-| Key | Type | Description |
-|---|---|---|
-| `Admin` | `Address` | Factory administrator; set as AMM fee recipient |
-| `AmmWasmHash` | `BytesN<32>` | WASM hash of the AMM pool contract |
-| `TokenWasmHash` | `BytesN<32>` | WASM hash of the LP token contract |
-| `Pool(Address, Address)` | `Address` | Normalised token pair → pool address |
-| `AllPools` | `Vec<Address>` | Ordered list of all deployed pool addresses |
-| `PoolCount` | `u64` | Monotonic counter used to derive deploy salts |
-
-#### Public Interface
-
-| Function | Description |
-|---|---|
-| `initialize(admin, amm_wasm_hash, token_wasm_hash)` | One-time factory setup |
-| `create_pool(token_a, token_b, fee_bps) → Address` | Deploy a new AMM + LP token pair; panics on duplicate |
-| `get_pool(token_a, token_b) → Option<Address>` | Look up an existing pool (order-independent) |
-| `get_lp_token(pool) → Option<Address>` | Look up the LP token for a given pool address |
-| `all_pools() → Vec<Address>` | List pool addresses, capped at `MAX_UNBOUNDED_PAGE` (200); use `get_pools` to page past it |
-| `get_pool_count() → u64` | Return the total number of deployed pools |
-| `get_pools(offset, limit) → Vec<Address>` | Return a paginated page of pool addresses starting at offset |
-| `update_wasm_hashes(amm_wasm_hash, token_wasm_hash)` | Update the WASM hashes used for future pool deployments |
-| `upgrade(new_wasm_hash)` | Upgrade the factory contract code; requires admin auth |
-
-#### Notes
-
-- Token pair order is **normalised** at creation time (smaller address stored first). `get_pool` accepts either order.
-- `create_pool` panics with `"pool already exists"` if a pool for the pair is already registered.
-- The factory admin is set as the AMM's `fee_recipient`; protocol fees start at 0 bps and can be enabled later.
-
----
-
-### Governance Contract
-
-Located in [contracts/governance/src/lib.rs](contracts/governance/src/lib.rs).
-
-Allows LP token holders to propose and vote on parameter changes to a pool on-chain. Proposals are time-locked and require a quorum of voting power to pass.
-
-#### Public Interface
-
-| Function | Description |
-|---|---|
-| `initialize(amm, lp_token, voting_period, quorum_bps, min_proposer_stake_bps)` | One-time governance setup |
-| `set_min_proposer_stake_bps(new_bps)` | Update the minimum LP stake required to create a proposal |
-| `propose(proposer, kind) → u32` | Create a new proposal with the specified ProposalKind; returns proposal ID |
-| `vote(voter, proposal_id, support)` | Cast a for/against vote weighted by the voter's LP balance |
-| `execute(proposal_id)` | Execute a passing proposal after the voting period ends |
-| `cancel_proposal(proposal_id, proposer)` | Cancel a pending proposal before voting ends |
-| `unlock_vote(voter, proposal_id)` | Release vote-locked LP tokens after a proposal is resolved |
-| `get_proposal(proposal_id) → Proposal` | Read proposal details |
-| `get_proposal_count() → u32` | Total proposals ever created; ids run `[0, count)` |
-| `get_proposals_paginated(offset, limit) → Vec<Proposal>` | Read a page of proposals in creation order |
-| `proposal_status(proposal_id) → ProposalStatus` | Read the current status of a proposal |
-| `get_vote_info(proposal_id, voter) → VoteRecord` | Read a specific voter's record on a proposal |
-| `get_params() → GovernanceParams` | Read current governance configuration |
-
-#### Notes
-
-- Voting power is snapshotted at the time `vote` is called, based on current LP token balance.
-- LP tokens used to vote are locked until `unlock_vote` is called after the proposal resolves.
-- A proposal passes if `for_votes / total_supply ≥ quorum_bps / 10_000` and `for_votes > against_votes`.
-- Only the original proposer can cancel a proposal, and only before the voting period ends.
-
----
-
-### TWAP Consumer Contract
-
-Located in [contracts/twap_consumer/src/lib.rs](contracts/twap_consumer/src/lib.rs).
-
-An integration contract that reads the AMM's cumulative price oracle and computes a fixed-window TWAP. Lending protocols, derivatives, and any contract needing an on-chain price feed can use this as a reference or deploy it directly.
-
-| Function | Description |
-|---|---|
-| `save_snapshot(pool)` | Stores `(cum_a, cum_b, pool_ts)` under `Snapshot(pool, pool_ts)` |
-| `get_twap_price(pool, window_seconds) → i128` | Returns `(cum_a_now - cum_a_then) / window_seconds`, where `cum_a_then` comes from the snapshot at `now_ts - window_seconds` |
-| `validate_price(spot_price, twap_price, max_deviation_bps) → PriceValidation` | Compares a real-time price against TWAP and flags deviations above a configurable basis-point threshold |
-| `validate_price_against_twap(pool, window_seconds, spot_price, max_deviation_bps) → PriceValidation` | Reads TWAP from saved snapshots and validates the supplied AMM spot price |
-| `assert_lending_price_safe(pool, window_seconds, spot_price, max_deviation_bps, collateral_amount) → i128` | Lending integration helper that reverts on manipulated prices and returns collateral value when safe |
-
----
-
-### Concentrated Liquidity Contract
-
-Located in [contracts/concentrated_liquidity/src/lib.rs](contracts/concentrated_liquidity/src/lib.rs).
-
-A V3-style tick-based AMM where liquidity providers specify a price range `[lower_tick, upper_tick]` for their capital. Only liquidity within the active price range earns fees, which allows far greater capital efficiency than a full-range V2 pool.
-
-**Status: in active development.** The position model, fee accounting, and in-place position modification flow are implemented. The tick registry, tick bitmap, sqrtPriceX96 math library, and swap engine are tracked in issues [#177](https://github.com/promisszn/soroban-amm/issues/177)–[#180](https://github.com/promisszn/soroban-amm/issues/180).
-
-#### How it differs from V2
-
-| | V2 AMM | Concentrated Liquidity |
-|---|---|---|
-| Price model | Full range `x*y=k` | Tick-bounded range positions |
-| LP representation | Fungible LP tokens | Per-user tick-range positions |
-| Capital efficiency | Liquidity spread over all prices | Capital concentrated in active range |
-| Fee accrual | All LPs share fees equally | Only in-range LPs earn fees |
-| TWAP | Price ratio accumulator | Tick accumulator (`tick * Δt`) |
-
-#### Public Interface
-
-| Function | Description |
-|---|---|
-| `initialize(token_a, token_b, fee_bps, initial_tick)` | One-time pool setup |
-| `mint_position(provider, lower_tick, upper_tick, amount_a_desired, amount_b_desired, min_a, min_b) → (a, b)` | Open or add to a tick-range position |
-| `modify_position(provider, lower_tick, upper_tick, liquidity_delta, min_a, min_b, deadline) → (a, b)` | Increase liquidity on an existing position in place |
-| `burn_position(provider, lower_tick, upper_tick, liquidity) → (a, b)` | Reduce or close a position and withdraw tokens |
-| `collect_fees(provider, lower_tick, upper_tick) → (a, b)` | Collect accrued fees for a position |
-| `get_position(provider, lower_tick, upper_tick) → Position` | Read a position's current state |
-| `current_tick() → i32` | Read the active tick |
-| `active_liquidity() → i128` | Read total liquidity at the current price |
-
-#### Notes
-
-- Positions are identified by `(owner, lower_tick, upper_tick)` — not by a fungible token. Each address can hold multiple non-overlapping or overlapping positions.
-- Depositing a single token is the natural behavior: if the current price is above the position range, only token B is needed; if below, only token A.
-- Tick spacing: ticks range from `−887_272` to `887_272`, corresponding to the price range `[~1.0001^−887272, ~1.0001^887272]`.
-
----
+- **Flash loans**: Single-transaction borrowing from pool reserves repayable within the receiver callback with configurable fees (`flash_loan`). Borrowers must implement the [`FlashLoanReceiver`](examples/flash_loan_receiver/README.md) callback interface.
+- **Protocol fees**: Configurable protocol fee share routed to a dedicated recipient address.
+- **Admin & Safety**: Two-step admin transfer (`propose_admin` / `accept_admin`), emergency pause/unpause, and single-block price deviation circuit breaker.
+- **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"amm"` for complete function definitions (`initialize`, `swap`, `add_liquidity`, `remove_liquidity`, `flash_loan`, `get_amount_out`, `get_info`, etc.).
 
 #### Flash Loan Receiver Interface
 
@@ -348,172 +133,103 @@ pub trait FlashLoanReceiver {
 }
 ```
 
-During `flash_loan`, the AMM transfers `amount` of `token` to `receiver`, invokes `on_flash_loan`, and then checks that the pool's token balance increased by at least `fee`. If the receiver does not return `amount + fee` before the callback finishes, the transaction reverts.
-
-**Reference Implementation:** See [examples/flash_loan_receiver/README.md](examples/flash_loan_receiver/README.md) for a canonical example implementation covering arbitrage, collateral swaps, and all failure modes.
+During `flash_loan`, the AMM transfers `amount` of `token` to `receiver`, invokes `on_flash_loan`, and verifies that the pool's token balance increased by at least `fee`. If the receiver does not return `amount + fee` before the callback finishes, the transaction reverts. See [examples/flash_loan_receiver/README.md](examples/flash_loan_receiver/README.md) for a reference implementation covering arbitrage, collateral swaps, and failure modes.
 
 ### LP Token Contract
 
-Located in [contracts/token/src/lib.rs](contracts/token/src/lib.rs).
+Located in [`contracts/token/src/lib.rs`](contracts/token/src/lib.rs).
 
-| Function | Description |
-|---|---|
-| `initialize(admin, name, symbol, decimals)` | One-time token setup |
-| `mint(to, amount)` | Mint tokens — admin only |
-| `burn(from, amount)` | Burn tokens — admin only |
-| `transfer(from, to, amount)` | Transfer between accounts |
-| `transfer_from(spender, from, to, amount)` | Spend an approved allowance |
-| `approve(from, spender, amount)` | Approve a spender |
-| `balance(id) → i128` | Read account balance |
-| `allowance(from, spender) → i128` | Read spending allowance |
-| `total_supply() → i128` | Read total tokens minted |
+A SEP-41 compliant token representing proportional liquidity shares in a pool. The corresponding AMM pool contract is the administrator with sole authority to `mint` and `burn` shares.
 
----
+- **Capabilities**: Standard SEP-41 balance queries, transfers, and allowances, plus balance locking for governance voting.
+- **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"token"`.
+
+### Factory Contract
+
+Located in [`contracts/factory/src/lib.rs`](contracts/factory/src/lib.rs).
+
+A single-entry-point registry for deploying and discovering pools.
+
+- Deploys an AMM pool and its paired LP token in a single atomic transaction.
+- Normalizes token pair order (smaller address first) to enforce uniqueness per pair.
+- Maintains a registry of all deployed pools with total count, paginated listings (`get_pools`), and reverse LP token lookups.
+- **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"factory"`.
+
+### Governance Contract
+
+Located in [`contracts/governance/src/lib.rs`](contracts/governance/src/lib.rs).
+
+Enables on-chain parameter management governed by LP token holders.
+
+- **Proposals**: LP token holders meeting the minimum stake threshold can propose fee and parameter changes.
+- **Voting**: Votes are weighted by the voter's LP token balance at the time of voting; tokens are locked until proposal resolution.
+- **Execution & Safety**: Passed proposals require a timelock delay before execution, and support emergency cancellation and veto mechanics.
+- **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"governance"`.
+
+### TWAP Consumer Contract
+
+Located in [`contracts/twap_consumer/src/lib.rs`](contracts/twap_consumer/src/lib.rs).
+
+An integration contract that reads the AMM's cumulative price oracle and computes a fixed-window TWAP for external consumers.
+
+- Stores periodic snapshots (`save_snapshot`).
+- Computes windowed average prices (`get_twap_price`).
+- Validates spot prices against TWAP with configurable maximum deviation (`validate_price_against_twap`, `assert_lending_price_safe`).
+- **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"twap_consumer"`.
+
+### Concentrated Liquidity Contract
+
+Located in [`contracts/concentrated_liquidity/src/lib.rs`](contracts/concentrated_liquidity/src/lib.rs).
+
+A V3-style tick-based AMM where liquidity providers specify a price range `[lower_tick, upper_tick]` for their capital. Only liquidity within the active price range earns fees, enabling significantly higher capital efficiency than full-range V2 pools.
+
+- **Status: In active development.** The position model, fee accounting, and in-place position modification flows are implemented. The tick registry, tick bitmap, math library, and swap engine are tracked in issues [#177](https://github.com/promisszn/soroban-amm/issues/177)–[#180](https://github.com/promisszn/soroban-amm/issues/180).
+- **Key differences from V2**: Range-bound capital concentration, non-fungible position records `(owner, lower_tick, upper_tick)`, and tick accumulators for geometric TWAP.
+- **Source**: See [`contracts/concentrated_liquidity/src/lib.rs`](contracts/concentrated_liquidity/src/lib.rs).
 
 ### Staking Contract
 
-Located in [contracts/staking/src/lib.rs](contracts/staking/src/lib.rs). See [contracts/staking/README.md](contracts/staking/README.md) for a full overview.
+Located in [`contracts/staking/src/lib.rs`](contracts/staking/src/lib.rs).
 
-Lets liquidity providers stake LP tokens to earn a separate reward token, distributed through a rewards-per-share accumulator. Stakers can optionally lock their stake for a fixed duration to earn a boost multiplier on their reward share, modelled on Curve's veToken design.
+Lets liquidity providers stake LP tokens to earn secondary reward tokens.
 
-| Function | Description |
-|---|---|
-| `initialize(lp_token, reward_token, admin)` | One-time setup with default boost and lock bounds |
-| `initialize_with_boost_config(lp_token, reward_token, admin, min_boost_scaled, max_boost_scaled, min_lock_duration_secs, max_lock_duration_secs)` | One-time setup with custom boost and lock bounds |
-| `stake(staker, amount)` | Stake LP tokens with no lock (1x boost) |
-| `stake_locked(staker, amount, lock_duration_secs)` | Stake with an optional lock duration for a boost multiplier |
-| `lock(staker, amount, lock_duration_seconds)` | Escrow LP tokens for a fixed lock at a boosted rate |
-| `extend_lock(staker, new_duration_seconds)` | Extend an existing lock forward in time only |
-| `unlock(staker) → (amount, rewards)` | Withdraw all LP and accrued rewards after the lock expires |
-| `unstake(staker, amount) → (amount, rewards)` | Unstake LP and claim pending rewards; panics if still locked |
-| `add_rewards(admin, amount)` | Transfer reward tokens into the pool; admin only |
-| `update_rewards(admin, new_rewards)` | Distribute new rewards across all stakers; admin only |
-| `claim(staker) → rewards` | Claim accrued rewards without unstaking |
-| `pending_rewards(staker) → i128` | Read a staker's unclaimed rewards |
-| `get_pool_info() → PoolInfo` | Read pool state |
-| `get_staker_info(staker) → StakerInfo` | Read a staker's amounts, debt, lock, and boost |
-| `get_locked_position(staker) → LockedPosition` | Read a staker's locked amount, expiry, and boost |
+- **Boost & Escrow**: Stakers can lock LP tokens for fixed durations to earn a boost multiplier on rewards (modelled on Curve's veToken design).
+- **Accumulator**: Rewards are distributed using a rewards-per-share accumulator.
+- **Full Guide**: See [`contracts/staking/README.md`](contracts/staking/README.md).
+
+---
+
+## Storage Layout and Upgrade Considerations
+
+Soroban contracts partition state across storage tiers based on lifetime and access patterns:
+
+- **Instance Storage**: Used for contract configuration, admin keys, and pool parameters whose lifetime matches the contract instance.
+- **Persistent Storage**: Used for user balances, allowances, and position records with independent TTL management.
+
+**Upgrade Considerations:**
+- **Storage Immutability**: Critical parameters (e.g., token pair addresses and LP token contract identity) are established at initialization and remain immutable.
+- **DataKey Stability**: State is keyed by the binary representation of `DataKey` enums. Modifying variant order, discriminants, or payload types is a breaking storage change.
+- **Code Upgrades**: Logic upgrades are performed via `upgrade(new_wasm_hash)`. Changing storage layout or migrating tiers requires explicit migration procedures. See the **[Deployment Runbook](docs/deployment-runbook.md)** for upgrade guides and checklists.
 
 ---
 
 ## Error Codes
 
-Contract entry points that fail return a typed contract error rather than a
-plain trap. Each error below is transcribed from the contract's
-`#[contracterror]` enum; the numeric code is the enum discriminant that a
-caller observes on-chain (for example as `Error(Contract, #5)`). Clients using
-a generated binding receive the variant name; clients decoding raw XDR receive
-the numeric code.
+Protocol entry points return typed Soroban contract errors (`#[contracterror]`) with numeric discriminants and descriptive symbols rather than generic panics.
 
-### AMM Pool Contract (`AmmError`)
+The authoritative reference for all error codes, numeric discriminants, failure causes, and recovery remedies across all protocol contracts is maintained in **[`docs/error-codes.md`](docs/error-codes.md)**:
 
-Source: [`contracts/amm/src/lib.rs`](contracts/amm/src/lib.rs).
+- **AMM Pool Errors (`AmmError`)**: Defined in [`contracts/amm`](contracts/amm)
+- **Factory Errors (`FactoryError`)**: Defined in [`contracts/factory`](contracts/factory)
+- **Governance Errors (`GovernanceError`)**: Defined in [`contracts/governance`](contracts/governance)
+- **LP Token Errors**: Trap and assertion conditions in [`contracts/token`](contracts/token)
+- **Other Contracts**: Concentrated Liquidity, Staking, Router, Oracle Aggregator, etc.
 
-| Code | Variant | Meaning |
-| ---: | --- | --- |
-| 1 | `AlreadyInitialized` | `initialize` was called on a pool that is already initialized. |
-| 2 | `InvalidFeeBps` | The fee (in basis points) is outside the permitted range. |
-| 3 | `InsufficientShares` | The caller holds fewer LP shares than the operation requires. |
-| 4 | `DeadlineExceeded` | The transaction deadline passed before execution. |
-| 5 | `SlippageExceeded` | The output amount fell below (or the input rose above) the caller's limit. |
-| 6 | `Paused` | The pool is paused. |
-| 7 | `Unauthorized` | The caller is not authorized for this action. |
-| 8 | `ZeroAmount` | An amount argument was zero. |
-| 9 | `InvalidToken` | The supplied token is not one of the pool's two tokens. |
-| 10 | `EmptyPool` | The operation needs liquidity but the pool has none. |
-| 11 | `InsufficientLiquidity` | Pool liquidity is too low to satisfy the request. |
-| 12 | `NoPendingAdmin` | An admin transfer was accepted while no pending admin is set. |
-| 13 | `WrongAdmin` | The caller is not the pending admin for the transfer. |
-| 14 | `Reentrant` | A reentrant call was detected during a flash loan or state-mutating operation. |
-| 15 | `CircuitBreaker` | The circuit breaker tripped on excessive single-block price deviation; the pool auto-paused. |
-| 16 | `FotSlippage` | A fee-on-transfer token deducted more than the caller's `min_received` threshold permitted. |
-| 17 | `OracleDeviationExceeded` | Spot price deviated beyond the configured oracle tolerance. |
-| 18 | `FlashLoanRepaymentFailed` | The flash-loan receiver did not return the borrowed amounts plus fees. |
-| 19 | `AlreadyExecuted` | The multisig emergency-withdrawal proposal was already executed. |
-| 20 | `ProposalExpired` | The multisig emergency-withdrawal proposal has expired. |
-
-### Factory Contract (`FactoryError`)
-
-Source: [`contracts/factory/src/lib.rs`](contracts/factory/src/lib.rs).
-
-| Code | Variant | Meaning |
-| ---: | --- | --- |
-| 1 | `AlreadyInitialized` | `initialize` was called on an already-initialized factory. |
-| 2 | `InvalidFeeBps` | The fee (in basis points) is outside the permitted range. |
-| 3 | `PoolAlreadyExists` | A constant-product pool already exists for this token pair. |
-| 4 | `ClPoolAlreadyExists` | A concentrated-liquidity pool already exists for this pair and fee tier. |
-| 5 | `ClWasmNotSet` | CL pool creation was attempted before the CL pool Wasm hash was configured. |
-| 6 | `Unauthorized` | The caller is not authorized (not the admin). |
-| 7 | `FeeNotConfigured` | The requested fee tier has not been configured. |
-| 8 | `RateLimitExceeded` | The pool-creation rate limit was exceeded. |
-| 9 | `CreationPaused` | Pool creation is currently paused. |
-
-### Governance Contract (`GovernanceError`)
-
-Source: [`contracts/governance/src/lib.rs`](contracts/governance/src/lib.rs).
-
-| Code | Variant | Meaning |
-| ---: | --- | --- |
-| 1 | `AlreadyInitialized` | `initialize` was called on an already-initialized contract. |
-| 2 | `InvalidVotingPeriod` | The voting-period parameter is out of range. |
-| 3 | `InvalidTimelock` | The timelock parameter is out of range. |
-| 4 | `InvalidQuorumBps` | The quorum (in basis points) is out of range. |
-| 5 | `InvalidProposerStake` | The proposer-stake parameter is invalid. |
-| 6 | `InvalidFeeBps` | The proposed fee (in basis points) is out of range. |
-| 7 | `ZeroTotalSupply` | LP total supply is zero, so voting power cannot be computed. |
-| 8 | `InsufficientStake` | The proposer holds less than the required stake. |
-| 9 | `ProposalNotFound` | No proposal exists with the given id. |
-| 10 | `VotingNotStarted` | Voting has not yet started for this proposal. |
-| 11 | `VotingPeriodEnded` | The voting period has ended. |
-| 12 | `AlreadyExecuted` | The proposal has already been executed. |
-| 13 | `ProposalCancelled` | The proposal was cancelled. |
-| 14 | `AlreadyVoted` | The caller has already voted on this proposal. |
-| 15 | `NoVotingPower` | The caller has no voting power. |
-| 16 | `VotingPeriodActive` | The action is not allowed while voting is still active. |
-| 17 | `ProposalExpired` | The proposal expired before execution. |
-| 18 | `TimelockNotElapsed` | The timelock has not yet elapsed. |
-| 19 | `QuorumNotMet` | Quorum was not reached. |
-| 20 | `ProposalDefeated` | The proposal did not pass. |
-| 21 | `NotProposer` | The caller is not the proposal's proposer. |
-| 22 | `NoLockedVote` | There is no locked vote to release. |
-| 23 | `ProposalNotConcluded` | The proposal has not concluded yet. |
-| 24 | `CannotDelegateToSelf` | Voting power cannot be delegated to oneself. |
-| 25 | `Unauthorized` | The caller is not authorized for this action. |
-| 26 | `HasDelegated` | The action is not allowed because the caller has delegated their voting power. |
-| 27 | `DelegationCycle` | The delegation would create a cycle. |
-| 28 | `ProposalVetoed` | The proposal was vetoed. |
-| 29 | `VetoWindowExpired` | The veto window has expired. |
-| 30 | `NotVetoMultisig` | The caller is not the veto multisig. |
-| 31 | `InsufficientSnapshotBal` | The snapshot balance is below the required threshold. |
-| 32 | `VetoMultisigNotSet` | The veto multisig address has not been configured. |
-| 33 | `NoPendingAdmin` | An admin transfer was accepted while no pending admin is set. |
-| 34 | `PartialFactoryUpdate` | An `UpdateFactoryGlobalFee` proposal's `offset`/`limit` window does not start at 0 or does not cover every pool in the factory; execution is rejected to prevent the proposal from being marked executed while pools remain untouched. |
-
-### LP Token Contract Errors
-
-Source: [`contracts/token/src/lib.rs`](contracts/token/src/lib.rs).
-
-The LP token contract does not define a `#[contracterror]` enum; it fails with
-assertion/panic messages instead, so there are no numeric discriminants to
-transcribe. Callers observe these as contract traps with the following
-messages:
-
-| Message | Raised when |
-| --- | --- |
-| `already initialized: contract <address>` | `initialize` is called after the token is already initialized. |
-| `amount must be positive` | A `transfer`, `transfer_from`, `mint`, `burn`, `lock`, or `unlock` amount is not greater than zero. |
-| `insufficient allowance: available=<n>, requested=<n>` | `transfer_from` is called for more than the spender's current allowance. |
-| `live_until_ledger must be >= current ledger` | `approve` sets a non-zero allowance whose expiry ledger is already in the past. |
-| `insufficient balance: available=<n>, requested=<n>` | `burn` is called for more than the account's balance. |
-| `insufficient unlocked balance: available=<n>, requested=<n>` | A transfer would spend balance that is currently locked. |
-| `insufficient unlocked balance to lock` | `lock` is called for more than the holder's unlocked balance. |
-| `unlock exceeds locked balance` | `unlock` is called for more than the holder's locked balance. |
-| `current_admin is not admin` | `propose_admin` is called with a `current_admin` that is not the stored admin. |
-| `not pending admin` | `accept_admin` is called by an address that is not the pending admin. |
+For complete discriminant tables, causes, and remedies, consult **[`docs/error-codes.md`](docs/error-codes.md)**. CI automatically verifies that document against all contract enums on every pull request via `make check-docs`.
 
 ---
 
-## Math & Formulas
+## Math and Formulas
 
 ### Constant-Product Invariant (V2)
 
@@ -691,7 +407,7 @@ For a real-network smoke test on Stellar testnet, run the end-to-end script:
 scripts/e2e.sh
 ```
 
-The script deploys fresh contracts, funds a test account, adds liquidity, swaps, removes liquidity, and exits non-zero on any failed assertion.
+The script deploys fresh contracts, funds a test account, adds liquidity, swaps, removes liquidity, and exits non-zero on any failed assertion. CI runs it against testnet nightly, on relevant pushes to `main` and on each release, and files an issue when it fails.
 
 ---
 
@@ -711,36 +427,11 @@ The fastest way to deploy the full protocol (all 18 contracts) to testnet or mai
 - The script builds `wasm32v1-none` artifacts, generates/funds a deployer account if needed, uploads WASM hashes, deploys and initializes every contract in dependency order, and verifies each initialization by reading state back.
 - Deployed contract IDs and WASM hashes are printed to the console and persisted to `.soroban-amm.deploy.env` incrementally (every address as it is created).
 
-### ABI Schema
+### ABI Schema & Events
 
-A machine-readable JSON schema of all public contract functions, parameters, and events is available at [docs/abi.json](docs/abi.json).
+- **ABI Specification**: A complete machine-readable JSON schema of all public contract functions, arguments, return types, and event definitions is available at **[`docs/abi.json`](docs/abi.json)**.
+- **Event Schema Versioning**: All contract events use versioned payloads (`schema_version: u32`) to ensure backward-compatible indexing. For complete topic formats and event payload specifications, see **[`docs/event-schema-versioning.md`](docs/event-schema-versioning.md)**.
 
-#### AMM Event Payloads
-
-| Event | Topics | Data Payload |
-|---|---|---|
-| `swap` | `("swap", trader)` | `(token_in, amount_in, token_out, amount_out)` |
-| `add_liquidity` | `("add_liq")` | `(provider, amount_a, amount_b, shares)` |
-| `remove_liquidity` | `("rm_liq")` | `(provider, shares, amount_a, amount_b)` |
-| `withdraw_fees` | `("wd_fees", fee_recipient)` | `(fee_a, fee_b)` |
-| `admin_nominated` | `("admin_nominated")` | `(current_admin, new_admin)` |
-| `admin_changed` | `("admin_changed")` | `(new_admin,)` |
-
-#### Governance Event Payloads
-
-| Event | Topics | Data Payload |
-|---|---|---|
-| `proposed` | `("proposed")` | `(proposal_id, proposer, ProposalKind, vote_end)` |
-| `voted` | `("voted")` | `(proposal_id, voter, support, voting_power)` |
-| `executed` | `("executed")` | `(proposal_id, ProposalKind)` |
-| `cancelled` | `("cancelled")` | `(proposal_id, proposer)` |
-
-#### Concentrated Liquidity Event Payloads
-
-| Event | Topics | Data Payload |
-|---|---|---|
-| `mint_pos` | `("mint_pos", provider)` | `(lower_tick, upper_tick, liquidity, amount_a, amount_b)` |
-| `burn_pos` | `("burn_pos", provider)` | `(lower_tick, upper_tick, liquidity, amount_a, amount_b)` |
 
 ### Development
 
@@ -768,8 +459,8 @@ docker build -t soroban-amm-build .
 docker run --rm -v $(pwd):/app soroban-amm-build
 ```
 
-- **Base Image**: `rust:1.93.0-slim`
-- **Stellar CLI**: `25.1.0`
+- **Base Image**: `rust:1.98.1-slim-bookworm` (matches `rust-toolchain.toml`)
+- **Stellar CLI**: `27.1.0`
 
 ### Deploy via Factory
 
@@ -999,6 +690,18 @@ Notes:
 - Returned TWAP is scaled the same way as AMM spot price (`1_000_000` scale factor).
 - `max_deviation_bps` is configurable per integration; for example, `500` allows a 5% spot/TWAP difference.
 
+### Client SDKs
+
+| Language | Package | Covers |
+|---|---|---|
+| TypeScript | [`packages/sdk`](packages/sdk) (`@soroban-amm/sdk`) | AMM pool, factory, governance, concentrated liquidity, staking, incentive campaigns, router |
+| Go | [`packages/go-sdk`](packages/go-sdk) | AMM pool (`contracts/amm`), with its own envelope, ScVal and RPC code and no third-party dependencies |
+| Rust | [`contracts/amm-sdk`](contracts/amm-sdk) (`soroban_amm_sdk`) | typed client, shared types and event decoders for the AMM contracts |
+
+There is no mobile SDK. Android and iOS apps can call the pools through the
+Soroban RPC with any Stellar SDK for their platform, using the Go SDK as a
+reference for envelope construction and ScVal encoding.
+
 ### TypeScript Client Example
 
 A standalone TypeScript client is available in [examples/client](examples/client). It demonstrates connecting to Stellar testnet RPC, reading `get_info()`, quoting with `get_amount_out()`, executing `swap()`, and reading LP shares with `shares_of()`.
@@ -1121,7 +824,7 @@ Before requesting review, confirm:
 - [ ] `cargo clippy -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
 - [ ] New behavior is covered by tests
-- [ ] Public interface changes are reflected in this README
+- [ ] Public interface and error documentation updated (`docs/abi.json`, `docs/error-codes.md`)
 - [ ] `CHANGELOG.md` has been updated with any notable changes
 - [ ] Commit messages follow the Conventional Commits format
 

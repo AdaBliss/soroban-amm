@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "prebuild": "npm --prefix ../../packages/sdk install --ignore-scripts && npm --prefix ../../packages/sdk run build",
     "build": "tsc",
     "start": "node dist/index.js",
     "pretest": "npm --prefix ../../packages/sdk install --ignore-scripts && npm --prefix ../../packages/sdk run build && tsc",
-    "test": "tsc --noEmit && node --test dist/config.test.js"
+    "test": "tsc --noEmit && node --test dist/config.test.js",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@soroban-amm/sdk": "file:../../packages/sdk",

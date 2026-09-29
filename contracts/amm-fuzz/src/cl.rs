@@ -247,7 +247,7 @@ proptest! {
         let rev = math::get_amount0_delta(sb, sa, liquidity);
         prop_assert_eq!(fwd, rev, "amount0 delta not symmetric (a={}, b={})", tick_a, tick_b);
         let zero = math::get_amount0_delta(sa, sa, liquidity);
-        prop_assert_eq!(zero, 0, "amount0 delta not zero when a == b");
+        prop_assert_eq!(zero, Some(0), "amount0 delta not zero when a == b");
     }
 
     /// `get_amount1_delta(a, b, L)` is symmetric under swapping `a`/`b`, and
@@ -264,7 +264,7 @@ proptest! {
         let rev = math::get_amount1_delta(sb, sa, liquidity);
         prop_assert_eq!(fwd, rev, "amount1 delta not symmetric (a={}, b={})", tick_a, tick_b);
         let zero = math::get_amount1_delta(sa, sa, liquidity);
-        prop_assert_eq!(zero, 0, "amount1 delta not zero when a == b");
+        prop_assert_eq!(zero, Some(0), "amount1 delta not zero when a == b");
     }
 
     /// Liquidity round-trip: `get_amount0_delta(a, b, L(x)) <= x` - the pool
@@ -277,8 +277,9 @@ proptest! {
     ) {
         let sa = math::tick_to_sqrt_price_x96(tick_a);
         let sb = math::tick_to_sqrt_price_x96(tick_b);
-        let liq = math::get_liquidity_for_amount0(sa, sb, amount0);
-        let got = math::get_amount0_delta(sa, sb, liq);
+        // Deposits up to 10^9 never overflow anywhere in the tick range.
+        let liq = math::get_liquidity_for_amount0(sa, sb, amount0).unwrap();
+        let got = math::get_amount0_delta(sa, sb, liq).unwrap();
         prop_assert!(
             got <= amount0,
             "amount0 round-trip credits more than deposited: deposited={amount0}, got={got}"
@@ -294,8 +295,8 @@ proptest! {
     ) {
         let sa = math::tick_to_sqrt_price_x96(tick_a);
         let sb = math::tick_to_sqrt_price_x96(tick_b);
-        let liq = math::get_liquidity_for_amount1(sa, sb, amount1);
-        let got = math::get_amount1_delta(sa, sb, liq);
+        let liq = math::get_liquidity_for_amount1(sa, sb, amount1).unwrap();
+        let got = math::get_amount1_delta(sa, sb, liq).unwrap();
         prop_assert!(
             got <= amount1,
             "amount1 round-trip credits more than deposited: deposited={amount1}, got={got}"
@@ -312,26 +313,25 @@ proptest! {
     ) {
         let sa = math::tick_to_sqrt_price_x96(tick_a);
         let sb = math::tick_to_sqrt_price_x96(tick_b);
-        let pos0 = math::get_amount0_delta(sa, sb, liquidity);
-        let pos1 = math::get_amount1_delta(sa, sb, liquidity);
+        let pos0 = math::get_amount0_delta(sa, sb, liquidity).unwrap();
+        let pos1 = math::get_amount1_delta(sa, sb, liquidity).unwrap();
         prop_assert!(pos0 >= 0, "negative amount0 for positive liquidity");
         prop_assert!(pos1 >= 0, "negative amount1 for positive liquidity");
-        let neg0 = math::get_amount0_delta(sa, sb, -liquidity);
-        let neg1 = math::get_amount1_delta(sa, sb, -liquidity);
+        let neg0 = math::get_amount0_delta(sa, sb, -liquidity).unwrap();
+        let neg1 = math::get_amount1_delta(sa, sb, -liquidity).unwrap();
         prop_assert_eq!(neg0, -pos0);
         prop_assert_eq!(neg1, -pos1);
     }
 
-    /// No panic / overflow across the full input domain the u128
-    /// implementation is total over. Liquidity magnitudes are capped at `2^63`
-    /// (far beyond any value the contract can be exercised with): beyond that
-    /// the u128 intermediate `amount * sqrt_price_delta` products overflow, so
-    /// the implementation is only total on this domain.
+    /// No panic across the whole `i128` input domain. The conversions are
+    /// evaluated over 256-bit intermediates and report an unrepresentable
+    /// result as `None`, so they are total; the `prop_math_position_*_exact`
+    /// properties below check the values themselves.
     #[test]
     fn prop_math_no_overflow(
         tick_a in tick_strategy(),
         tick_b in tick_strategy(),
-        liquidity in -(1_i128 << 63)..=(1_i128 << 63),
+        liquidity in any::<i128>(),
     ) {
         let sa = math::tick_to_sqrt_price_x96(tick_a);
         let sb = math::tick_to_sqrt_price_x96(tick_b);
@@ -383,8 +383,10 @@ proptest! {
     ) {
         let lower = core::cmp::min(sqrt_a, sqrt_b);
         let upper = core::cmp::max(sqrt_a, sqrt_b);
+        // Arbitrary u128 prices can be one unit apart, which can push the
+        // liquidity past i128; that is reported as `None` and skipped here.
         let liq = if lower == upper {
-            0
+            Some(0)
         } else if sqrt_current <= lower {
             math::get_liquidity_for_amount0(lower, upper, amount0)
         } else if sqrt_current >= upper {
@@ -392,9 +394,11 @@ proptest! {
         } else {
             let liq0 = math::get_liquidity_for_amount0(sqrt_current, upper, amount0);
             let liq1 = math::get_liquidity_for_amount1(lower, sqrt_current, amount1);
-            core::cmp::min(liq0, liq1)
+            liq0.zip(liq1).map(|(l0, l1)| core::cmp::min(l0, l1))
         };
-        prop_assert!(liq >= 0);
+        if let Some(liq) = liq {
+            prop_assert!(liq >= 0);
+        }
     }
 
     #[test]
@@ -406,16 +410,17 @@ proptest! {
     ) {
         let lower = core::cmp::min(sqrt_a, sqrt_b);
         let upper = core::cmp::max(sqrt_a, sqrt_b);
+        // |liquidity| <= 10^7 keeps every amount well inside i128.
         let (a0, a1) = if lower == upper {
             (0, 0)
         } else if sqrt_current <= lower {
-            (math::get_amount0_delta(lower, upper, liquidity), 0)
+            (math::get_amount0_delta(lower, upper, liquidity).unwrap(), 0)
         } else if sqrt_current >= upper {
-            (0, math::get_amount1_delta(lower, upper, liquidity))
+            (0, math::get_amount1_delta(lower, upper, liquidity).unwrap())
         } else {
             (
-                math::get_amount0_delta(sqrt_current, upper, liquidity),
-                math::get_amount1_delta(lower, sqrt_current, liquidity),
+                math::get_amount0_delta(sqrt_current, upper, liquidity).unwrap(),
+                math::get_amount1_delta(lower, sqrt_current, liquidity).unwrap(),
             )
         };
         if liquidity > 0 {
@@ -423,6 +428,219 @@ proptest! {
         } else {
             prop_assert!(a0 <= 0 && a1 <= 0);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Position-path conversions against an arbitrary-precision reference (#963)
+// ---------------------------------------------------------------------------
+//
+// `get_amount{0,1}_delta` and `get_liquidity_for_amount{0,1}` used to route
+// through a multiply that silently dropped the high bits of any product over
+// u128::MAX, which ordinary ranges such as [100_000, 200_000] reach. These
+// properties compare every conversion with the exact value computed in
+// `BigUint`, across the whole tick range and magnitudes up to i128::MAX, so a
+// truncated product cannot pass unnoticed.
+
+mod exact {
+    use super::math;
+    use num_bigint::BigUint;
+
+    pub fn big(v: u128) -> BigUint {
+        BigUint::from(v)
+    }
+
+    pub fn q96() -> BigUint {
+        big(math::Q96)
+    }
+
+    pub fn i128_max() -> BigUint {
+        big(i128::MAX as u128)
+    }
+
+    /// `floor(L * 2^96 * (sb - sa) / (sa * sb))`
+    pub fn amount0(sa: u128, sb: u128, l: u128) -> BigUint {
+        big(l) * q96() * big(sb - sa) / (big(sa) * big(sb))
+    }
+
+    /// `floor(L * (sb - sa) / 2^96)`
+    pub fn amount1(sa: u128, sb: u128, l: u128) -> BigUint {
+        big(l) * big(sb - sa) / q96()
+    }
+
+    /// `floor(X * sa * sb / (2^96 * (sb - sa)))`
+    pub fn liquidity0(sa: u128, sb: u128, x: u128) -> BigUint {
+        big(x) * big(sa) * big(sb) / (q96() * big(sb - sa))
+    }
+
+    /// `floor(X * 2^96 / (sb - sa))`
+    pub fn liquidity1(sa: u128, sb: u128, x: u128) -> BigUint {
+        big(x) * q96() / big(sb - sa)
+    }
+
+    /// `true` when `v` would not fit in a u128.
+    pub fn over_u128(v: &BigUint) -> bool {
+        v.bits() > 128
+    }
+}
+
+/// Magnitudes biased toward realistic sizes but reaching `i128::MAX`, so both
+/// the representable and the overflow branches are exercised.
+fn magnitude_strategy() -> impl Strategy<Value = i128> {
+    prop_oneof![
+        3 => 1_i128..=1_000_000_000_000_i128,
+        2 => 1_i128..=i128::MAX,
+        1 => Just(i128::MAX),
+    ]
+}
+
+/// Two ticks with distinct prices from the full representable band, ordered.
+fn ordered_ticks() -> impl Strategy<Value = (i32, i32)> {
+    (tick_strategy(), tick_strategy())
+        .prop_filter("distinct prices", |(a, b)| {
+            math::tick_to_sqrt_price_x96(*a) != math::tick_to_sqrt_price_x96(*b)
+        })
+        .prop_map(|(a, b)| (a.min(b), a.max(b)))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// `get_amount1_delta` is the exact floor, or `None` exactly when that
+    /// floor does not fit in an i128.
+    #[test]
+    fn prop_math_position_amount1_exact(
+        (lo, hi) in ordered_ticks(),
+        liquidity in magnitude_strategy(),
+    ) {
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let expected = exact::amount1(sa, sb, liquidity as u128);
+        match math::get_amount1_delta(sa, sb, liquidity) {
+            Some(got) => prop_assert_eq!(exact::big(got as u128), expected),
+            None => prop_assert!(expected > exact::i128_max(), "spurious None, exact {}", expected),
+        }
+    }
+
+    /// `get_amount0_delta` rounds down and is at most one unit below the
+    /// exact floor. It is `None` only when the exact value does not fit in an
+    /// i128 or its first stage `L * 2^96 / sa` does not fit in a u128.
+    #[test]
+    fn prop_math_position_amount0_exact(
+        (lo, hi) in ordered_ticks(),
+        liquidity in magnitude_strategy(),
+    ) {
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let l = liquidity as u128;
+        let expected = exact::amount0(sa, sb, l);
+        match math::get_amount0_delta(sa, sb, liquidity) {
+            Some(got) => {
+                let got = exact::big(got as u128);
+                prop_assert!(got <= expected, "rounded up: {} > {}", got, expected);
+                prop_assert!(got + 1u32 >= expected, "more than 1 below exact {}", expected);
+            }
+            None => {
+                let stage1 = exact::big(l) * exact::q96() / exact::big(sa);
+                prop_assert!(
+                    expected > exact::i128_max() || exact::over_u128(&stage1),
+                    "spurious None, exact {}", expected
+                );
+            }
+        }
+    }
+
+    /// `get_liquidity_for_amount1` is the exact floor, or `None` exactly when
+    /// that floor does not fit in an i128.
+    #[test]
+    fn prop_math_position_liquidity1_exact(
+        (lo, hi) in ordered_ticks(),
+        amount in magnitude_strategy(),
+    ) {
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let expected = exact::liquidity1(sa, sb, amount as u128);
+        match math::get_liquidity_for_amount1(sa, sb, amount) {
+            Some(got) => prop_assert_eq!(exact::big(got as u128), expected),
+            None => prop_assert!(expected > exact::i128_max(), "spurious None, exact {}", expected),
+        }
+    }
+
+    /// `get_liquidity_for_amount0` rounds down, losing at most `sa / 2^96 + 1`
+    /// to its inner floor. It is `None` only when the exact value does not fit
+    /// in an i128 or its first stage `X * sb / (sb - sa)` does not fit in a
+    /// u128.
+    #[test]
+    fn prop_math_position_liquidity0_exact(
+        (lo, hi) in ordered_ticks(),
+        amount in magnitude_strategy(),
+    ) {
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let x = amount as u128;
+        let expected = exact::liquidity0(sa, sb, x);
+        match math::get_liquidity_for_amount0(sa, sb, amount) {
+            Some(got) => {
+                let got = exact::big(got as u128);
+                let slack = exact::big(sa / math::Q96 + 1);
+                prop_assert!(got <= expected, "rounded up: {} > {}", got, expected);
+                prop_assert!(got + slack >= expected, "beyond slack of exact {}", expected);
+            }
+            None => {
+                let stage1 = exact::big(x) * exact::big(sb) / exact::big(sb - sa);
+                prop_assert!(
+                    expected > exact::i128_max() || exact::over_u128(&stage1),
+                    "spurious None, exact {}", expected
+                );
+            }
+        }
+    }
+
+    /// The exact helpers the position path now shares with the swap path agree
+    /// with the reference in both rounding directions.
+    #[test]
+    fn prop_math_delta_exact_helpers_round_both_ways(
+        (lo, hi) in ordered_ticks(),
+        liquidity in magnitude_strategy(),
+    ) {
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let l = liquidity as u128;
+        let e1 = exact::amount1(sa, sb, l);
+        if let (Some(down), Some(up)) = (
+            math::amount1_delta_exact(sa, sb, l, false),
+            math::amount1_delta_exact(sa, sb, l, true),
+        ) {
+            prop_assert_eq!(exact::big(down), e1);
+            // Ceil is the floor, plus one unless the division was exact.
+            prop_assert!(up == down || up == down + 1);
+        }
+        let e0 = exact::amount0(sa, sb, l);
+        if let (Some(down), Some(up)) = (
+            math::amount0_delta_exact(sa, sb, l, false),
+            math::amount0_delta_exact(sa, sb, l, true),
+        ) {
+            prop_assert!(exact::big(down) <= e0.clone());
+            // The real-valued amount lies in [e0, e0 + 1); ceil covers it.
+            prop_assert!(exact::big(up) >= e0);
+            prop_assert!(down <= up);
+        }
+    }
+
+    /// The regime #963 describes: wherever `L * (sb - sa)` exceeds u128::MAX,
+    /// the conversions still return the exact value, never a wrapped one.
+    /// Restricted to that regime so every case counts.
+    #[test]
+    fn prop_math_wide_products_are_not_truncated(
+        lo in 0_i32..=300_000,
+        width in 50_000_i32..=300_000,
+        liquidity in 1_000_000_i128..=1_000_000_000_000_i128,
+    ) {
+        let hi = (lo + width).min(MAX_DISTINCT_TICK);
+        let (sa, sb) = (math::tick_to_sqrt_price_x96(lo), math::tick_to_sqrt_price_x96(hi));
+        let l = liquidity as u128;
+        prop_assume!(l.checked_mul(sb - sa).is_none());
+        let got1 = math::get_amount1_delta(sa, sb, liquidity).unwrap();
+        prop_assert_eq!(exact::big(got1 as u128), exact::amount1(sa, sb, l));
+        let got0 = math::get_amount0_delta(sa, sb, liquidity).unwrap();
+        let e0 = exact::amount0(sa, sb, l);
+        prop_assert!(exact::big(got0 as u128) <= e0.clone());
+        prop_assert!(exact::big(got0 as u128) + 1u32 >= e0);
     }
 }
 

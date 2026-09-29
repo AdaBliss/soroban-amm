@@ -1,0 +1,16 @@
+{
+  "name": "soroban-amm-lint",
+  "private": true,
+  "description": "Shared JavaScript/TypeScript lint tooling for every JS workspace in this repository. Not a workspace root: each package still installs and builds on its own.",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint packages/sdk packages/ui-components packages/ts-advanced-client services/graphql-api services/webhook-streamer services/health-dashboard examples/client"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
+  }
+}

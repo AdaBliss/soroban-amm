@@ -4,13 +4,18 @@
   "private": true,
   "type": "module",
   "description": "Off-chain pool health monitoring dashboard for the Soroban AMM",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "npx serve . -p 3000",
-    "build": "node --check src/dashboard.js && node --check src/dom-stub.js && test -f styles.css",
-    "lint": "node --check src/dashboard.js && node --check src/dom-stub.js",
+    "build": "tsc -p tsconfig.json && test -f styles.css",
+    "lint": "eslint .",
     "test": "node --test src/dashboard.test.js"
   },
   "devDependencies": {
-    "serve": "^14.0.0"
+    "@types/node": "^22.20.4",
+    "serve": "^14.0.0",
+    "typescript": "^5.9.3"
   }
 }

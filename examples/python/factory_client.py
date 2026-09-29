@@ -59,6 +59,8 @@ def main() -> int:
                 print("No governance contract was deployed (governance_wasm_hash not supplied).")
         except Exception as e:
             print(f"Failed to create pool (might already exist): {e}")
+            client.server.close()
+            return 1
     else:
         print("\n2. Pool already exists, skipping create_pool.")
 
