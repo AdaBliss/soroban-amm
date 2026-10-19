@@ -4,11 +4,12 @@
  * Starts an HTTP management API on PORT (default 3001) and a Soroban RPC poller
  * that fans contract events out to registered webhooks.
  *
- * Management API:
+ * Management API (every route except GET /health needs
+ * `Authorization: Bearer $MANAGEMENT_API_TOKEN`):
  *   POST   /webhooks          – register a webhook
  *   DELETE /webhooks/:id      – unregister a webhook
- *   GET    /webhooks          – list all webhooks
- *   GET    /health            – liveness probe
+ *   GET    /webhooks          – list all webhooks (secrets are never returned)
+ *   GET    /health            – liveness probe (detail only when authenticated)
  *
  * Environment variables:
  *   SOROBAN_RPC_URL  – Soroban RPC base URL (required; must answer getHealth)
@@ -16,6 +17,11 @@
  *   CONTRACT_IDS     – comma-separated list of contract IDs to watch
  *   POLL_INTERVAL_MS – polling interval in ms (default: 5000)
  *   PORT             – HTTP port (default: 3001)
+ *   MANAGEMENT_API_TOKEN          – bearer token for the management API (required)
+ *   MANAGEMENT_API_INSECURE       – "true" to run without a token (local dev only)
+ *   MANAGEMENT_MAX_BODY_BYTES     – request body limit (default: 65536)
+ *   WEBHOOK_LEGACY_SECRET_HEADER  – "true" to also send the deprecated
+ *                                   X-Webhook-Secret header for one release
  */
 
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
@@ -25,7 +31,19 @@ import { WebhookDispatcher } from "./dispatcher.js";
 import { DeadLetterQueue } from "./dead-letter.js";
 import { CircuitBreaker } from "./circuit-breaker.js";
 import { RpcPoller } from "./rpc-poller.js";
-import type { PoolEvent } from "./types.js";
+import {
+  AuthConfigError,
+  BodyTooLargeError,
+  DEFAULT_MAX_BODY_BYTES,
+  InvalidJsonError,
+  ValidationError,
+  isAuthorized,
+  parseWebhookRegistration,
+  readBody,
+  resolveAuthConfig,
+  type AuthConfig,
+} from "./management-security.js";
+import { toPublic, toPublicDeadLetter, type PoolEvent } from "./types.js";
 
 const DEFAULT_SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org";
 
@@ -59,7 +77,36 @@ const DEAD_LETTER_MAX = Number(process.env["DEAD_LETTER_MAX"] ?? 1_000);
 const CIRCUIT_THRESHOLD = Number(process.env["CIRCUIT_FAILURE_THRESHOLD"] ?? 5);
 const CIRCUIT_COOLDOWN_MS = Number(process.env["CIRCUIT_COOLDOWN_MS"] ?? 30_000);
 
+const MAX_BODY_BYTES = Number(process.env["MANAGEMENT_MAX_BODY_BYTES"] ?? DEFAULT_MAX_BODY_BYTES);
+const LEGACY_SECRET_HEADER = process.env["WEBHOOK_LEGACY_SECRET_HEADER"] === "true";
+
+// Refuse to expose the management routes without authentication unless the
+// operator explicitly opted out.
+let auth: AuthConfig;
+try {
+  auth = resolveAuthConfig(process.env);
+} catch (err) {
+  if (err instanceof AuthConfigError) {
+    console.error(`[webhook-streamer] ${err.message}`);
+    process.exit(1);
+  }
+  throw err;
+}
+if (!auth.token) {
+  console.warn(
+    "[webhook-streamer] MANAGEMENT_API_INSECURE=true: the management API has NO " +
+      "authentication. Use this for local development only.",
+  );
+}
+if (LEGACY_SECRET_HEADER) {
+  console.warn(
+    "[webhook-streamer] WEBHOOK_LEGACY_SECRET_HEADER=true: deliveries also carry the raw " +
+      "secret in X-Webhook-Secret. This is deprecated and will be removed in the next release.",
+  );
+}
+
 const dispatcher = new WebhookDispatcher(defaultRegistry, {
+  legacySecretHeader: LEGACY_SECRET_HEADER,
   timeoutMs: DELIVERY_TIMEOUT_MS,
   concurrency: DELIVERY_CONCURRENCY,
   deadLetterQueue: new DeadLetterQueue(DEAD_LETTER_MAX),
@@ -107,15 +154,6 @@ if (CONTRACT_IDS.length > 0) {
 
 // ── HTTP management API ─────────────────────────────────────────────────────
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    req.on("data", (chunk) => (data += chunk));
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
-  });
-}
-
 function json(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, { "Content-Type": "application/json" });
@@ -126,13 +164,29 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   const url = req.url ?? "/";
   const method = req.method ?? "GET";
 
-  // GET /health
+  const authorized = isAuthorized(req, auth);
+
+  // GET /health — the liveness form is public so probes need no credential;
+  // operational detail (including the poller's last error, which can carry
+  // the RPC URL) is for authenticated callers only.
   if (method === "GET" && url === "/health") {
+    if (!authorized && !auth.insecure) {
+      return json(res, 200, { status: "ok" });
+    }
+    const pollerHealth = poller?.health() ?? { running: false };
     return json(res, 200, {
       status: poller?.lastError ? "degraded" : "ok",
       webhooks: defaultRegistry.size,
-      poller: poller?.health() ?? { running: false },
+      poller:
+        "lastError" in pollerHealth && pollerHealth.lastError
+          ? { ...pollerHealth, lastError: pollerHealth.lastError.slice(0, 300) }
+          : pollerHealth,
     });
+  }
+
+  if (!authorized) {
+    res.setHeader("WWW-Authenticate", 'Bearer realm="webhook-streamer"');
+    return json(res, 401, { error: "unauthorized" });
   }
 
   // GET /webhooks — includes each subscription's circuit state.
@@ -143,7 +197,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       defaultRegistry
         .list()
         .map((sub) => ({
-          ...sub,
+          ...toPublic(sub),
           circuit: dispatcher.circuitBreaker.snapshot(sub.id),
         })),
     );
@@ -156,7 +210,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
   // GET /dead-letters
   if (method === "GET" && url === "/dead-letters") {
-    return json(res, 200, dispatcher.deadLetters.list());
+    return json(res, 200, dispatcher.deadLetters.list().map(toPublicDeadLetter));
   }
 
   // POST /dead-letters/:id/replay
@@ -179,32 +233,36 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
   // POST /webhooks
   if (method === "POST" && url === "/webhooks") {
+    let registration;
     try {
-      const body = JSON.parse(await readBody(req)) as {
-        url?: string;
-        contractId?: string;
-        eventType?: string;
-        secret?: string;
-      };
-      if (!body.url) {
-        return json(res, 400, { error: "url is required" });
+      registration = parseWebhookRegistration(await readBody(req, MAX_BODY_BYTES));
+    } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        // Stop reading and drop the connection instead of draining the rest.
+        res.setHeader("Connection", "close");
+        res.once("finish", () => req.destroy());
+        return json(res, 413, { error: err.message });
       }
-      let sub;
-      try {
-        sub = defaultRegistry.register(body.url, {
-          contractId: body.contractId,
-          eventType: body.eventType,
-          secret: body.secret,
-        });
-      } catch (err) {
-        if (err instanceof InvalidWebhookUrlError) {
-          return json(res, 400, { error: err.message });
-        }
-        throw err;
+      if (err instanceof InvalidJsonError) {
+        return json(res, 400, { error: err.message });
       }
-      return json(res, 201, sub);
-    } catch {
-      return json(res, 400, { error: "invalid JSON" });
+      if (err instanceof ValidationError) {
+        return json(res, 400, { error: err.message, field: err.field });
+      }
+      throw err;
+    }
+    try {
+      const sub = defaultRegistry.register(registration.url, {
+        contractId: registration.contractId,
+        eventType: registration.eventType,
+        secret: registration.secret,
+      });
+      return json(res, 201, toPublic(sub));
+    } catch (err) {
+      if (err instanceof InvalidWebhookUrlError) {
+        return json(res, 400, { error: err.message, field: "url" });
+      }
+      throw err;
     }
   }
 

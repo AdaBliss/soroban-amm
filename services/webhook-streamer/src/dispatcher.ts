@@ -14,7 +14,10 @@
  *   - Permanently-failed deliveries land in a bounded dead-letter queue.
  *   - A per-subscription circuit breaker stops paying for a dead endpoint.
  *
- * Sends X-Webhook-Secret header when a secret is configured.
+ * Signs each delivery with X-Webhook-Signature (see signing.ts) when the
+ * subscription has a secret, and always sends X-Webhook-Id so receivers can
+ * deduplicate. The legacy X-Webhook-Secret header (the raw secret) is sent
+ * only when `legacySecretHeader` is on.
  */
 
 import fetch from "node-fetch";
@@ -28,6 +31,7 @@ import type {
 import type { WebhookRegistry } from "./registry.js";
 import { DeadLetterQueue, defaultDeadLetterQueue } from "./dead-letter.js";
 import { CircuitBreaker, defaultCircuitBreaker } from "./circuit-breaker.js";
+import { EVENT_ID_HEADER, SIGNATURE_HEADER, signPayload } from "./signing.js";
 
 export const MAX_RETRIES = 3;
 export const BASE_DELAY_MS = 500;
@@ -47,6 +51,11 @@ export interface DispatcherOptions {
   maxDelayMs?: number;
   deadLetterQueue?: DeadLetterQueue;
   circuitBreaker?: CircuitBreaker;
+  /**
+   * Also send the raw secret in `X-Webhook-Secret`. Deprecated: anyone who can
+   * observe one request learns the secret. Off by default.
+   */
+  legacySecretHeader?: boolean;
   /** Injectable sleep, for tests. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable RNG in [0,1), for deterministic jitter in tests. */
@@ -157,6 +166,7 @@ export class WebhookDispatcher {
   private readonly maxDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
+  private readonly legacySecretHeader: boolean;
 
   readonly deadLetters: DeadLetterQueue;
   readonly circuitBreaker: CircuitBreaker;
@@ -182,6 +192,7 @@ export class WebhookDispatcher {
     this.maxDelayMs = opts.maxDelayMs ?? MAX_DELAY_MS;
     this.sleep = opts.sleep ?? _sleep;
     this.random = opts.random ?? Math.random;
+    this.legacySecretHeader = opts.legacySecretHeader ?? false;
     this.deadLetters = opts.deadLetterQueue ?? defaultDeadLetterQueue;
     this.circuitBreaker = opts.circuitBreaker ?? defaultCircuitBreaker;
   }
@@ -274,13 +285,18 @@ export class WebhookDispatcher {
       };
     }
 
+    const body = JSON.stringify(event);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      [EVENT_ID_HEADER]: event.id,
     };
     if (sub.secret) {
-      headers["X-Webhook-Secret"] = sub.secret;
+      // Signed once per delivery, so a dead-letter replay gets a fresh timestamp.
+      headers[SIGNATURE_HEADER] = signPayload(sub.secret, body);
+      if (this.legacySecretHeader) {
+        headers["X-Webhook-Secret"] = sub.secret;
+      }
     }
-    const body = JSON.stringify(event);
 
     const attempts: AttemptOutcome[] = [];
     let delayMs = 0;

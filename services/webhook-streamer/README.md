@@ -30,9 +30,38 @@ npm run build && npm start
 | `START_LEDGER`    | `1`                                        | Ledger to start `getEvents` from on a contract's first poll (before it has a cursor). A live RPC endpoint only retains a recent window of ledgers, so the default of `1` will be rejected outside local/sandbox testing — set this to a recent ledger before pointing the service at testnet/mainnet. |
 | `POLL_INTERVAL_MS`| `5000`                                     | Polling interval in milliseconds         |
 | `PORT`            | `3001`                                     | Management API HTTP port                 |
+| `MANAGEMENT_API_TOKEN` | _(required)_                           | Bearer token for the management API. The service refuses to start without it unless `MANAGEMENT_API_INSECURE=true`. Use a long random string. |
+| `MANAGEMENT_API_INSECURE` | `false`                             | Set to `true` to run the management API with no authentication. Local development only; the service logs a warning at startup. |
+| `MANAGEMENT_MAX_BODY_BYTES` | `65536`                           | Largest request body the management API accepts; bigger bodies get `413`. |
+| `WEBHOOK_LEGACY_SECRET_HEADER` | `false`                        | Set to `true` to also send the deprecated `X-Webhook-Secret` header (the raw secret) for one release. See [Migrating from `X-Webhook-Secret`](#migrating-from-x-webhook-secret). |
 | `WEBHOOK_ALLOW_PRIVATE_TARGETS` | `false`                       | Set to `true` to allow registering webhook URLs that point at loopback/link-local/private-range addresses. Only for local development against a same-host test receiver — leave unset in production, since it disables SSRF protection on `POST /webhooks`. |
 
 ## Management API
+
+### Authentication
+
+Every route except `GET /health` needs a bearer token:
+
+```
+Authorization: Bearer $MANAGEMENT_API_TOKEN
+```
+
+A missing or wrong token gets `401`. The token is compared in constant time.
+`GET /health` is public so load balancers can probe it, but without a valid
+token it returns only `{"status":"ok"}`; the webhook count and the poller's
+details (including its last error) need the token.
+
+The service will not start without `MANAGEMENT_API_TOKEN`. For local
+development only, set `MANAGEMENT_API_INSECURE=true` to skip authentication.
+
+Secrets are write-only. `POST /webhooks`, `GET /webhooks` and
+`GET /dead-letters` return `"hasSecret": true` instead of the secret, and the
+secret never appears in logs or error messages.
+
+Request bodies are limited to `MANAGEMENT_MAX_BODY_BYTES` (64 KiB by default,
+`413` above that). Bad input returns `400`: `{"error":"invalid JSON"}` when
+the body cannot be parsed, or `{"error":"contractId must be a string","field":"contractId"}`
+when a field is wrong.
 
 ### Register a webhook
 ```
@@ -43,7 +72,7 @@ Content-Type: application/json
   "url": "https://your-server.com/hook",
   "contractId": "CABC123",   // optional — omit to receive all contracts
   "eventType": "swap",       // optional — omit to receive all event types
-  "secret": "my-secret"      // optional — sent as X-Webhook-Secret header
+  "secret": "my-secret"      // optional — used to sign deliveries, never returned
 }
 ```
 
@@ -97,6 +126,57 @@ Supported event types: `swap`, `add_liquidity`, `remove_liquidity`,
 `mint_pos`, `burn_pos`, `coll_fees`, `mint_1t`, `rng_ord`, `staked`,
 `unstaked`, `claimed`.  Unknown topics still pass through with their decoded
 name.
+
+## Verifying deliveries
+
+Every delivery carries an `X-Webhook-Id` header (the event id, stable across
+retries; use it to deduplicate). If the subscription has a secret, it also
+carries a signature:
+
+```
+X-Webhook-Signature: t=1767225600,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd
+```
+
+`t` is the unix time the request was signed and `v1` is the hex HMAC-SHA256,
+keyed with your secret, of the string `"<t>.<raw request body>"`. To verify:
+
+1. Parse `t` and `v1` from the header.
+2. Recompute the HMAC over `t + "." + rawBody`, using the exact bytes you
+   received (not re-serialised JSON).
+3. Compare with `v1` in constant time.
+4. Reject the request if `t` is more than 5 minutes from your clock. This is
+   what stops someone replaying a captured request.
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verifyWebhook(secret: string, rawBody: string, header: string, toleranceSeconds = 300): boolean {
+  const parts = Object.fromEntries(header.split(",").map((p) => p.split("=", 2)));
+  const t = Number(parts.t);
+  if (!Number.isInteger(t) || !/^[0-9a-f]{64}$/.test(parts.v1 ?? "")) return false;
+  if (Math.abs(Date.now() / 1000 - t) > toleranceSeconds) return false;
+  const expected = createHmac("sha256", secret).update(`${t}.${rawBody}`).digest();
+  return timingSafeEqual(expected, Buffer.from(parts.v1, "hex"));
+}
+```
+
+A retry or a dead-letter replay is signed again with a fresh timestamp, so
+the tolerance window applies to each attempt, not to the original event.
+`src/signing.ts` has the same logic (`verifySignature`) if you are working in
+this repo.
+
+### Migrating from `X-Webhook-Secret`
+
+Earlier versions sent the secret itself in `X-Webhook-Secret`. That header is
+gone by default: anyone who could observe one request learned the secret, and
+a receiver could not tell a fresh event from a replay. To migrate:
+
+1. Add signature verification to your receiver (above).
+2. If you cannot ship that yet, set `WEBHOOK_LEGACY_SECRET_HEADER=true` on the
+   streamer. It sends both headers for one release and logs a warning at
+   startup.
+3. Once your receiver verifies `X-Webhook-Signature`, unset the variable.
+   Consider rotating secrets that were ever sent in the old header.
 
 ## Delivery guarantees
 

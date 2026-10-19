@@ -936,7 +936,7 @@ describe("local webhook delivery integration", () => {
     });
 
     describe("request shape", () => {
-        it("sends the event as JSON with the secret header when configured", async () => {
+        it("signs the event instead of sending the secret when one is configured", async () => {
             const srv = await startServer(() => ({ status: 200 }));
             try {
                 const reg = new WebhookRegistry();
@@ -944,7 +944,12 @@ describe("local webhook delivery integration", () => {
                 const d = makeDispatcher(reg);
                 await d.dispatch(EVENT);
 
-                assert.equal(srv.headers()[0]["x-webhook-secret"], "s3cr3t");
+                assert.equal(srv.headers()[0]["x-webhook-secret"], undefined);
+                assert.match(
+                    String(srv.headers()[0]["x-webhook-signature"]),
+                    /^t=\d+,v1=[0-9a-f]{64}$/,
+                );
+                assert.equal(srv.headers()[0]["x-webhook-id"], EVENT.id);
                 assert.equal(
                     srv.headers()[0]["content-type"],
                     "application/json",
@@ -955,7 +960,7 @@ describe("local webhook delivery integration", () => {
             }
         });
 
-        it("omits the secret header when none is configured", async () => {
+        it("omits the signature when no secret is configured", async () => {
             const srv = await startServer(() => ({ status: 200 }));
             try {
                 const reg = new WebhookRegistry();
@@ -963,6 +968,8 @@ describe("local webhook delivery integration", () => {
                 const d = makeDispatcher(reg);
                 await d.dispatch(EVENT);
                 assert.equal(srv.headers()[0]["x-webhook-secret"], undefined);
+                assert.equal(srv.headers()[0]["x-webhook-signature"], undefined);
+                assert.equal(srv.headers()[0]["x-webhook-id"], EVENT.id);
             } finally {
                 await srv.close();
             }

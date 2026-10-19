@@ -55,9 +55,24 @@ export interface WebhookSubscription {
   contractId?: string;
   /** Filter by event type (e.g. "swap", "mint_pos"); undefined = all types. */
   eventType?: string;
-  /** Shared secret sent in X-Webhook-Secret header for HMAC verification. */
+  /**
+   * Shared secret used to sign deliveries (`X-Webhook-Signature`). Stored but
+   * never serialised: go through `toPublic()` before returning a subscription
+   * from the API or writing it to a log.
+   */
   secret?: string;
   createdAt: number;
+}
+
+/** A subscription as exposed to API callers: the secret is replaced by a flag. */
+export type PublicWebhookSubscription = Omit<WebhookSubscription, "secret"> & {
+  hasSecret: boolean;
+};
+
+/** Strips the secret from a subscription. */
+export function toPublic(sub: WebhookSubscription): PublicWebhookSubscription {
+  const { secret, ...rest } = sub;
+  return { ...rest, hasSecret: Boolean(secret) };
 }
 
 /**
@@ -111,6 +126,16 @@ export interface DeadLetter {
   failedAt: number;
   /** Human-readable summary of the terminal failure. */
   reason: string;
+}
+
+/** A dead letter as exposed to API callers (its subscription's secret removed). */
+export type PublicDeadLetter = Omit<DeadLetter, "subscription"> & {
+  subscription: PublicWebhookSubscription;
+};
+
+/** Strips the subscription secret from a dead letter. */
+export function toPublicDeadLetter(entry: DeadLetter): PublicDeadLetter {
+  return { ...entry, subscription: toPublic(entry.subscription) };
 }
 
 /** Circuit-breaker states, following the standard closed → open → half-open cycle. */

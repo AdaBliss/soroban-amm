@@ -11,7 +11,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "node --test dist/streamer.test.js dist/rpc-poller.test.js",
+    "test": "node --test dist/streamer.test.js dist/rpc-poller.test.js dist/management.test.js",
     "lint": "eslint ."
   },
   "dependencies": {
