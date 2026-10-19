@@ -11,6 +11,7 @@
  * permanently-broken subscriber cannot exhaust memory.
  */
 
+import { MemoryStateStore, type StateStore } from "./storage.js";
 import type {
   AttemptOutcome,
   DeadLetter,
@@ -31,11 +32,34 @@ export class DeadLetterQueue {
   private entries: DeadLetter[] = [];
   readonly maxEntries: number;
 
-  constructor(maxEntries: number = DEFAULT_MAX_ENTRIES) {
+  /**
+   * With a persistent `store`, entries survive a restart and stay replayable.
+   * The default store is in-memory.
+   */
+  constructor(
+    maxEntries: number = DEFAULT_MAX_ENTRIES,
+    private readonly store: StateStore = new MemoryStateStore(),
+  ) {
     if (!Number.isFinite(maxEntries) || maxEntries < 1) {
       throw new RangeError("maxEntries must be a positive integer");
     }
     this.maxEntries = Math.floor(maxEntries);
+
+    const saved = store.loadDeadLetters();
+    this.entries = saved.entries.slice(-this.maxEntries);
+    _nextId = Math.max(_nextId, saved.nextId);
+  }
+
+  /**
+   * A failed write must not turn a delivery failure into a crash: the entry
+   * stays in memory and the problem is logged.
+   */
+  private persist(): void {
+    try {
+      this.store.saveDeadLetters({ entries: this.entries, nextId: _nextId });
+    } catch (err) {
+      console.error("[dead-letter] failed to persist the queue:", err);
+    }
   }
 
   /**
@@ -65,6 +89,7 @@ export class DeadLetterQueue {
     while (this.entries.length > this.maxEntries) {
       this.entries.shift();
     }
+    this.persist();
     return entry;
   }
 
@@ -83,12 +108,14 @@ export class DeadLetterQueue {
     const idx = this.entries.findIndex((e) => e.id === id);
     if (idx === -1) return false;
     this.entries.splice(idx, 1);
+    this.persist();
     return true;
   }
 
   /** Drop every entry. */
   clear(): void {
     this.entries = [];
+    this.persist();
   }
 
   get size(): number {

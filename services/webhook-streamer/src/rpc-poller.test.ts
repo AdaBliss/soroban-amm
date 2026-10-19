@@ -696,6 +696,7 @@ test("health reports the configured shape before any poll has happened", () => {
     ticks: 0,
     eventsEmitted: 0,
     lastError: null,
+    gaps: [],
   });
 });
 

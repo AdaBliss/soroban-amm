@@ -30,6 +30,8 @@ npm run build && npm start
 | `START_LEDGER`    | `1`                                        | Ledger to start `getEvents` from on a contract's first poll (before it has a cursor). A live RPC endpoint only retains a recent window of ledgers, so the default of `1` will be rejected outside local/sandbox testing — set this to a recent ledger before pointing the service at testnet/mainnet. |
 | `POLL_INTERVAL_MS`| `5000`                                     | Polling interval in milliseconds         |
 | `PORT`            | `3001`                                     | Management API HTTP port                 |
+| `DATA_DIR`        | _(unset: in memory)_                       | Directory for durable state: subscriptions, dead letters and poller cursors. See [Storage and restarts](#storage-and-restarts). Without it everything is lost on restart and the service warns at startup. |
+| `SHUTDOWN_TIMEOUT_MS` | `10000`                                | How long SIGTERM/SIGINT waits for in-flight deliveries before exiting. |
 | `MANAGEMENT_API_TOKEN` | _(required)_                           | Bearer token for the management API. The service refuses to start without it unless `MANAGEMENT_API_INSECURE=true`. Use a long random string. |
 | `MANAGEMENT_API_INSECURE` | `false`                             | Set to `true` to run the management API with no authentication. Local development only; the service logs a warning at startup. |
 | `MANAGEMENT_MAX_BODY_BYTES` | `65536`                           | Largest request body the management API accepts; bigger bodies get `413`. |
@@ -180,8 +182,65 @@ a receiver could not tell a fresh event from a replay. To migrate:
 
 ## Delivery guarantees
 
+- **At least once.** An event is delivered one or more times, never zero. The
+  poller saves each contract's cursor only after the events in that page have
+  been handed to the dispatcher, so a crash or restart between delivery and
+  the cursor write replays the page instead of skipping it. Receivers must
+  deduplicate (see below).
+- Every delivery carries `X-Webhook-Id`, the event id. It is the same on every
+  retry, dead-letter replay and post-restart redelivery, so it is the key to
+  deduplicate on.
 - Up to 3 retries with exponential back-off (500 ms, 1 s, 2 s).
-- Failed deliveries are logged but do not block other webhooks.
-- Cursor-based pagination ensures no events are skipped between polls.
+- Failed deliveries are logged but do not block other webhooks. Deliveries that
+  exhaust their retries go to the dead-letter queue and can be replayed.
 - A non-2xx response or an RPC `error` is logged at error level and surfaced
   on the health output; polling resumes on the next tick.
+
+## Storage and restarts
+
+Set `DATA_DIR` to a directory that survives restarts (a volume, in a
+container). The service keeps one file there, `state.json`, holding:
+
+- **subscriptions** (including their secrets, which are needed to sign
+  deliveries and replays),
+- **dead letters**, still replayable after a restart, and
+- **cursors**, the position of each watched contract.
+
+The file is replaced atomically on every change (write to a temp file, fsync,
+rename), so a crash leaves the previous state or the new one, never a mix. It
+is created readable by its owner only; keep the directory private. A file that
+cannot be parsed stops the service at startup rather than silently resetting
+to empty: fix it or move it aside to start fresh.
+
+Without `DATA_DIR` all of this lives in memory and is lost on restart, and the
+service logs a warning. It also means a restart resumes from `START_LEDGER`
+and re-delivers events since then.
+
+The service runs as a single instance. Two instances sharing one `DATA_DIR`
+are not supported (no locking, no leader election).
+
+### When RPC no longer has your ledgers
+
+Stellar RPC only retains a recent window of ledgers. After downtime longer
+than that window, the saved cursor (or `START_LEDGER`, which defaults to `1`)
+is rejected with "must be within the ledger range". Instead of failing the
+same request forever, the poller reads the retained range from the error (or
+`getHealth`), resumes from the oldest retained ledger, and records what it
+could not read:
+
+- a log line: `[rpc-poller] gap contract=C... reason=cursor ledgers=151-249 resumedAt=250 ...`
+- `GET /health` lists the latest gaps under `poller.gaps`, each with
+  `contractId`, `reason` (`cursor` if a saved position expired, `start` if
+  `START_LEDGER` was outside the window), `fromLedger`, `toLedger`,
+  `resumedAt` and `detectedAt`.
+
+Events in a gap are lost for good, since RPC no longer has them. Recover them
+from another source if you need them. A `START_LEDGER` newer than the chain is
+not treated as a gap; the poller keeps waiting.
+
+### Shutdown
+
+On SIGTERM or SIGINT the service stops polling, waits up to
+`SHUTDOWN_TIMEOUT_MS` for in-flight deliveries to finish, saves state, and
+exits 0. Anything that did not finish keeps its old cursor and is redelivered
+on the next start. A second signal exits immediately.
