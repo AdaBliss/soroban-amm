@@ -15,6 +15,7 @@
 // `globalThis.fetch`, which a module-scoped import would bypass entirely.
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
 import type { PoolEvent, PoolEventType, AnalyticsStore } from "../store/interface.js";
+import { isoToSeconds, systemClock } from "../time.js";
 
 /**
  * Configuration for the Soroban RPC ingester.
@@ -314,7 +315,7 @@ export class RpcIngester {
               ledger: raw.ledger,
               txHash: event.txHash,
               eventIndex: event.eventIndex,
-              updatedAt: Date.now(),
+              updatedAt: systemClock(),
             });
           }
         }
@@ -425,7 +426,7 @@ export class RpcIngester {
         id: raw.id,
         poolId: contractId,
         type: eventType,
-        timestamp: Math.floor(new Date(raw.ledgerClosedAt || Date.now()).getTime() / 1000),
+        timestamp: raw.ledgerClosedAt ? isoToSeconds(raw.ledgerClosedAt) : systemClock(),
         ledger: raw.ledger,
         txHash,
         eventIndex: Number.isFinite(eventIndex) ? eventIndex : 0,

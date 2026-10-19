@@ -17,6 +17,7 @@ import type {
   AlertConfig,
   IngestionCursor,
 } from "./interface.js";
+import type { Seconds } from "../time.js";
 
 export class MemoryStore implements AnalyticsStore {
   private events: PoolEvent[] = [];
@@ -43,8 +44,8 @@ export class MemoryStore implements AnalyticsStore {
 
   async queryEvents(
     poolId: string,
-    from: number,
-    to: number,
+    from: Seconds,
+    to: Seconds,
     limit = 1000,
   ): Promise<PoolEvent[]> {
     return this.events
@@ -85,8 +86,8 @@ export class MemoryStore implements AnalyticsStore {
 
   async getPriceHistory(
     poolId: string,
-    from: number,
-    to: number,
+    from: Seconds,
+    to: Seconds,
   ): Promise<PricePoint[]> {
     return this.priceHistory.filter(
       (p) =>

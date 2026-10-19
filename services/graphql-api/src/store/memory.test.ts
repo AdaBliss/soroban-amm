@@ -11,13 +11,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MemoryStore } from "./memory.js";
 import type { PoolEvent } from "./interface.js";
+import { asSeconds } from "../time.js";
 
 function event(overrides: Partial<PoolEvent> = {}): PoolEvent {
   return {
     id: "evt-1",
     poolId: "pool-1",
     type: "swap",
-    timestamp: 1_723_000_000,
+    timestamp: asSeconds(1_723_000_000),
     ledger: 1000,
     txHash: "tx-1",
     eventIndex: 0,
@@ -55,14 +56,14 @@ describe("MemoryStore event idempotency", () => {
 describe("MemoryStore event queries", () => {
   it("filters queryEvents by pool and inclusive time range", async () => {
     const store = new MemoryStore();
-    await store.appendEvent(event({ id: "a", eventIndex: 0, timestamp: 100 }));
-    await store.appendEvent(event({ id: "b", eventIndex: 1, timestamp: 200 }));
-    await store.appendEvent(event({ id: "c", eventIndex: 2, timestamp: 300 }));
+    await store.appendEvent(event({ id: "a", eventIndex: 0, timestamp: asSeconds(100) }));
+    await store.appendEvent(event({ id: "b", eventIndex: 1, timestamp: asSeconds(200) }));
+    await store.appendEvent(event({ id: "c", eventIndex: 2, timestamp: asSeconds(300) }));
     await store.appendEvent(
-      event({ id: "d", eventIndex: 3, timestamp: 200, poolId: "pool-2" }),
+      event({ id: "d", eventIndex: 3, timestamp: asSeconds(200), poolId: "pool-2" }),
     );
 
-    const ids = (await store.queryEvents("pool-1", 200, 300)).map((e) => e.id);
+    const ids = (await store.queryEvents("pool-1", asSeconds(200), asSeconds(300))).map((e) => e.id);
     assert.deepEqual(ids, ["b", "c"]);
   });
 
@@ -89,7 +90,7 @@ describe("MemoryStore ingestion cursor", () => {
       ledger: 1000,
       txHash: "tx-1",
       eventIndex: 0,
-      updatedAt: 1_723_000_000_000,
+      updatedAt: asSeconds(1_723_000_000),
     };
     await store.setCursor(cursor);
     await store.setCursor({ ...cursor, ledger: 1001 });
@@ -99,7 +100,7 @@ describe("MemoryStore ingestion cursor", () => {
 
   it("tracks each contract's cursor independently", async () => {
     const store = new MemoryStore();
-    const base = { ledger: 1000, txHash: "tx-1", eventIndex: 0, updatedAt: 1 };
+    const base = { ledger: 1000, txHash: "tx-1", eventIndex: 0, updatedAt: asSeconds(1) };
     await store.setCursor({ ...base, contractId: "C1", ledger: 1000 });
     await store.setCursor({ ...base, contractId: "C2", ledger: 2000 });
 

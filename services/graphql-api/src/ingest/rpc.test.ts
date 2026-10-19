@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { RpcIngester, type SorobanRpcEvent } from "./rpc.js";
 import { xdr, nativeToScVal } from "@stellar/stellar-sdk";
 import type { PoolEvent } from "../store/interface.js";
+import { asSeconds } from "../time.js";
 
 // Helper to encode sample XDR fixtures for tests
 function encodeFixture(topicSymbol: string, schemaVersion: number, payload: unknown, traderOrProvider?: string): { topic: string[]; value: string } {
@@ -272,7 +273,7 @@ test("6. Replaying the same page twice produces no duplicate store entries (idem
     id: "evt-dup",
     poolId: "POOL_1",
     type: "swap",
-    timestamp: 123456,
+    timestamp: asSeconds(123456),
     ledger: 100,
     txHash: "tx-1",
     eventIndex: 0,

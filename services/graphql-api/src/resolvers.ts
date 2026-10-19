@@ -11,6 +11,7 @@ import {
   type AlertConfig,
   type AlertMetric,
 } from "./indexer.js";
+import { asSeconds } from "./time.js";
 
 export const pubsub = new PubSub();
 
@@ -27,7 +28,12 @@ export const resolvers = {
     priceHistory: (
       _: unknown,
       { poolId, from, to }: { poolId: string; from?: number; to?: number },
-    ) => defaultIndexer.getPriceHistory(poolId, from, to),
+    ) =>
+      defaultIndexer.getPriceHistory(
+        poolId,
+        from === undefined ? undefined : asSeconds(from),
+        to === undefined ? undefined : asSeconds(to),
+      ),
     twal: (
       _: unknown,
       { poolId, windowSeconds }: { poolId: string; windowSeconds: number },

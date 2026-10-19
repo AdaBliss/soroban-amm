@@ -12,6 +12,20 @@ npm run dev
 
 Open http://localhost:4000 for the Apollo Sandbox.
 
+## Timestamps
+
+Every timestamp in this API is **seconds since the Unix epoch**, not
+milliseconds: `PoolEvent.timestamp`, `PricePoint.timestamp`,
+`HealthAlert.firedAt`, and the `from` / `to` arguments of `priceHistory`
+(both inclusive). Chain-derived values come straight from the ledger close
+time, and the 30 day retention window and the one hour price deviation window
+are measured against the indexer's clock, which is wall-clock time in
+production and injectable in tests (`new PoolIndexer(clock)`).
+
+In the code, timestamps are typed as `Seconds` (`src/time.ts`), so passing a
+raw `Date.now()` where a timestamp is expected is a compile error. Convert
+once at the boundary with `msToSeconds` or `isoToSeconds`.
+
 ## Example queries
 
 ### Pool TVL, volume, and fees

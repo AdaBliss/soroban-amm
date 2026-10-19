@@ -6,11 +6,14 @@
  * can use a persistent store (SQLite) that survives restarts.
  */
 
+import type { Seconds } from "../time.js";
+
 export interface PoolEvent {
   id: string;
   poolId: string;
   type: PoolEventType;
-  timestamp: number;
+  /** Seconds since the Unix epoch. */
+  timestamp: Seconds;
   ledger: number;
   txHash: string;
   eventIndex: number;
@@ -36,7 +39,8 @@ export interface PoolStats {
   fees24h: number;
   swapCount: number;
   priceDeviationBps: number;
-  lastUpdate: number;
+  /** Seconds since the Unix epoch. */
+  lastUpdate: Seconds;
 }
 
 export interface Position {
@@ -49,7 +53,8 @@ export interface Position {
 
 export interface PricePoint {
   poolId: string;
-  timestamp: number;
+  /** Seconds since the Unix epoch. */
+  timestamp: Seconds;
   price: number;
   feeBps: number;
 }
@@ -59,7 +64,8 @@ export interface HealthAlert {
   metric: string;
   threshold: number;
   currentValue: number;
-  firedAt: number;
+  /** Seconds since the Unix epoch. */
+  firedAt: Seconds;
 }
 
 export interface AlertConfig {
@@ -92,8 +98,8 @@ export interface IngestionCursor {
    * Used for idempotency.
    */
   eventIndex: number;
-  /** Timestamp of last update, for monitoring lag. */
-  updatedAt: number;
+  /** Seconds since the Unix epoch of the last update, for monitoring lag. */
+  updatedAt: Seconds;
 }
 
 /**
@@ -115,7 +121,7 @@ export interface AnalyticsStore {
   /**
    * Query events by pool and time range.
    */
-  queryEvents(poolId: string, from: number, to: number, limit?: number): Promise<PoolEvent[]>;
+  queryEvents(poolId: string, from: Seconds, to: Seconds, limit?: number): Promise<PoolEvent[]>;
 
   /**
    * Get the most recent events across all pools.
@@ -157,7 +163,7 @@ export interface AnalyticsStore {
   /**
    * Query price history for a pool over a time range.
    */
-  getPriceHistory(poolId: string, from: number, to: number): Promise<PricePoint[]>;
+  getPriceHistory(poolId: string, from: Seconds, to: Seconds): Promise<PricePoint[]>;
 
   // ─── Alerts ─────────────────────────────────────────────────────────────
 

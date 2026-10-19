@@ -7,15 +7,23 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   PoolIndexer,
+  RETENTION_SECONDS,
   InvalidMetricError,
   InvalidThresholdError,
   type PoolEvent,
 } from "./indexer.js";
+import { asSeconds, type Seconds } from "./time.js";
 
-const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Fixed "now" (seconds) so tests don't depend on the wall clock. */
+const NOW = asSeconds(1_800_000_000);
+
+/** `NOW` shifted by `offsetSeconds`. */
+function at(offsetSeconds: number): Seconds {
+  return asSeconds(NOW + offsetSeconds);
+}
 
 function makeIndexer() {
-  return new PoolIndexer();
+  return new PoolIndexer(() => NOW);
 }
 
 function swapEvent(
@@ -23,7 +31,7 @@ function swapEvent(
 ): PoolEvent {
   return {
     type: "swap",
-    timestamp: Date.now(),
+    timestamp: NOW,
     payload: { amountIn: 500, fee: 5, price: 1.2, tokenA: "XLM", tokenB: "USDC" },
     ...overrides,
   };
@@ -34,7 +42,7 @@ function addLiquidityEvent(
 ): PoolEvent {
   return {
     type: "add_liquidity",
-    timestamp: Date.now(),
+    timestamp: NOW,
     payload: { amountA: 10_000, amountB: 20_000, tokenA: "XLM", tokenB: "USDC" },
     ...overrides,
   };
@@ -45,7 +53,7 @@ function removeLiquidityEvent(
 ): PoolEvent {
   return {
     type: "remove_liquidity",
-    timestamp: Date.now(),
+    timestamp: NOW,
     payload: { amountA: 5_000, amountB: 10_000, tokenA: "XLM", tokenB: "USDC" },
     ...overrides,
   };
@@ -110,11 +118,10 @@ describe("indexEvent", () => {
 describe("retention pruning", () => {
   it("drops events older than RETENTION_MS", () => {
     const idx = makeIndexer();
-    const now = Date.now();
 
-    idx.indexEvent(swapEvent({ id: "fresh", poolId: "p1", timestamp: now }));
+    idx.indexEvent(swapEvent({ id: "fresh", poolId: "p1", timestamp: NOW }));
     idx.indexEvent(
-      swapEvent({ id: "old", poolId: "p1", timestamp: now - RETENTION_MS - 1 }),
+      swapEvent({ id: "old", poolId: "p1", timestamp: at(-RETENTION_SECONDS - 1) }),
     );
 
     const events = idx.getEvents("p1");
@@ -124,11 +131,10 @@ describe("retention pruning", () => {
 
   it("prunes stale price history on the next indexEvent", () => {
     const idx = makeIndexer();
-    const now = Date.now();
 
-    idx.recordPrice({ poolId: "p1", timestamp: now - RETENTION_MS - 1, price: 1, feeBps: 30 });
+    idx.recordPrice({ poolId: "p1", timestamp: at(-RETENTION_SECONDS - 1), price: 1, feeBps: 30 });
     // Indexing a new event triggers pruneOldData.
-    idx.indexEvent(swapEvent({ id: "trigger", poolId: "p1", timestamp: now }));
+    idx.indexEvent(swapEvent({ id: "trigger", poolId: "p1", timestamp: NOW }));
 
     const prices = idx.getPriceHistory("p1");
     // The stale price point should have been removed; only the one from the swap remains.
@@ -245,25 +251,23 @@ describe("getTwal", () => {
 
   it("returns a time-weighted value that differs from the naive mean for unevenly spaced points", () => {
     const idx = makeIndexer();
-    const now = Date.now();
     // Price held at 1.0 for a long stretch, then briefly spikes to 2.0 just before "now".
-    idx.recordPrice({ poolId: "pool-x", timestamp: now - 3000, price: 1.0, feeBps: 30 });
-    idx.recordPrice({ poolId: "pool-x", timestamp: now - 100, price: 2.0, feeBps: 30 });
+    idx.recordPrice({ poolId: "pool-x", timestamp: at(-3000), price: 1.0, feeBps: 30 });
+    idx.recordPrice({ poolId: "pool-x", timestamp: at(-100), price: 2.0, feeBps: 30 });
 
     const twal = idx.getTwal("pool-x", 3600);
     const naiveMean = (1.0 + 2.0) / 2;
 
     assert.notEqual(twal, null);
     assert.notEqual(twal, naiveMean);
-    // The 1.0 price dominates the window (2900ms vs 100ms), so twal should be close to 1.0.
+    // The 1.0 price dominates the window (2900s vs 100s), so twal should be close to 1.0.
     assert.ok(twal! < naiveMean);
   });
 
   it("ignores price points outside the requested window", () => {
     const idx = makeIndexer();
-    const now = Date.now();
-    idx.recordPrice({ poolId: "pool-x", timestamp: now - 7200 * 1000, price: 5.0, feeBps: 30 });
-    idx.recordPrice({ poolId: "pool-x", timestamp: now - 10, price: 1.0, feeBps: 30 });
+    idx.recordPrice({ poolId: "pool-x", timestamp: at(-7200), price: 5.0, feeBps: 30 });
+    idx.recordPrice({ poolId: "pool-x", timestamp: at(-10), price: 1.0, feeBps: 30 });
 
     const twal = idx.getTwal("pool-x", 60);
     assert.equal(twal, 1.0);
@@ -271,8 +275,7 @@ describe("getTwal", () => {
 
   it("is scoped to the given poolId", () => {
     const idx = makeIndexer();
-    const now = Date.now();
-    idx.recordPrice({ poolId: "pool-a", timestamp: now - 10, price: 1.0, feeBps: 30 });
+    idx.recordPrice({ poolId: "pool-a", timestamp: at(-10), price: 1.0, feeBps: 30 });
     assert.equal(idx.getTwal("pool-b", 3600), null);
   });
 });
@@ -282,10 +285,9 @@ describe("getTwal", () => {
 describe("getEvents", () => {
   it("returns events in reverse chronological order with a limit", () => {
     const idx = makeIndexer();
-    const now = Date.now();
-    idx.indexEvent(swapEvent({ id: "e1", poolId: "p1", timestamp: now - 3000 }));
-    idx.indexEvent(swapEvent({ id: "e2", poolId: "p1", timestamp: now - 2000 }));
-    idx.indexEvent(swapEvent({ id: "e3", poolId: "p1", timestamp: now - 1000 }));
+    idx.indexEvent(swapEvent({ id: "e1", poolId: "p1", timestamp: at(-3000) }));
+    idx.indexEvent(swapEvent({ id: "e2", poolId: "p1", timestamp: at(-2000) }));
+    idx.indexEvent(swapEvent({ id: "e3", poolId: "p1", timestamp: at(-1000) }));
 
     const last2 = idx.getEvents("p1", 2);
     assert.equal(last2.length, 2);

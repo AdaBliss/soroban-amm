@@ -1,12 +1,18 @@
+import { asSeconds, systemClock, type Clock, type Seconds } from "./time.js";
+
 /**
  * In-memory indexer for pool analytics. Production deployments should
  * back this with Horizon/Soroban RPC event ingestion.
  *
- * Historical data is retained for 30 days (RETENTION_MS). Older price
+ * All timestamps are seconds since the Unix epoch (see `time.ts`).
+ *
+ * Historical data is retained for 30 days (RETENTION_SECONDS), measured
+ * against the indexer's clock (wall-clock time in production). Older price
  * history and events are pruned on each `indexEvent` call.
  */
 
-const RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const RETENTION_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const PRICE_DEVIATION_WINDOW_SECONDS = 60 * 60; // 1 hour
 
 // Kept a superset of store/interface.ts's PoolEventType/PoolEvent (rather
 // than importing those directly) so this module's own narrower PoolEvent —
@@ -29,7 +35,8 @@ export interface PoolEvent {
   id: string;
   poolId: string;
   type: PoolEventType;
-  timestamp: number;
+  /** Seconds since the Unix epoch. */
+  timestamp: Seconds;
   payload: Record<string, unknown>;
 }
 
@@ -54,7 +61,8 @@ export interface Position {
 
 export interface PricePoint {
   poolId: string;
-  timestamp: number;
+  /** Seconds since the Unix epoch. */
+  timestamp: Seconds;
   price: number;
   feeBps: number;
 }
@@ -64,7 +72,8 @@ export interface HealthAlert {
   metric: string;
   threshold: number;
   currentValue: number;
-  firedAt: number;
+  /** Seconds since the Unix epoch. */
+  firedAt: Seconds;
 }
 
 export interface PoolHealth {
@@ -127,6 +136,8 @@ export class PoolIndexer {
   private priceHistory: PricePoint[] = [];
   private alertConfigs = new Map<string, AlertConfig>();
   private firedAlerts: HealthAlert[] = [];
+
+  constructor(private readonly clock: Clock = systemClock) {}
 
   // ── Event ingestion ─────────────────────────────────────────────────────────
 
@@ -194,7 +205,7 @@ export class PoolIndexer {
     this.priceHistory.push(point);
   }
 
-  getPriceHistory(poolId: string, from?: number, to?: number): PricePoint[] {
+  getPriceHistory(poolId: string, from?: Seconds, to?: Seconds): PricePoint[] {
     return this.priceHistory.filter((p) => {
       if (p.poolId !== poolId) return false;
       if (from !== undefined && p.timestamp < from) return false;
@@ -209,8 +220,8 @@ export class PoolIndexer {
    * until the next point, or until now for the most recent point.
    */
   getTwal(poolId: string, windowSeconds: number): number | null {
-    const now = Date.now();
-    const from = now - windowSeconds * 1000;
+    const now = this.clock();
+    const from = asSeconds(now - windowSeconds);
     const points = this.getPriceHistory(poolId, from, now).sort(
       (a, b) => a.timestamp - b.timestamp,
     );
@@ -313,7 +324,10 @@ export class PoolIndexer {
   // ── Internals ────────────────────────────────────────────────────────────────
 
   private computePriceDeviation(poolId: string, currentPrice: number): number {
-    const history = this.getPriceHistory(poolId, Date.now() - 3_600_000);
+    const history = this.getPriceHistory(
+      poolId,
+      asSeconds(this.clock() - PRICE_DEVIATION_WINDOW_SECONDS),
+    );
     if (history.length < 2) return 0;
     const twap =
       history.reduce((sum, p) => sum + p.price, 0) / history.length;
@@ -345,7 +359,7 @@ export class PoolIndexer {
           metric: cfg.metric,
           threshold,
           currentValue,
-          firedAt: Date.now(),
+          firedAt: this.clock(),
         };
         this.firedAlerts.push(alert);
         // Retain only the last 100 fired alerts.
@@ -357,7 +371,7 @@ export class PoolIndexer {
   }
 
   private pruneOldData(): void {
-    const cutoff = Date.now() - RETENTION_MS;
+    const cutoff = this.clock() - RETENTION_SECONDS;
     this.events = this.events.filter((e) => e.timestamp > cutoff);
     this.priceHistory = this.priceHistory.filter((p) => p.timestamp > cutoff);
     this.firedAlerts = this.firedAlerts.filter((a) => a.firedAt > cutoff);
@@ -367,18 +381,19 @@ export class PoolIndexer {
 export const defaultIndexer = new PoolIndexer();
 
 // Seed demo data for local development
+const now = systemClock();
 defaultIndexer.indexEvent({
   id: "evt-1",
   poolId: "pool-demo",
   type: "swap",
-  timestamp: Date.now() - 60_000,
+  timestamp: asSeconds(now - 60),
   payload: { amountIn: 1000, fee: 3, tokenA: "XLM", tokenB: "USDC", price: 0.12 },
 });
 defaultIndexer.indexEvent({
   id: "evt-2",
   poolId: "pool-demo",
   type: "add_liquidity",
-  timestamp: Date.now() - 120_000,
+  timestamp: asSeconds(now - 120),
   payload: { amountA: 500_000, amountB: 60_000, tokenA: "XLM", tokenB: "USDC" },
 });
 defaultIndexer.upsertPosition({
@@ -390,7 +405,7 @@ defaultIndexer.upsertPosition({
 });
 defaultIndexer.recordPrice({
   poolId: "pool-demo",
-  timestamp: Date.now(),
+  timestamp: now,
   price: 0.12,
   feeBps: 30,
 });
