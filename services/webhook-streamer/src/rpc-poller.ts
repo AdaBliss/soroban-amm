@@ -1,5 +1,6 @@
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
 
+import { findVariant } from "./event-schemas.js";
 import { MemoryStateStore, type CursorState, type StateStore } from "./storage.js";
 import type { PoolEvent, RpcEvent } from "./types.js";
 
@@ -20,6 +21,11 @@ export interface RpcPollerOptions {
   onError?: (err: Error) => void;
   /** Interval between poll ticks, in ms. Defaults to 5000. */
   pollIntervalMs?: number;
+  /**
+   * Contract kind per contract ID (see `parseContractKinds`). Event fields are
+   * only named for contracts listed here; others get the generic shape.
+   */
+  contractKinds?: Record<string, string>;
   /**
    * Where per-contract cursors are persisted. With a durable store the poller
    * resumes from where it stopped after a restart. Defaults to in-memory.
@@ -128,6 +134,7 @@ export class RpcPoller {
   private readonly onError?: (err: Error) => void;
   private readonly onEvent?: (event: PoolEvent) => void | Promise<void>;
   private readonly pollIntervalMs: number;
+  private readonly contractKinds: Record<string, string>;
   private readonly cursors: Map<string, string> = new Map();
   /** Ledger of the last event ingested per contract. */
   private readonly ledgers: Map<string, number> = new Map();
@@ -155,6 +162,7 @@ export class RpcPoller {
     this.logger = options.logger ?? console;
     this.onError = options.onError;
     this.onEvent = onEvent;
+    this.contractKinds = options.contractKinds ?? {};
     this.pollIntervalMs = options.pollIntervalMs ?? 5_000;
     this.store = options.store ?? new MemoryStateStore();
     const saved = this.store.loadCursors();
@@ -371,7 +379,7 @@ export class RpcPoller {
     const events = result.events ?? [];
     const decoded: PoolEvent[] = [];
     for (const raw of events) {
-      const dec = decodeEvent(raw);
+      const dec = decodeEvent(raw, this.contractKinds[raw.contractId ?? contractId]);
       if (dec) {
         decoded.push(dec);
       }
@@ -492,76 +500,26 @@ const TOPIC_NAME_ALIASES: Record<string, string> = {
 };
 
 /**
- * Named positional fields for each event's versioned-envelope payload tuple,
- * keyed by the friendly event name `decodeTopicName` returns. Mirrors the
- * `(symbol, data)` tables documented in contracts/amm-sdk/src/events.rs and
- * the raw emit sites in contracts/amm, contracts/concentrated_liquidity and
- * contracts/staking. A payload whose arity doesn't match its schema (or an
- * event type absent from this table) falls back to the generic `{ value }`
- * shape rather than guessing.
- */
-const EVENT_FIELD_SCHEMAS: Record<string, string[]> = {
-  swap: ["token_in", "amount_in", "token_out", "amount_out", "referrer"],
-  add_liquidity: ["amount_a", "amount_b", "shares_minted"],
-  remove_liquidity: ["provider", "shares_burned", "amount_a", "amount_b"],
-  remove_liquidity_one_sided: [
-    "provider",
-    "shares_burned",
-    "token_out",
-    "total_out",
-  ],
-  flash_loan: ["token", "amount", "fee"],
-  fee_upd: ["new_fee_bps"],
-  flash_fee_upd: ["new_fee_bps"],
-  admin_nominated: ["current_admin", "new_admin"],
-  admin_changed: ["new_admin"],
-  upgraded: ["new_wasm_hash"],
-  protocol_fee_set: ["protocol_fee_bps", "recipient"],
-  circuit_break: ["price_before", "price_after", "deviation_bps", "threshold_bps"],
-  cb_recovered: ["timestamp"],
-  cl_reg: ["token_a", "token_b", "fee_bps", "pool"],
-  route_sel: ["venue", "venue_kind", "amount_in", "amount_out"],
-  route_alt: [
-    "venue",
-    "amount_out",
-    "alt_venue",
-    "alt_venue_kind",
-    "alt_amount_out",
-  ],
-  route_exe: [
-    "trader",
-    "token_in",
-    "token_out",
-    "amount_in",
-    "amount_out",
-    "pool",
-  ],
-  tol_fail: ["pool", "observed_bps", "tolerance_bps"],
-  mint_pos: ["lower_tick", "upper_tick", "liquidity", "amount_a", "amount_b"],
-  mint_1t: ["lower_tick", "upper_tick", "liquidity", "amount_used", "dust"],
-  rng_ord: ["lower_tick", "upper_tick", "liquidity", "is_above"],
-  burn_pos: ["lower_tick", "upper_tick", "liquidity", "amount_a", "amount_b"],
-  coll_fees: ["lower_tick", "upper_tick", "amount_a", "amount_b"],
-  staked: ["staker", "amount", "new_boost", "new_expiry"],
-  unstaked: ["staker", "amount", "rewards"],
-};
-
-/**
  * Decode a single RPC event into a PoolEvent.
  *
  * Topics and values are base64 XDR ScVals. The first topic is the
  * event name; the value is an event envelope. Versioned events carry
  * `(EVENT_SCHEMA_VERSION, payload)` as their data. Events that carry no topic
  * at all are skipped rather than forwarded with an empty type.
+ *
+ * `contractKind` (a directory name under `contracts/`, e.g. `amm`) selects the
+ * field schema. Without it the payload keeps the generic shape, because the
+ * same event name means different things in different contracts.
  */
-export function decodeEvent(raw: RpcEvent): PoolEvent | undefined {
+export function decodeEvent(raw: RpcEvent, contractKind?: string): PoolEvent | undefined {
   const topics = raw.topic ?? [];
   if (topics.length === 0) {
     return undefined;
   }
-  const eventType = decodeTopicName(topics[0]);
-  const { schemaVersion, payload } = decodeValue(raw.value, eventType);
-  return {
+  const rawName = decodeRawTopicName(topics[0]);
+  const eventType = TOPIC_NAME_ALIASES[rawName] ?? rawName;
+  const { schemaVersion, payload } = decodeValue(raw.value, { kind: contractKind, event: rawName });
+  const event: PoolEvent = {
     id: raw.id,
     contractId: raw.contractId ?? "",
     eventType,
@@ -571,23 +529,39 @@ export function decodeEvent(raw: RpcEvent): PoolEvent | undefined {
     timestamp: raw.ledgerClosedAt ?? "",
     txHash: raw.txHash,
   };
+  if (contractKind !== undefined) {
+    event.contractKind = contractKind;
+  }
+  return event;
 }
 
-export function decodeTopicName(topic: string): string {
+/** The on-chain topic name, before `TOPIC_NAME_ALIASES` is applied. */
+function decodeRawTopicName(topic: string): string {
   try {
     // `scValToNative` is untyped, so narrow it here rather than leaking the
     // library's `any` through the rest of the decoding helpers.
     const native = scValToNative(xdr.ScVal.fromXDR(topic, "base64")) as unknown;
-    const name = typeof native === "string" ? native : String(native);
-    return TOPIC_NAME_ALIASES[name] ?? name;
+    return typeof native === "string" ? native : String(native);
   } catch {
     return topic;
   }
 }
 
+export function decodeTopicName(topic: string): string {
+  const name = decodeRawTopicName(topic);
+  return TOPIC_NAME_ALIASES[name] ?? name;
+}
+
+/** Identifies the schema to decode a payload with: contract kind + on-chain event name. */
+export interface DecodeContext {
+  kind?: string;
+  /** The on-chain topic name (before aliasing), e.g. `rm_liq`. */
+  event: string;
+}
+
 export function decodeValue(
   value?: string,
-  eventType?: string
+  ctx?: DecodeContext
 ): {
   schemaVersion: number;
   payload: Record<string, unknown>;
@@ -597,47 +571,73 @@ export function decodeValue(
   }
   try {
     const native = scValToNative(xdr.ScVal.fromXDR(value, "base64")) as unknown;
-    return unwrapVersionedEnvelope(native, eventType);
+    return unwrapVersionedEnvelope(native, ctx);
   } catch {
     return { schemaVersion: 0, payload: { raw: value } };
   }
 }
 
+/** Maps a decoded payload body onto the variant's field names. */
+function nameFields(
+  body: unknown,
+  fields: string[],
+  scalar: boolean
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (scalar) {
+    out[fields[0]] = normalise(body);
+    return out;
+  }
+  const items = body as unknown[];
+  fields.forEach((field, i) => {
+    out[field] = normalise(items[i]);
+  });
+  return out;
+}
+
 export function unwrapVersionedEnvelope(
   native: unknown,
-  eventType?: string
+  ctx?: DecodeContext
 ): {
   schemaVersion: number;
   payload: Record<string, unknown>;
 } {
-  if (Array.isArray(native) && native.length === 2) {
-    const [version, body] = native as [unknown, unknown];
-    const schemaVersion =
-      typeof version === "number" ? version : Number(version);
+  const envelope = Array.isArray(native) && native.length === 2;
+  const [version, body] = envelope ? (native as [unknown, unknown]) : [undefined, undefined];
+  const schemaVersion = typeof version === "number" ? version : Number(version);
+
+  if (ctx?.kind !== undefined) {
+    if (envelope && Number.isInteger(schemaVersion)) {
+      const scalar = !Array.isArray(body);
+      const arity = scalar ? 1 : (body as unknown[]).length;
+      const variant = findVariant(ctx.kind, ctx.event, { version: schemaVersion, arity, scalar });
+      if (variant) {
+        return { schemaVersion, payload: nameFields(body, variant.fields, scalar) };
+      }
+    }
+    // Some contracts publish a payload with no (version, payload) envelope.
+    if (Array.isArray(native)) {
+      const variant = findVariant(ctx.kind, ctx.event, { version: undefined, arity: native.length });
+      if (variant) {
+        return { schemaVersion: 0, payload: nameFields(native, variant.fields, false) };
+      }
+    }
+  }
+
+  if (envelope) {
     return {
       schemaVersion: Number.isFinite(schemaVersion) ? schemaVersion : 0,
-      payload: toPlainObject(body, eventType),
+      payload: toPlainObject(body),
     };
   }
-  return { schemaVersion: 0, payload: toPlainObject(native, eventType) };
+  return { schemaVersion: 0, payload: toPlainObject(native) };
 }
 
-export function toPlainObject(
-  value: unknown,
-  eventType?: string
-): Record<string, unknown> {
+export function toPlainObject(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object") {
     return { value: normalise(value) };
   }
   if (Array.isArray(value)) {
-    const schema = eventType ? EVENT_FIELD_SCHEMAS[eventType] : undefined;
-    if (schema && schema.length === value.length) {
-      const out: Record<string, unknown> = {};
-      schema.forEach((field, i) => {
-        out[field] = normalise(value[i]);
-      });
-      return out;
-    }
     return { value: value.map(normalise) };
   }
   const out: Record<string, unknown> = {};

@@ -246,7 +246,8 @@ test("decodeEvent names a tuple-shaped payload's fields instead of flattening it
     rpcEvent({
       topic: [symbolTopic("rm_liq")],
       value: versionedTuple(1, ["GPROVIDER", 100, 11, 12]),
-    })
+    }),
+    "amm"
   );
   assert.ok(decoded);
   assert.equal(decoded.eventType, "remove_liquidity");
@@ -263,7 +264,8 @@ test("decodeEvent falls back to the generic array shape when a tuple's arity doe
     rpcEvent({
       topic: [symbolTopic("rm_liq")],
       value: versionedTuple(1, ["GPROVIDER", 100]),
-    })
+    }),
+    "amm"
   );
   assert.ok(decoded);
   assert.deepEqual(decoded.payload, { value: ["GPROVIDER", "100"] });

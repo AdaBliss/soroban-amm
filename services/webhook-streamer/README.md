@@ -27,6 +27,7 @@ npm run build && npm start
 | `SOROBAN_RPC_URL` | `https://soroban-testnet.stellar.org`      | Stellar RPC base URL                     |
 | `HORIZON_URL`     | _(deprecated)_                             | Legacy alias for `SOROBAN_RPC_URL`; accepted for one release with a startup deprecation warning. `SOROBAN_RPC_URL` takes precedence. |
 | `CONTRACT_IDS`    | _(empty)_                                  | Comma-separated contract IDs to watch    |
+| `CONTRACT_KINDS`  | _(empty)_                                  | Comma-separated `<contractId>:<kind>` pairs, e.g. `CABC123:amm,CDEF456:concentrated_liquidity`. The kind is a directory under `contracts/`. Event payload fields are only named for contracts listed here (see [Event payload](#event-payload)). An unknown kind stops the service at startup. |
 | `START_LEDGER`    | `1`                                        | Ledger to start `getEvents` from on a contract's first poll (before it has a cursor). A live RPC endpoint only retains a recent window of ledgers, so the default of `1` will be rejected outside local/sandbox testing — set this to a recent ledger before pointing the service at testnet/mainnet. |
 | `POLL_INTERVAL_MS`| `5000`                                     | Polling interval in milliseconds         |
 | `PORT`            | `3001`                                     | Management API HTTP port                 |
@@ -117,6 +118,24 @@ Each webhook receives a `POST` with a JSON body:
   }
 }
 ```
+
+Payload field names depend on which contract emitted the event, because the
+same event name carries different data in different contracts (an AMM `swap`
+has `token_in, amount_in, token_out, amount_out`; a concentrated-liquidity
+`swap` has `zero_for_one, amount_in, amount_out, sqrt_price_x96, tick`). Set
+`CONTRACT_KINDS` so each watched contract gets its own schema, and the event
+carries a `contractKind` field. A contract with no configured kind, an unknown
+event, or a payload whose field count does not match is delivered in the
+generic shape `{ "value": [...] }` rather than with guessed names. The full
+list of events and fields is in
+[`docs/event-schema-versioning.md`](../../docs/event-schema-versioning.md#webhook-field-catalogue-generated).
+
+The schemas live in `src/event-schemas.json`. `scripts/check_event_schemas.mjs`
+(run in CI) compares that file with every `emit_versioned_event!` /
+`events().publish` call in the contracts, so changing a contract's event
+without updating the schema fails the build. Run
+`node scripts/check_event_schemas.mjs --write-docs` after editing the schema to
+refresh the generated catalogue.
 
 `schemaVersion` is the version carried by the contract's versioned event
 envelope (`(EVENT_SCHEMA_VERSION, payload)`); subscribers can use it to tell

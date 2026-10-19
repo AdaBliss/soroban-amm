@@ -1,0 +1,526 @@
+{
+  "$comment": "Source of truth for the fields of every contract event. Keyed by contract kind (the directory under contracts/), on-chain event name and payload arity. scripts/check_event_schemas.mjs fails CI when a contract emit site and this file disagree; docs/event-schema-versioning.md is generated from it.",
+  "format": 1,
+  "kinds": {
+    "amm": {
+      "events": {
+        "lp_locker_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["lp_token", "locker"] }
+        ],
+        "emergency_withdraw": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["to", "reserve_a", "reserve_b"] }
+        ],
+        "force_unlock": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["timestamp"] }
+        ],
+        "cb_config": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["threshold_bps", "cooldown_secs"] }
+        ],
+        "cb_recovered": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["timestamp"] }
+        ],
+        "circuit_break": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["price_before", "price_after", "deviation_bps", "threshold_bps"] }
+        ],
+        "protocol_fee_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["protocol_fee_bps", "recipient"] }
+        ],
+        "lp_rebate_set": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lp_rebate_bps"] }
+        ],
+        "multisig_set": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["quorum"] }
+        ],
+        "ms_proposed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["recipient", "approvals"] }
+        ],
+        "ms_ew": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["to", "reserve_a", "reserve_b"] }
+        ],
+        "fee_upd": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["new_fee_bps"] }
+        ],
+        "flash_fee_upd": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["new_fee_bps"] }
+        ],
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "add_liquidity": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["amount_a", "amount_b", "shares_minted"] }
+        ],
+        "rm_liq": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["provider", "shares_burned", "amount_a", "amount_b"] }
+        ],
+        "rm_liq_1s": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["provider", "shares_burned", "token_out", "total_out"] }
+        ],
+        "swap": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["token_in", "amount_in", "token_out", "amount_out"] },
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["token_in", "actual_received", "token_out", "amount_out", "referrer"] }
+        ],
+        "flash_loan": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["amount_a", "amount_b", "fee_a", "fee_b"] }
+        ],
+        "fot_detected": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["amount_in", "actual_received"] }
+        ]
+      }
+    },
+    "batch_auction": {
+      "events": {
+        "order_submitted": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["id", "amount_in"] }
+        ],
+        "order_cancelled": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id"] }
+        ],
+        "order_expired": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id"] }
+        ],
+        "order_venue_removed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id"] }
+        ],
+        "order_settled": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id", "amount_out"] }
+        ],
+        "order_failed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id"] }
+        ],
+        "settled": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["process_count"] }
+        ],
+        "order_refund_failed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id"] }
+        ],
+        "refund_claimed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["order_id", "amount"] }
+        ],
+        "window_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["batch_window_secs"] }
+        ],
+        "max_orders_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["n"] }
+        ],
+        "factory_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["factory"] }
+        ],
+        "venue_added": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["pool_type"] }
+        ],
+        "venue_removed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": [] }
+        ],
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ]
+      }
+    },
+    "batch_router": {
+      "events": {
+        "batch_op": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["index", "op_kind", "result"] }
+        ],
+        "batch_executed": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["op_count"] }
+        ]
+      }
+    },
+    "cl_position_nft": {
+      "events": {
+        "nft_mint": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["token_id"] }
+        ],
+        "nft_burn": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["token_id"] }
+        ],
+        "approve": [
+          { "version": 1, "topics": 3, "shape": "tuple", "fields": ["token_id"] }
+        ],
+        "approval_for_all": [
+          { "version": 1, "topics": 3, "shape": "tuple", "fields": ["approved"] }
+        ],
+        "transfer": [
+          { "version": 1, "topics": 3, "shape": "tuple", "fields": ["token_id"] }
+        ]
+      }
+    },
+    "concentrated_liquidity": {
+      "events": {
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "mint_pos": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "liquidity", "amount_a", "amount_b"] }
+        ],
+        "mod_pos": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "liquidity_delta", "amount_a", "amount_b"] }
+        ],
+        "mint_1t": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "liquidity", "amount_used", "dust"] }
+        ],
+        "rng_ord": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "liquidity", "is_above"] }
+        ],
+        "burn_pos": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "liquidity", "amount_a", "amount_b"] }
+        ],
+        "coll_fees": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["lower_tick", "upper_tick", "amount_a", "amount_b"] }
+        ],
+        "nft_link": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["token_id", "lower_tick", "upper_tick"] }
+        ],
+        "swap": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["zero_for_one", "amount_in", "amount_out", "sqrt_price_x96", "tick"] }
+        ],
+        "price_upd": [
+          { "version": 1, "topics": 3, "shape": "tuple", "fields": ["amount_in", "amount_out", "sqrt_price_x96", "tick"] }
+        ],
+        "swap_out": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["zero_for_one", "amount_in", "amount_out", "sqrt_price_x96", "tick"] }
+        ]
+      }
+    },
+    "dex_aggregator": {
+      "events": {
+        "pause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "unpause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "cl_reg": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["token_a", "token_b", "fee_bps", "pool"] }
+        ],
+        "route_sel": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["venue", "venue_kind", "amount_in", "amount_out"] }
+        ],
+        "route_alt": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["venue", "amount_out", "alt_venue", "alt_venue_kind", "alt_amount_out"] }
+        ],
+        "route_exe": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["trader", "token_in", "token_out", "amount_in", "amount_out", "pool"] }
+        ],
+        "tol_fail": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["pool", "observed_bps", "tolerance_bps"] }
+        ]
+      }
+    },
+    "factory": {
+      "events": {
+        "pool_created": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["ta", "tb", "pool_addr", "fee_bps", "lp_addr"] }
+        ],
+        "wasm_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["amm_wasm_hash", "token_wasm_hash"] }
+        ],
+        "default_fee_tier_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["fee_tier"] }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "creation_paused": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "creation_unpaused": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "cl_pool_created": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["ta", "tb", "fee_bps", "pool_addr"] }
+        ],
+        "mode_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["enabled"] }
+        ],
+        "creation_fee_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["fee_token", "fee_amount"] }
+        ],
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "treasury_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["treasury", "global_protocol_fee_bps", "updated"] }
+        ],
+        "global_fee_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["protocol_fee_bps", "offset", "updated"] }
+        ],
+        "fees_swept": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["treasury", "token", "offset", "pools_swept", "total_collected"] }
+        ],
+        "creation_fee_paid": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["caller", "fee_amount"] }
+        ]
+      }
+    },
+    "governance": {
+      "events": {
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "proposed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["id", "proposer", "kind", "vote_end", "snapshot_ledger"] }
+        ],
+        "voted": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["proposal_id", "voter", "choice", "voting_power"] }
+        ],
+        "executed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["proposal_id", "kind"] }
+        ],
+        "cancelled": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["proposal_id"] }
+        ],
+        "vote_unlocked": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["proposal_id", "locked"] }
+        ],
+        "delegated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["from", "to"] }
+        ],
+        "undelegated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["from"] }
+        ],
+        "veto_multisig_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["multisig"] }
+        ],
+        "vetoed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["proposal_id", "multisig", "now", "discussion_end"] }
+        ]
+      }
+    },
+    "incentive_campaigns": {
+      "events": {
+        "governance_proposed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["caller", "new_governance"] }
+        ],
+        "governance_transferred": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_governance", "new_governance"] }
+        ],
+        "campaign_created": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["id", "pool", "reward_token", "start_time", "end_time", "reward_rate"] }
+        ],
+        "rate_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["campaign_id", "new_rate"] }
+        ],
+        "leftover_recovered": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["campaign_id", "recipient", "leftover"] }
+        ],
+        "reward_distributed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["campaign_id", "provider", "pending", "dist_id"] }
+        ]
+      }
+    },
+    "oracle_aggregator": {
+      "events": {
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "pause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": [], "versioned": false }
+        ],
+        "unpause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": [], "versioned": false }
+        ],
+        "price": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["token_a", "token_b", "price", "confidence"] }
+        ],
+        "src_wt": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["source_contract", "old_weight", "weight"] }
+        ],
+        "stale_src": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["stale_sources"] }
+        ],
+        "deviant": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["deviant_sources"] }
+        ]
+      }
+    },
+    "pol_vesting": {
+      "events": {
+        "governance_proposed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_governance", "new_governance"] }
+        ],
+        "governance_transferred": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_governance", "new_governance"] }
+        ],
+        "treasury_proposed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["governance", "new_treasury"] }
+        ],
+        "treasury_transferred": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_treasury", "new_treasury"] }
+        ],
+        "vesting_created": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["beneficiary", "schedule_id", "total", "start_ledger", "cliff_ledger", "end_ledger"] }
+        ],
+        "released": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["beneficiary", "schedule_id", "releasable"] }
+        ],
+        "beneficiary_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_beneficiary", "old_schedule_id", "new_beneficiary", "new_schedule_id"] }
+        ],
+        "vesting_revoked": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["beneficiary", "schedule_id", "to_beneficiary", "to_treasury"] }
+        ]
+      }
+    },
+    "reserve_manager": {
+      "events": {
+        "governance_proposed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_governance", "new_governance"] }
+        ],
+        "governance_transferred": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_governance"] }
+        ],
+        "pause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": [] }
+        ],
+        "unpause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": [] }
+        ],
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "new_admin"] }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "res_warn": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["unhealthy"] }
+        ]
+      }
+    },
+    "router": {
+      "events": {
+        "pause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "unpause": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ]
+      }
+    },
+    "staking": {
+      "events": {
+        "lock_extended": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "boost", "expiry"] }
+        ],
+        "rewards_added": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "received"] }
+        ],
+        "paused": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "unpaused": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin"] }
+        ],
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "new_admin"], "versioned": false }
+        ],
+        "admin_changed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"], "versioned": false }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"], "versioned": false }
+        ],
+        "staked": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "amount", "new_boost", "new_expiry"] }
+        ],
+        "unstaked": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "amount", "rewards"] }
+        ],
+        "emergency_mode": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "enabled"] }
+        ],
+        "max_reward_pool_balance_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "max_balance"] }
+        ],
+        "emergency_withdraw": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "staked_amount"] }
+        ],
+        "boost_exp": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "stored_boost", "min_boost"] }
+        ],
+        "rewards_reconciled": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "old_undistributed", "old_owed", "undistributed", "owed"] }
+        ],
+        "rewards_clamped": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_rewards", "pool_balance"] }
+        ],
+        "rewards_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["distributable"] }
+        ],
+        "claimed": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["staker", "pending"] }
+        ]
+      }
+    },
+    "token": {
+      "events": {
+        "admin_nominated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
+        ],
+        "admin_transferred": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_admin"] }
+        ],
+        "upgraded": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "transfer": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["to", "amount"] }
+        ]
+      }
+    },
+    "twal_consumer": {
+      "events": {
+        "pool_add": [
+          { "version": 1, "topics": 1, "shape": "scalar", "fields": ["pool"] }
+        ],
+        "pool_remove": [
+          { "version": 1, "topics": 1, "shape": "scalar", "fields": ["pool"] }
+        ],
+        "snapshot_deleted": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["pool", "ledger_ts"] }
+        ]
+      }
+    },
+    "twap_consumer": {
+      "events": {
+        "snap_del": [
+          { "version": 1, "topics": 2, "shape": "scalar", "fields": ["ledger_ts"] }
+        ],
+        "pruned": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["removed_count", "oldest_remaining_ts"] }
+        ]
+      }
+    },
+    "v2_to_v3_migration": {
+      "events": {
+        "migrated": [
+          { "version": 1, "topics": 2, "shape": "tuple", "fields": ["v2_shares", "deposited_a", "deposited_b", "position_token_id", "leftover_a", "leftover_b"] }
+        ]
+      }
+    }
+  }
+}

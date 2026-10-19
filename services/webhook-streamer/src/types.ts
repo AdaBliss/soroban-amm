@@ -39,6 +39,12 @@ export interface PoolEvent {
    * `contracts/amm-sdk/src/lib.rs`). `undefined` for legacy/unversioned events.
    */
   schemaVersion?: number;
+  /**
+   * Contract kind the event came from (e.g. `amm`, `concentrated_liquidity`),
+   * when configured via `CONTRACT_KINDS`. Payload field names are only
+   * applied when the kind is known.
+   */
+  contractKind?: string;
   payload: Record<string, unknown>;
   /**
    * Hash of the transaction that emitted the event, when the RPC endpoint

@@ -165,6 +165,25 @@ jobs:
             - name: Check @types/node and engines.node match .nvmrc
               run: node scripts/check_node_versions.mjs
 
+    # The webhook-streamer names event fields from event-schemas.json. Fail
+    # when a contract emit site and that file disagree, or when the generated
+    # docs catalogue is stale (#1124).
+    event-schemas:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version-file: .nvmrc
+            - name: Check event schemas against contract emit sites
+              run: node scripts/check_event_schemas.mjs
+            - name: Test the event schema checker
+              run: node --test scripts/check_event_schemas.test.mjs
+
     npm-packages:
         runs-on: ubuntu-latest
         permissions:
