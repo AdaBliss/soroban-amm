@@ -211,27 +211,41 @@ impl LpToken {
         env.storage().instance().set(&DataKey::Symbol, &symbol);
         env.storage().instance().set(&DataKey::Decimals, &decimals);
         env.storage().instance().set(&DataKey::TotalSupply, &0_i128);
+        emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "initialized"),),
+            (admin, name, symbol, decimals)
+        );
         Ok(())
     }
 
     // ── Read ──────────────────────────────────────────────────────────────────
 
     /// Returns the token name.
-    pub fn name(env: Env) -> String {
+    pub fn name(env: Env) -> Result<String, TokenError> {
         Self::extend_ttl(&env);
-        env.storage().instance().get(&DataKey::Name).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Name)
+            .ok_or(TokenError::NotInitialized)
     }
 
     /// Returns the token symbol.
-    pub fn symbol(env: Env) -> String {
+    pub fn symbol(env: Env) -> Result<String, TokenError> {
         Self::extend_ttl(&env);
-        env.storage().instance().get(&DataKey::Symbol).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Symbol)
+            .ok_or(TokenError::NotInitialized)
     }
 
     /// Returns the number of decimal places used to represent token amounts.
-    pub fn decimals(env: Env) -> u32 {
+    pub fn decimals(env: Env) -> Result<u32, TokenError> {
         Self::extend_ttl(&env);
-        env.storage().instance().get(&DataKey::Decimals).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Decimals)
+            .ok_or(TokenError::NotInitialized)
     }
 
     /// Returns the total number of tokens currently in circulation.
@@ -395,7 +409,7 @@ impl LpToken {
     /// Returns `{ amount: 0, live_until_ledger: 0 }` if expired or unset.
     pub fn allowance(env: Env, from: Address, spender: Address) -> AllowanceValue {
         Self::extend_ttl(&env);
-        let key = DataKey::Allowance(from, spender);
+        let key = DataKey::Allowance(from.clone(), spender.clone());
         let val: Option<AllowanceValue> = env.storage().persistent().get(&key);
         match val {
             Some(v) => {
@@ -467,6 +481,10 @@ impl LpToken {
         } else {
             env.storage().persistent().remove(&key);
         }
+        env.events().publish(
+            (Symbol::new(&env, "approve"), from.clone(), spender),
+            (remaining, allowance.live_until_ledger),
+        );
         Self::_transfer(&env, &from, &to, amount)
     }
 
@@ -487,7 +505,7 @@ impl LpToken {
         if amount < 0 {
             return Err(TokenError::InvalidAmount);
         }
-        let key = DataKey::Allowance(from, spender);
+        let key = DataKey::Allowance(from.clone(), spender.clone());
         if amount > 0 {
             if live_until_ledger < env.ledger().sequence() {
                 return Err(TokenError::InvalidExpiry);
@@ -503,6 +521,10 @@ impl LpToken {
         } else {
             env.storage().persistent().remove(&key);
         }
+        env.events().publish(
+            (Symbol::new(&env, "approve"), from, spender),
+            (amount, live_until_ledger),
+        );
         Ok(())
     }
 
@@ -527,6 +549,8 @@ impl LpToken {
         env.storage().persistent().set(&bal_key, &(bal + amount));
         Self::bump_persistent(&env, &bal_key);
         Self::write_checkpoint(&env, &to);
+        env.events()
+            .publish((Symbol::new(&env, "mint"), admin, to), amount);
         Ok(())
     }
 
@@ -555,21 +579,29 @@ impl LpToken {
             .instance()
             .set(&DataKey::TotalSupply, &(supply - amount));
         Self::write_checkpoint(&env, &from);
+        env.events()
+            .publish((Symbol::new(&env, "burn"), from), amount);
         Ok(())
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
     /// Returns the admin address that is authorized to mint and burn tokens.
-    pub fn admin(env: Env) -> Address {
+    pub fn admin(env: Env) -> Result<Address, TokenError> {
         Self::extend_ttl(&env);
-        env.storage().instance().get(&DataKey::Admin).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(TokenError::NotInitialized)
     }
 
     /// Address allowed to lock/unlock balances (governance).
-    pub fn locker(env: Env) -> Address {
+    pub fn locker(env: Env) -> Result<Address, TokenError> {
         Self::extend_ttl(&env);
-        env.storage().instance().get(&DataKey::Locker).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::Locker)
+            .ok_or(TokenError::NotInitialized)
     }
 
     /// Nominate a new admin. The nominee must call `accept_admin` to complete rotation.
@@ -647,6 +679,7 @@ impl LpToken {
             .ok_or(TokenError::NotInitialized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Locker, &locker);
+        emit_versioned_event!(env, (Symbol::new(&env, "set_locker"),), (admin, locker));
         Ok(())
     }
 
@@ -682,19 +715,22 @@ impl LpToken {
 
         let entry_key = DataKey::LockEntry(holder.clone(), locker.clone());
         let entry: i128 = env.storage().persistent().get(&entry_key).unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&entry_key, &(entry + amount));
+        let new_entry = entry + amount;
+        env.storage().persistent().set(&entry_key, &new_entry);
         Self::bump_persistent(&env, &entry_key);
         if entry == 0 {
             Self::add_lock_holder(&env, &holder, &locker);
         }
 
-        let locked_key = DataKey::Locked(holder);
-        env.storage()
-            .persistent()
-            .set(&locked_key, &(locked + amount));
+        let new_locked = locked + amount;
+        let locked_key = DataKey::Locked(holder.clone());
+        env.storage().persistent().set(&locked_key, &new_locked);
         Self::bump_persistent(&env, &locked_key);
+        emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "lock"),),
+            (holder, locker, amount, new_entry, new_locked)
+        );
         Ok(())
     }
 
@@ -747,6 +783,11 @@ impl LpToken {
         if rem_entry == 0 {
             Self::remove_lock_holder(&env, &holder, &locker);
         }
+        emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "unlock"),),
+            (holder, locker, amount, rem_entry, rem_locked)
+        );
         Ok(())
     }
 
@@ -795,14 +836,18 @@ impl LpToken {
             return Err(TokenError::MigrationOverflow);
         }
 
-        env.storage()
-            .persistent()
-            .set(&entry_key, &(existing + amount));
+        let new_entry = existing + amount;
+        env.storage().persistent().set(&entry_key, &new_entry);
         Self::bump_persistent(&env, &entry_key);
         Self::bump_persistent(&env, &DataKey::Locked(holder.clone()));
         if existing == 0 {
             Self::add_lock_holder(&env, &holder, &locker);
         }
+        emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "migrate_legacy_lock"),),
+            (holder, locker, amount, new_entry, grand_total)
+        );
         Ok(())
     }
 
@@ -884,10 +929,9 @@ impl LpToken {
         env.storage().persistent().set(&to_key, &(to_bal + amount));
         Self::bump_persistent(env, &to_key);
         Self::write_checkpoint(env, to);
-        emit_versioned_event!(
-            env,
-            (Symbol::new(env, "transfer"), from.clone()),
-            (to.clone(), amount)
+        env.events().publish(
+            (Symbol::new(env, "transfer"), from.clone(), to.clone()),
+            amount,
         );
         Ok(())
     }
@@ -1804,8 +1848,34 @@ mod tests {
         evt.2.into_val(&ts.env)
     }
 
+    fn last_raw_event(
+        ts: &TestSetup,
+        topic: &str,
+    ) -> (soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val) {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::TryFromVal;
+
+        let wanted = Symbol::new(&ts.env, topic);
+        let evt = ts
+            .env
+            .events()
+            .all()
+            .iter()
+            .rfind(|e| {
+                e.0 == ts.contract_addr
+                    && e.1
+                        .get(0)
+                        .map(|t| Symbol::try_from_val(&ts.env, &t) == Ok(wanted.clone()))
+                        .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("no `{topic}` event found"));
+        (evt.1, evt.2)
+    }
+
     #[test]
     fn test_transfer_emits_versioned_event() {
+        use soroban_sdk::TryFromVal;
+
         let ts = setup();
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
@@ -1814,10 +1884,14 @@ mod tests {
         client.mint(&alice, &1_000_i128);
         client.transfer(&alice, &bob, &250_i128);
 
-        let (version, data): (u32, (Address, i128)) = last_versioned_event(&ts, "transfer");
-        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
-        assert_eq!(version, 1);
-        assert_eq!(data, (bob, 250_i128));
+        let (topics, data) = last_raw_event(&ts, "transfer");
+        assert_eq!(topics.len(), 3);
+        let from: Address = Address::try_from_val(&ts.env, &topics.get(1).unwrap()).unwrap();
+        let to: Address = Address::try_from_val(&ts.env, &topics.get(2).unwrap()).unwrap();
+        let amount: i128 = i128::try_from_val(&ts.env, &data).unwrap();
+        assert_eq!(from, alice);
+        assert_eq!(to, bob);
+        assert_eq!(amount, 250_i128);
     }
 
     #[test]
@@ -2653,3 +2727,6 @@ mod tests {
         assert_eq!(client.balance_at(&alice, &164_u32), 65);
     }
 }
+
+#[cfg(test)]
+mod tests_issue_1112;

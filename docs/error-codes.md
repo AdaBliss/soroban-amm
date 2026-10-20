@@ -174,7 +174,7 @@ Defined in [contracts/concentrated_liquidity/src/lib.rs](../contracts/concentrat
 | 15 | `TickNotInitialized` | A swap crossed into a tick that has no liquidity (never been used by any position). | Ensure positions cover the full swap range, or use a smaller swap amount. |
 | 16 | `InvalidToken` | `token_in` is not `token_a` or `token_b`. | Check `get_info()` for valid token addresses. |
 | 17 | `RangeOrderInRange` | `place_range_order` called when current tick is inside `[lower_tick, upper_tick)`. | Select a tick range strictly above or below current tick. |
-| 18 | `OracleDeviationExceeded` | Spot price deviated beyond configured oracle tolerance during swap. | Wait for oracle price to stabilize or adjust tolerance. |
+| 18 | OracleDeviationExceeded | Spot price deviated beyond configured oracle tolerance during swap, or configured oracle returned non-positive price or confidence 0. | Wait for oracle price and confidence to stabilize or adjust tolerance. |
 | 19 | `NftNotConfigured` | Tokenization attempted when no NFT contract address is set in storage. | Call `set_nft_contract` with a valid position NFT contract. |
 | 20 | `NotNftOwner` | Caller is not current owner of position NFT. | Call method from NFT owner account. |
 | 21 | `NftContractChangeBlocked` | Admin attempted NFT contract change while tokenized positions exist. | Untokenize/burn active position NFTs before changing contract. |

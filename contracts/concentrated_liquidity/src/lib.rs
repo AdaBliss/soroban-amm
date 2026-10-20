@@ -8,7 +8,7 @@ pub mod tick_bitmap;
 use soroban_sdk::token::Client as TokenClient;
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
-    BytesN, Env, Vec,
+    BytesN, Env, Symbol, Vec,
 };
 
 #[cfg(feature = "testutils")]
@@ -172,6 +172,7 @@ pub enum DataKey {
     /// Lets the legacy address-keyed entry points detect a tokenized position
     /// and defer control to the current NFT owner.
     PositionNftToken(Address, i32, i32),
+    TickBitmapWords,
     /// Persistent ring-buffer slot `0..cardinality` holding an [`OracleObservation`] (#1101).
     OracleObservation(u32),
     /// Instance-storage metadata ([`OracleHeader`]) for the oracle ring buffer (#1101).
@@ -395,6 +396,10 @@ impl ConcentratedLiquidity {
         env.storage()
             .instance()
             .set(&DataKey::MaxOracleDeviationBps, &500_i128);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TickBitmapWords, &Vec::<i32>::new(&env));
+        Self::bump_position(&env, &DataKey::TickBitmapWords);
         Ok(())
     }
 
@@ -406,9 +411,19 @@ impl ConcentratedLiquidity {
             return Err(ClError::Unauthorized);
         }
         admin.require_auth();
+        let old_oracle: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleAggregator)
+            .unwrap_or(None);
         env.storage()
             .instance()
             .set(&DataKey::OracleAggregator, &oracle);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "oracle_set"),),
+            (old_oracle, oracle)
+        );
         Ok(())
     }
 
@@ -448,6 +463,11 @@ impl ConcentratedLiquidity {
         }
 
         env.storage().instance().set(&DataKey::PositionNft, &nft);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "position_nft_set"),),
+            (existing_nft, nft)
+        );
         Ok(())
     }
 
@@ -469,18 +489,30 @@ impl ConcentratedLiquidity {
         upper_tick: i32,
     ) -> Option<u64> {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::PositionNftToken(provider, lower_tick, upper_tick))
+        let key = DataKey::PositionNftToken(provider, lower_tick, upper_tick);
+        if let Some(id) = env.storage().persistent().get::<_, u64>(&key) {
+            Self::bump_position(&env, &key);
+            Some(id)
+        } else {
+            env.storage().instance().get(&key)
+        }
     }
 
     /// Resolves an NFT `token_id` back to its `(provider, lower_tick,
     /// upper_tick)` position, or `None` if unknown.
     pub fn position_of_token(env: Env, token_id: u64) -> Option<(Address, i32, i32)> {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::NftTokenToPosition(token_id))
+        let key = DataKey::NftTokenToPosition(token_id);
+        if let Some(pos) = env
+            .storage()
+            .persistent()
+            .get::<_, (Address, i32, i32)>(&key)
+        {
+            Self::bump_position(&env, &key);
+            Some(pos)
+        } else {
+            env.storage().instance().get(&key)
+        }
     }
 
     /// Admin: max spot-vs-oracle deviation in basis points.
@@ -498,9 +530,19 @@ impl ConcentratedLiquidity {
         if !(0..=10_000).contains(&max_deviation_bps) {
             return Err(ClError::InvalidFeeBps);
         }
+        let old_deviation_bps: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxOracleDeviationBps)
+            .unwrap_or(500);
         env.storage()
             .instance()
             .set(&DataKey::MaxOracleDeviationBps, &max_deviation_bps);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "max_oracle_deviation_set"),),
+            (old_deviation_bps, max_deviation_bps)
+        );
         Ok(())
     }
 
@@ -513,6 +555,7 @@ impl ConcentratedLiquidity {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        soroban_amm_sdk::emit_versioned_event!(env, (Symbol::new(&env, "pause"),), (admin,));
         Ok(())
     }
 
@@ -525,6 +568,7 @@ impl ConcentratedLiquidity {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        soroban_amm_sdk::emit_versioned_event!(env, (Symbol::new(&env, "unpause"),), (admin,));
         Ok(())
     }
 
@@ -538,6 +582,11 @@ impl ConcentratedLiquidity {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "admin_nominated"),),
+            (admin, new_admin)
+        );
         Ok(())
     }
 
@@ -555,6 +604,11 @@ impl ConcentratedLiquidity {
         new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "admin_changed"),),
+            (new_admin,)
+        );
         Ok(())
     }
 
@@ -565,6 +619,7 @@ impl ConcentratedLiquidity {
     /// already be uploaded to the network. Pool, tick and position storage is
     /// preserved and `initialize` is not re-run; only the bytecode is replaced.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), ClError> {
+        Self::extend_instance_ttl(&env);
         let stored = Self::read_admin(&env)?;
         if admin != stored {
             return Err(ClError::Unauthorized);
@@ -588,13 +643,18 @@ impl ConcentratedLiquidity {
             return Err(ClError::Unauthorized);
         }
         admin.require_auth();
-        if !(0..=10_000).contains(&bps) {
+        if !(0..10_000).contains(&bps) {
             return Err(ClError::InvalidFeeBps);
         }
         env.storage().instance().set(&DataKey::ProtocolFeeBps, &bps);
         env.storage()
             .instance()
             .set(&DataKey::ProtocolFeeRecipient, &recipient);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "protocol_fee_set"),),
+            (bps, recipient)
+        );
         Ok(())
     }
 
@@ -643,6 +703,11 @@ impl ConcentratedLiquidity {
                 .instance()
                 .set(&DataKey::AccruedProtocolFeeB, &0_i128);
         }
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "protocol_fees_withdrawn"),),
+            (recipient, accrued_a, accrued_b)
+        );
         Ok(())
     }
 
@@ -718,10 +783,14 @@ impl ConcentratedLiquidity {
             .get(&DataKey::MaxOracleDeviationBps)
             .unwrap_or(500);
 
+        if amount_in <= 0 {
+            return Ok(());
+        }
+
         let agg =
             OracleAggregatorClient::new(env, &oracle_addr).get_price_safe(token_in, token_out);
         if agg.confidence == 0 || agg.price <= 0 {
-            return Ok(());
+            return Err(ClError::OracleDeviationExceeded);
         }
 
         let spot_price = amount_out * PRICE_SCALE / amount_in;
@@ -1497,7 +1566,13 @@ impl ConcentratedLiquidity {
         // tag would silently corrupt the fill status of the earlier tranche
         // (issue #595). The provider must withdraw (burn) the old order first.
         let range_order_key = DataKey::RangeOrder(provider.clone(), lower_tick, upper_tick);
-        if env.storage().instance().has(&range_order_key) {
+        let has_range_order = if env.storage().persistent().has(&range_order_key) {
+            Self::bump_position(&env, &range_order_key);
+            true
+        } else {
+            env.storage().instance().has(&range_order_key)
+        };
+        if has_range_order {
             let pos: Option<Position> = env.storage().persistent().get(&DataKey::Position(
                 provider.clone(),
                 lower_tick,
@@ -1508,6 +1583,7 @@ impl ConcentratedLiquidity {
             }
             // Stale tag from before the burn cleanup (legacy state): the
             // position is already closed, so just release it.
+            env.storage().persistent().remove(&range_order_key);
             env.storage().instance().remove(&range_order_key);
         }
 
@@ -1525,10 +1601,9 @@ impl ConcentratedLiquidity {
 
         // Tag the position as a range order and record which side it was
         // placed on, so `check_range_order_filled` knows the fill direction.
-        env.storage().instance().set(
-            &DataKey::RangeOrder(provider.clone(), lower_tick, upper_tick),
-            &is_above,
-        );
+        env.storage().persistent().set(&range_order_key, &is_above);
+        Self::bump_position(&env, &range_order_key);
+        env.storage().instance().remove(&range_order_key);
 
         soroban_amm_sdk::emit_versioned_event!(
             env,
@@ -1566,13 +1641,15 @@ impl ConcentratedLiquidity {
             .ok_or(ClError::PositionNotFound)?;
 
         let range_order_key = DataKey::RangeOrder(provider, lower_tick, upper_tick);
-        if !env.storage().instance().has(&range_order_key) {
-            return Err(ClError::PositionNotFound);
-        }
-        // The original side the order was placed on: `true` for an
-        // above-range order (fills as price rises), `false` for a
-        // below-range order (fills as price falls).
-        let is_above: bool = env.storage().instance().get(&range_order_key).unwrap();
+        let is_above: bool =
+            if let Some(val) = env.storage().persistent().get::<_, bool>(&range_order_key) {
+                Self::bump_position(&env, &range_order_key);
+                val
+            } else if let Some(val) = env.storage().instance().get::<_, bool>(&range_order_key) {
+                val
+            } else {
+                return Err(ClError::PositionNotFound);
+            };
 
         let current_tick: i32 = env
             .storage()
@@ -1776,9 +1853,8 @@ impl ConcentratedLiquidity {
             // Fully closed range order: release its direction tag so the
             // provider can place a fresh order on the same range (issue #595).
             let range_order_key = DataKey::RangeOrder(provider.clone(), lower_tick, upper_tick);
-            if env.storage().instance().has(&range_order_key) {
-                env.storage().instance().remove(&range_order_key);
-            }
+            env.storage().persistent().remove(&range_order_key);
+            env.storage().instance().remove(&range_order_key);
         }
 
         let fg_a: i128 = env
@@ -1899,14 +1975,17 @@ impl ConcentratedLiquidity {
             &lower_tick,
             &upper_tick,
         );
-        env.storage().instance().set(
-            &DataKey::NftTokenToPosition(token_id),
-            &(provider.clone(), lower_tick, upper_tick),
-        );
-        env.storage().instance().set(
-            &DataKey::PositionNftToken(provider.clone(), lower_tick, upper_tick),
-            &token_id,
-        );
+        let rev_key = DataKey::NftTokenToPosition(token_id);
+        let fwd_key = DataKey::PositionNftToken(provider.clone(), lower_tick, upper_tick);
+        env.storage()
+            .persistent()
+            .set(&rev_key, &(provider.clone(), lower_tick, upper_tick));
+        Self::bump_position(env, &rev_key);
+        env.storage().instance().remove(&rev_key);
+
+        env.storage().persistent().set(&fwd_key, &token_id);
+        Self::bump_position(env, &fwd_key);
+        env.storage().instance().remove(&fwd_key);
         soroban_amm_sdk::emit_versioned_event!(
             env,
             (symbol_short!("nft_link"), provider.clone()),
@@ -1922,11 +2001,16 @@ impl ConcentratedLiquidity {
         token_id: u64,
     ) -> Result<(Address, i32, i32), ClError> {
         let nft = Self::nft_addr(env).ok_or(ClError::NftNotConfigured)?;
-        let position: (Address, i32, i32) = env
-            .storage()
-            .instance()
-            .get(&DataKey::NftTokenToPosition(token_id))
-            .ok_or(ClError::PositionNotFound)?;
+        let rev_key = DataKey::NftTokenToPosition(token_id);
+        let position: (Address, i32, i32) =
+            if let Some(pos) = env.storage().persistent().get(&rev_key) {
+                Self::bump_position(env, &rev_key);
+                pos
+            } else if let Some(pos) = env.storage().instance().get(&rev_key) {
+                pos
+            } else {
+                return Err(ClError::PositionNotFound);
+            };
         let owner = PositionNftClient::new(env, &nft).owner_of(&token_id);
         if owner != *caller {
             return Err(ClError::NotNftOwner);
@@ -1943,11 +2027,13 @@ impl ConcentratedLiquidity {
         lower_tick: i32,
         upper_tick: i32,
     ) -> Result<(), ClError> {
-        let token_id: Option<u64> = env.storage().instance().get(&DataKey::PositionNftToken(
-            provider.clone(),
-            lower_tick,
-            upper_tick,
-        ));
+        let fwd_key = DataKey::PositionNftToken(provider.clone(), lower_tick, upper_tick);
+        let token_id: Option<u64> = if let Some(id) = env.storage().persistent().get(&fwd_key) {
+            Self::bump_position(env, &fwd_key);
+            Some(id)
+        } else {
+            env.storage().instance().get(&fwd_key)
+        };
         let Some(token_id) = token_id else {
             return Ok(());
         };
@@ -1973,16 +2059,22 @@ impl ConcentratedLiquidity {
             return;
         }
         let fwd_key = DataKey::PositionNftToken(provider.clone(), lower_tick, upper_tick);
-        let Some(token_id) = env.storage().instance().get::<_, u64>(&fwd_key) else {
+        let token_id: Option<u64> = if let Some(id) = env.storage().persistent().get(&fwd_key) {
+            Some(id)
+        } else {
+            env.storage().instance().get(&fwd_key)
+        };
+        let Some(token_id) = token_id else {
             return;
         };
         if let Some(nft) = Self::nft_addr(env) {
             PositionNftClient::new(env, &nft).burn(&token_id);
         }
+        let rev_key = DataKey::NftTokenToPosition(token_id);
+        env.storage().persistent().remove(&fwd_key);
         env.storage().instance().remove(&fwd_key);
-        env.storage()
-            .instance()
-            .remove(&DataKey::NftTokenToPosition(token_id));
+        env.storage().persistent().remove(&rev_key);
+        env.storage().instance().remove(&rev_key);
     }
 
     pub fn get_position(
@@ -2071,17 +2163,28 @@ impl ConcentratedLiquidity {
     /// Requires no auth.
     pub fn get_tick_info(env: Env, tick: i32) -> Result<TickInfo, ClError> {
         Self::extend_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&DataKey::Tick(tick))
-            .ok_or(ClError::TickNotInitialized)
+        let key = DataKey::Tick(tick);
+        if let Some(info) = env.storage().persistent().get(&key) {
+            Self::bump_position(&env, &key);
+            Ok(info)
+        } else if let Some(info) = env.storage().instance().get(&key) {
+            Ok(info)
+        } else {
+            Err(ClError::TickNotInitialized)
+        }
     }
 
     /// Returns `true` when the tick currently has non-zero gross liquidity.
     /// Requires no auth.
     pub fn is_tick_initialized(env: Env, tick: i32) -> bool {
         Self::extend_instance_ttl(&env);
-        env.storage().instance().has(&DataKey::Tick(tick))
+        let key = DataKey::Tick(tick);
+        if env.storage().persistent().has(&key) {
+            Self::bump_position(&env, &key);
+            true
+        } else {
+            env.storage().instance().has(&key)
+        }
     }
 
     // ── Issue #218: public tick-bitmap helpers ────────────────────────────────
@@ -2273,25 +2376,11 @@ impl ConcentratedLiquidity {
             };
 
             let next_price_x96 = Self::tick_to_sqrt_price_x96(next_tick);
-
-            let mut target_price_x96 = next_price_x96;
-            let mut hit_limit = false;
-
-            // `sqrt_price_limit_x96 == 0` is the documented "no limit" sentinel.
-            // Skip the comparison entirely in that case — for `zero_for_one = false`
-            // every price is `>= 0` (u128), which would otherwise force the target
-            // price to 0 on the very first iteration (issue #492).
-            if sqrt_price_limit_x96 != 0 {
-                if zero_for_one {
-                    if next_price_x96 <= sqrt_price_limit_x96 {
-                        target_price_x96 = sqrt_price_limit_x96;
-                        hit_limit = true;
-                    }
-                } else if next_price_x96 >= sqrt_price_limit_x96 {
-                    target_price_x96 = sqrt_price_limit_x96;
-                    hit_limit = true;
-                }
-            }
+            let (target_price_x96, hit_limit) = Self::step_target_price_and_limit(
+                next_price_x96,
+                sqrt_price_limit_x96,
+                zero_for_one,
+            );
 
             let amount_in_after_fee = amount_remaining * (10000 - fee_bps) / 10000;
 
@@ -2776,18 +2865,11 @@ impl ConcentratedLiquidity {
             };
 
             let next_price_x96 = Self::tick_to_sqrt_price_x96(next_tick);
-
-            let mut target_price_x96 = next_price_x96;
-            let mut hit_limit = false;
-            if zero_for_one {
-                if next_price_x96 <= sqrt_price_limit_x96 {
-                    target_price_x96 = sqrt_price_limit_x96;
-                    hit_limit = true;
-                }
-            } else if next_price_x96 >= sqrt_price_limit_x96 {
-                target_price_x96 = sqrt_price_limit_x96;
-                hit_limit = true;
-            }
+            let (target_price_x96, hit_limit) = Self::step_target_price_and_limit(
+                next_price_x96,
+                sqrt_price_limit_x96,
+                zero_for_one,
+            );
 
             let (amount_in_step_after_fee, amount_out_step) = if active_liquidity == 0 {
                 (0, 0)
@@ -3981,97 +4063,223 @@ impl ConcentratedLiquidity {
         (oa, ob)
     }
 
-    fn flip_tick(env: &Env, tick: i32) {
-        let word_pos = tick.div_euclid(128);
-        let bit_pos = tick.rem_euclid(128) as u32;
+    fn get_bitmap_word(env: &Env, word_pos: i32) -> u128 {
         let key = DataKey::TickBitmap(word_pos);
-        let mut word: u128 = env.storage().instance().get(&key).unwrap_or(0);
-        word ^= 1 << bit_pos;
-        if word == 0 {
-            env.storage().instance().remove(&key);
+        if let Some(word) = env.storage().persistent().get::<_, u128>(&key) {
+            Self::bump_position(env, &key);
+            word
         } else {
-            env.storage().instance().set(&key, &word);
+            env.storage().instance().get::<_, u128>(&key).unwrap_or(0)
         }
     }
 
-    fn next_initialized_tick(env: &Env, tick: i32, zero_for_one: bool) -> Option<i32> {
-        if zero_for_one {
-            let mut word_pos = tick.div_euclid(128);
-            let bit_pos = tick.rem_euclid(128) as u32;
-            let key = DataKey::TickBitmap(word_pos);
-            if let Some(word) = env.storage().instance().get::<_, u128>(&key) {
-                let mask = if bit_pos == 127 {
-                    u128::MAX
-                } else {
-                    (1 << (bit_pos + 1)) - 1
-                };
-                let masked = word & mask;
-                if masked != 0 {
-                    let bit = 127 - masked.leading_zeros();
-                    return Some(word_pos * 128 + bit as i32);
-                }
+    fn set_bitmap_word(env: &Env, word_pos: i32, word: u128) {
+        let key = DataKey::TickBitmap(word_pos);
+        if word == 0 {
+            env.storage().persistent().remove(&key);
+            env.storage().instance().remove(&key);
+            Self::remove_bitmap_word_index(env, word_pos);
+        } else {
+            env.storage().persistent().set(&key, &word);
+            Self::bump_position(env, &key);
+            env.storage().instance().remove(&key);
+            Self::add_bitmap_word_index(env, word_pos);
+        }
+    }
+
+    fn add_bitmap_word_index(env: &Env, word_pos: i32) {
+        let mut words: Vec<i32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TickBitmapWords)
+            .unwrap_or_else(|| Vec::new(env));
+        let mut low = 0u32;
+        let mut high = words.len();
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let val = words.get(mid).unwrap();
+            if val == word_pos {
+                return;
+            } else if val < word_pos {
+                low = mid + 1;
+            } else {
+                high = mid;
             }
-            let min_word = MIN_TICK.div_euclid(128);
-            word_pos -= 1;
-            while word_pos >= min_word {
-                let key = DataKey::TickBitmap(word_pos);
-                if let Some(word) = env.storage().instance().get::<_, u128>(&key) {
-                    if word != 0 {
-                        let bit = 127 - word.leading_zeros();
-                        return Some(word_pos * 128 + bit as i32);
+        }
+        words.insert(low, word_pos);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TickBitmapWords, &words);
+        Self::bump_position(env, &DataKey::TickBitmapWords);
+    }
+
+    fn remove_bitmap_word_index(env: &Env, word_pos: i32) {
+        let mut words: Vec<i32> = match env.storage().persistent().get(&DataKey::TickBitmapWords) {
+            Some(w) => w,
+            None => return,
+        };
+        let mut low = 0u32;
+        let mut high = words.len();
+        let mut found = None;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let val = words.get(mid).unwrap();
+            if val == word_pos {
+                found = Some(mid);
+                break;
+            } else if val < word_pos {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        if let Some(idx) = found {
+            words.remove(idx);
+            env.storage()
+                .persistent()
+                .set(&DataKey::TickBitmapWords, &words);
+            Self::bump_position(env, &DataKey::TickBitmapWords);
+        }
+    }
+
+    fn flip_tick(env: &Env, tick: i32) {
+        let word_pos = tick.div_euclid(128);
+        let bit_pos = tick.rem_euclid(128) as u32;
+        let word = Self::get_bitmap_word(env, word_pos);
+        let new_word = word ^ (1u128 << bit_pos);
+        Self::set_bitmap_word(env, word_pos, new_word);
+    }
+
+    fn next_initialized_tick(env: &Env, tick: i32, zero_for_one: bool) -> Option<i32> {
+        let words_opt: Option<Vec<i32>> = env.storage().persistent().get(&DataKey::TickBitmapWords);
+        if words_opt.is_some() {
+            Self::bump_position(env, &DataKey::TickBitmapWords);
+        }
+
+        if zero_for_one {
+            let word_pos = tick.div_euclid(128);
+            let bit_pos = tick.rem_euclid(128) as u32;
+            let word = Self::get_bitmap_word(env, word_pos);
+            let mask = if bit_pos == 127 {
+                u128::MAX
+            } else {
+                (1u128 << (bit_pos + 1)) - 1
+            };
+            let masked = word & mask;
+            if masked != 0 {
+                let bit = 127 - masked.leading_zeros();
+                return Some(word_pos * 128 + bit as i32);
+            }
+
+            // O(1)-O(log N) jump using indexed words in persistent storage
+            if let Some(ref words) = words_opt {
+                let mut low = 0u32;
+                let mut high = words.len();
+                while low < high {
+                    let mid = low + (high - low) / 2;
+                    let val = words.get(mid).unwrap();
+                    if val < word_pos {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
                     }
                 }
-                word_pos -= 1;
+                if low > 0 {
+                    let next_word_pos = words.get(low - 1).unwrap();
+                    let next_word = Self::get_bitmap_word(env, next_word_pos);
+                    if next_word != 0 {
+                        let bit = 127 - next_word.leading_zeros();
+                        return Some(next_word_pos * 128 + bit as i32);
+                    }
+                }
             }
             None
         } else {
             let start_tick = tick + 1;
-            let mut word_pos = start_tick.div_euclid(128);
+            let word_pos = start_tick.div_euclid(128);
             let bit_pos = start_tick.rem_euclid(128) as u32;
-            let key = DataKey::TickBitmap(word_pos);
-            if let Some(word) = env.storage().instance().get::<_, u128>(&key) {
-                let mask = u128::MAX << bit_pos;
-                let masked = word & mask;
-                if masked != 0 {
-                    let bit = masked.trailing_zeros();
-                    return Some(word_pos * 128 + bit as i32);
-                }
+            let word = Self::get_bitmap_word(env, word_pos);
+            let mask = u128::MAX.wrapping_shl(bit_pos);
+            let masked = word & mask;
+            if masked != 0 {
+                let bit = masked.trailing_zeros();
+                return Some(word_pos * 128 + bit as i32);
             }
-            let max_word = MAX_TICK.div_euclid(128);
-            word_pos += 1;
-            while word_pos <= max_word {
-                let key = DataKey::TickBitmap(word_pos);
-                if let Some(word) = env.storage().instance().get::<_, u128>(&key) {
-                    if word != 0 {
-                        let bit = word.trailing_zeros();
-                        return Some(word_pos * 128 + bit as i32);
+
+            if let Some(ref words) = words_opt {
+                let mut low = 0u32;
+                let mut high = words.len();
+                while low < high {
+                    let mid = low + (high - low) / 2;
+                    let val = words.get(mid).unwrap();
+                    if val <= word_pos {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
                     }
                 }
-                word_pos += 1;
+                if low < words.len() {
+                    let next_word_pos = words.get(low).unwrap();
+                    let next_word = Self::get_bitmap_word(env, next_word_pos);
+                    if next_word != 0 {
+                        let bit = next_word.trailing_zeros();
+                        return Some(next_word_pos * 128 + bit as i32);
+                    }
+                }
             }
             None
         }
     }
 
     fn get_tick(env: &Env, tick: i32) -> TickInfo {
-        env.storage()
-            .instance()
-            .get(&DataKey::Tick(tick))
-            .unwrap_or(TickInfo {
+        let key = DataKey::Tick(tick);
+        if let Some(info) = env.storage().persistent().get(&key) {
+            Self::bump_position(env, &key);
+            info
+        } else if let Some(info) = env.storage().instance().get(&key) {
+            info
+        } else {
+            TickInfo {
                 liquidity_net: 0,
                 liquidity_gross: 0,
                 fee_growth_outside_a: 0,
                 fee_growth_outside_b: 0,
                 initialized: false,
-            })
+            }
+        }
     }
 
     fn set_tick(env: &Env, tick: i32, info: &TickInfo) {
+        let key = DataKey::Tick(tick);
         if info.liquidity_gross == 0 {
-            env.storage().instance().remove(&DataKey::Tick(tick));
+            env.storage().persistent().remove(&key);
+            env.storage().instance().remove(&key);
         } else {
-            env.storage().instance().set(&DataKey::Tick(tick), info);
+            env.storage().persistent().set(&key, info);
+            Self::bump_position(env, &key);
+            env.storage().instance().remove(&key);
         }
+    }
+
+    fn step_target_price_and_limit(
+        next_price_x96: u128,
+        sqrt_price_limit_x96: u128,
+        zero_for_one: bool,
+    ) -> (u128, bool) {
+        let mut target_price_x96 = next_price_x96;
+        let mut hit_limit = false;
+        if sqrt_price_limit_x96 != 0 {
+            if zero_for_one {
+                if next_price_x96 <= sqrt_price_limit_x96 {
+                    target_price_x96 = sqrt_price_limit_x96;
+                    hit_limit = true;
+                }
+            } else if next_price_x96 >= sqrt_price_limit_x96 {
+                target_price_x96 = sqrt_price_limit_x96;
+                hit_limit = true;
+            }
+        }
+        (target_price_x96, hit_limit)
     }
 
     fn update_tick(
@@ -4108,7 +4316,9 @@ impl ConcentratedLiquidity {
 
         if info.liquidity_gross == 0 {
             Self::flip_tick(env, tick);
-            env.storage().instance().remove(&DataKey::Tick(tick));
+            let key = DataKey::Tick(tick);
+            env.storage().persistent().remove(&key);
+            env.storage().instance().remove(&key);
         } else {
             Self::set_tick(env, tick, &info);
         }
@@ -4211,25 +4421,11 @@ impl ConcentratedLiquidity {
             };
 
             let next_price_x96 = Self::tick_to_sqrt_price_x96(next_tick);
-
-            let mut target_price_x96 = next_price_x96;
-            let mut hit_limit = false;
-
-            // `sqrt_price_limit_x96 == 0` is the documented "no limit" sentinel.
-            // Skip the comparison entirely in that case — for `zero_for_one = false`
-            // every price is `>= 0` (u128), which would otherwise force the target
-            // price to 0 on the very first iteration (issue #492).
-            if sqrt_price_limit_x96 != 0 {
-                if zero_for_one {
-                    if next_price_x96 <= sqrt_price_limit_x96 {
-                        target_price_x96 = sqrt_price_limit_x96;
-                        hit_limit = true;
-                    }
-                } else if next_price_x96 >= sqrt_price_limit_x96 {
-                    target_price_x96 = sqrt_price_limit_x96;
-                    hit_limit = true;
-                }
-            }
+            let (target_price_x96, hit_limit) = Self::step_target_price_and_limit(
+                next_price_x96,
+                sqrt_price_limit_x96,
+                zero_for_one,
+            );
 
             let amount_in_after_fee = amount_remaining * (10000 - fee_bps) / 10000;
 
@@ -10899,6 +11095,12 @@ mod test_range_order_fill_status {
 }
 
 #[cfg(test)]
+mod tests_issue_1100;
+#[cfg(test)]
+mod tests_issue_1102;
+#[cfg(test)]
+mod tests_issue_1103;
+
 mod test_issue_1099_tick_sqrt_price_precision {
     extern crate std;
     use super::*;

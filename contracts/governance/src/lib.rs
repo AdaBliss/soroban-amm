@@ -790,7 +790,7 @@ impl Governance {
                 }
             }
             ProposalKind::UpdateClProtocolFee(params) => {
-                if !(0..=MAX_BPS).contains(&params.bps) {
+                if !(0..MAX_BPS).contains(&params.bps) {
                     return Err(GovernanceError::InvalidFeeBps);
                 }
             }
@@ -3206,9 +3206,19 @@ mod tests {
         let r = gov.try_propose(
             &lp1,
             &ProposalKind::UpdateClProtocolFee(UpdateClProtocolFeeParams {
-                cl_pool: cl_addr,
+                cl_pool: cl_addr.clone(),
                 recipient: Address::generate(&env),
                 bps: -1,
+            }),
+        );
+        assert!(r.is_err());
+
+        let r = gov.try_propose(
+            &lp1,
+            &ProposalKind::UpdateClProtocolFee(UpdateClProtocolFeeParams {
+                cl_pool: cl_addr,
+                recipient: Address::generate(&env),
+                bps: 10_000,
             }),
         );
         assert!(r.is_err());

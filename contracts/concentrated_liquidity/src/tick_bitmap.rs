@@ -12,14 +12,38 @@ use soroban_sdk::Env;
 
 use crate::DataKey;
 
+fn get_word(env: &Env, key: &DataKey) -> u128 {
+    if let Some(w) = env.storage().persistent().get(key) {
+        env.storage().persistent().extend_ttl(
+            key,
+            crate::POSITION_TTL_THRESHOLD,
+            crate::POSITION_BUMP_TO,
+        );
+        w
+    } else {
+        env.storage().instance().get(key).unwrap_or(0)
+    }
+}
+
 /// Flip the bit for `tick` in its bitmap word.
 /// Called on first reference (mint) and when liquidity_gross reaches zero (burn).
 pub fn flip_tick(env: &Env, tick: i32) {
     let (word_pos, bit_pos) = tick_position(tick);
     let key = DataKey::TickBitmap(word_pos);
-    let word: u128 = env.storage().instance().get(&key).unwrap_or(0);
+    let word = get_word(env, &key);
     let toggled = word ^ (1u128 << bit_pos);
-    env.storage().instance().set(&key, &toggled);
+    if toggled == 0 {
+        env.storage().persistent().remove(&key);
+        env.storage().instance().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &toggled);
+        env.storage().persistent().extend_ttl(
+            &key,
+            crate::POSITION_TTL_THRESHOLD,
+            crate::POSITION_BUMP_TO,
+        );
+        env.storage().instance().remove(&key);
+    }
 }
 
 /// Find the next initialized tick within the same word as `tick`.
@@ -33,7 +57,7 @@ pub fn flip_tick(env: &Env, tick: i32) {
 pub fn next_initialized_tick_within_word(env: &Env, tick: i32, lte: bool) -> (i32, bool) {
     let (word_pos, bit_pos) = tick_position(tick);
     let key = DataKey::TickBitmap(word_pos);
-    let word: u128 = env.storage().instance().get(&key).unwrap_or(0);
+    let word = get_word(env, &key);
 
     if lte {
         // Mask out all bits above bit_pos, then find the highest set bit.

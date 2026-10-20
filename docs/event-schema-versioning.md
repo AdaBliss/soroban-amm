@@ -638,6 +638,15 @@ count. Events marked unversioned carry their payload without the
 | `swap` | 2 | `zero_for_one`, `amount_in`, `amount_out`, `sqrt_price_x96`, `tick` | v1 |
 | `price_upd` | 3 | `amount_in`, `amount_out`, `sqrt_price_x96`, `tick` | v1 |
 | `swap_out` | 2 | `zero_for_one`, `amount_in`, `amount_out`, `sqrt_price_x96`, `tick` | v1 |
+| `oracle_set` | 1 | `old_oracle`, `new_oracle` | v1 |
+| `position_nft_set` | 1 | `old_position_nft`, `new_position_nft` | v1 |
+| `max_oracle_deviation_set` | 1 | `old_deviation_bps`, `new_deviation_bps` | v1 |
+| `pause` | 1 | `admin` | v1 |
+| `unpause` | 1 | `admin` | v1 |
+| `admin_nominated` | 1 | `admin`, `new_admin` | v1 |
+| `admin_changed` | 1 | `new_admin` | v1 |
+| `protocol_fee_set` | 1 | `bps`, `recipient` | v1 |
+| `protocol_fees_withdrawn` | 1 | `recipient`, `accrued_a`, `accrued_b` | v1 |
 
 ### `dex_aggregator`
 
@@ -781,7 +790,15 @@ count. Events marked unversioned carry their payload without the
 | `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
 | `admin_transferred` | 1 | `new_admin` | v1 |
 | `upgraded` | 1 | `new_wasm_hash` | v1 |
-| `transfer` | 2 | `to`, `amount` | v1 |
+| `transfer` | 3 | `amount` | unversioned |
+| `initialized` | 1 | `admin`, `name`, `symbol`, `decimals` | v1 |
+| `approve` | 3 | `amount`, `live_until_ledger` | unversioned |
+| `mint` | 3 | `amount` | unversioned |
+| `burn` | 2 | `amount` | unversioned |
+| `set_locker` | 1 | `admin`, `locker` | v1 |
+| `lock` | 1 | `holder`, `locker`, `amount`, `new_entry`, `new_locked` | v1 |
+| `unlock` | 1 | `holder`, `locker`, `amount`, `new_entry`, `new_locked` | v1 |
+| `migrate_legacy_lock` | 1 | `holder`, `locker`, `amount`, `new_entry`, `grand_total` | v1 |
 
 ### `twal_consumer`
 
