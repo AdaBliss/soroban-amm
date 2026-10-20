@@ -244,6 +244,29 @@ pub(crate) fn setup_pool(fee_bps: i128) -> TestSetup {
     }
 }
 
+pub(crate) fn assert_reserves_match_balances(amm: &AmmPoolClient, env: &Env) {
+    let info = amm.get_info();
+    let (accrued_a, accrued_b) = amm.get_accrued_fees();
+    let balance_a = StellarTokenClient::new(env, &info.token_a).balance(&amm.address);
+    let balance_b = StellarTokenClient::new(env, &info.token_b).balance(&amm.address);
+    assert_eq!(
+        info.reserve_a + accrued_a,
+        balance_a,
+        "token_a balance invariant violated: reserve_a ({}) + accrued_a ({}) != balance_a ({})",
+        info.reserve_a,
+        accrued_a,
+        balance_a
+    );
+    assert_eq!(
+        info.reserve_b + accrued_b,
+        balance_b,
+        "token_b balance invariant violated: reserve_b ({}) + accrued_b ({}) != balance_b ({})",
+        info.reserve_b,
+        accrued_b,
+        balance_b
+    );
+}
+
 // ── Call builders ─────────────────────────────────────────────────────────────
 //
 // Each builder captures the required arguments and applies sensible defaults
@@ -2895,4 +2918,379 @@ fn test_pre_init_calls_return_not_initialized() {
         client.try_shares_of(&user),
         Err(Ok(AmmError::NotInitialized))
     );
+}
+
+// ── Issue #1093 Tests: remove_liquidity_one_sided reserve integrity ─────────
+
+#[test]
+fn test_remove_liquidity_one_sided_token_b_regression_1093() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &1_000_000_i128);
+    tb_sac.mint(&seed_lp, &4_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 1_000_000, 4_000_000).execute();
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &4_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 1_000_000, 4_000_000).execute();
+
+    amm.remove_liquidity_one_sided(&provider, &(shares / 10), &ts.tb_addr, &0_i128, &u64::MAX);
+
+    assert_reserves_match_balances(&amm, env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_8_ratios_exact_invariants() {
+    let ratios: [(i128, i128); 4] = [
+        (1_000_000, 1_000_000),
+        (1_000_000, 4_000_000),
+        (4_000_000, 1_000_000),
+        (10_000, 10_000_000),
+    ];
+
+    for (res_a, res_b) in ratios {
+        for token_side in [0u8, 1u8] {
+            let ts = setup_pool(30);
+            let env = &ts.env;
+            let amm = AmmPoolClient::new(env, &ts.amm_addr);
+            let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+            let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+            let seed_lp = Address::generate(env);
+            ta_sac.mint(&seed_lp, &(res_a * 2));
+            tb_sac.mint(&seed_lp, &(res_b * 2));
+            AddLiquidity::new(&amm, &seed_lp, res_a * 2, res_b * 2).execute();
+
+            let provider = Address::generate(env);
+            ta_sac.mint(&provider, &res_a);
+            tb_sac.mint(&provider, &res_b);
+            let shares = AddLiquidity::new(&amm, &provider, res_a, res_b).execute();
+
+            let token_out = if token_side == 0 {
+                ts.ta_addr.clone()
+            } else {
+                ts.tb_addr.clone()
+            };
+
+            amm.remove_liquidity_one_sided(
+                &provider,
+                &(shares / 4),
+                &token_out,
+                &0_i128,
+                &u64::MAX,
+            );
+
+            assert_reserves_match_balances(&amm, env);
+        }
+    }
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_parity_token_a() {
+    let ts1 = setup_pool(30);
+    let amm1 = AmmPoolClient::new(&ts1.env, &ts1.amm_addr);
+    let ta_sac1 = StellarAssetClient::new(&ts1.env, &ts1.ta_addr);
+    let tb_sac1 = StellarAssetClient::new(&ts1.env, &ts1.tb_addr);
+    let ta_client1 = StellarTokenClient::new(&ts1.env, &ts1.ta_addr);
+
+    let seed_lp1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&seed_lp1, &3_000_000_i128);
+    tb_sac1.mint(&seed_lp1, &6_000_000_i128);
+    AddLiquidity::new(&amm1, &seed_lp1, 3_000_000, 6_000_000).execute();
+
+    let p1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&p1, &1_000_000_i128);
+    tb_sac1.mint(&p1, &2_000_000_i128);
+    let shares1 = AddLiquidity::new(&amm1, &p1, 1_000_000, 2_000_000).execute();
+
+    let ta_before1 = ta_client1.balance(&p1);
+    let received_one_sided =
+        amm1.remove_liquidity_one_sided(&p1, &(shares1 / 2), &ts1.ta_addr, &0_i128, &u64::MAX);
+    assert_eq!(ta_client1.balance(&p1) - ta_before1, received_one_sided);
+
+    // Manual remove + swap on identical pool
+    let ts2 = setup_pool(30);
+    let amm2 = AmmPoolClient::new(&ts2.env, &ts2.amm_addr);
+    let ta_sac2 = StellarAssetClient::new(&ts2.env, &ts2.ta_addr);
+    let tb_sac2 = StellarAssetClient::new(&ts2.env, &ts2.tb_addr);
+
+    let seed_lp2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&seed_lp2, &3_000_000_i128);
+    tb_sac2.mint(&seed_lp2, &6_000_000_i128);
+    AddLiquidity::new(&amm2, &seed_lp2, 3_000_000, 6_000_000).execute();
+
+    let p2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&p2, &1_000_000_i128);
+    tb_sac2.mint(&p2, &2_000_000_i128);
+    let shares2 = AddLiquidity::new(&amm2, &p2, 1_000_000, 2_000_000).execute();
+
+    let (withdrawn_a, withdrawn_b) =
+        amm2.remove_liquidity(&p2, &(shares2 / 2), &0_i128, &0_i128, &u64::MAX);
+    let swapped_a = amm2.swap(&p2, &ts2.tb_addr, &withdrawn_b, &0_i128, &u64::MAX);
+    let manual_total_a = withdrawn_a + swapped_a;
+
+    let diff = (received_one_sided - manual_total_a).abs();
+    assert!(
+        diff <= 1,
+        "tolerance 1 stroop: one_sided={received_one_sided}, manual={manual_total_a}"
+    );
+    assert_reserves_match_balances(&amm1, &ts1.env);
+    assert_reserves_match_balances(&amm2, &ts2.env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_parity_token_b() {
+    let ts1 = setup_pool(30);
+    let amm1 = AmmPoolClient::new(&ts1.env, &ts1.amm_addr);
+    let ta_sac1 = StellarAssetClient::new(&ts1.env, &ts1.ta_addr);
+    let tb_sac1 = StellarAssetClient::new(&ts1.env, &ts1.tb_addr);
+    let tb_client1 = StellarTokenClient::new(&ts1.env, &ts1.tb_addr);
+
+    let seed_lp1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&seed_lp1, &3_000_000_i128);
+    tb_sac1.mint(&seed_lp1, &6_000_000_i128);
+    AddLiquidity::new(&amm1, &seed_lp1, 3_000_000, 6_000_000).execute();
+
+    let p1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&p1, &1_000_000_i128);
+    tb_sac1.mint(&p1, &2_000_000_i128);
+    let shares1 = AddLiquidity::new(&amm1, &p1, 1_000_000, 2_000_000).execute();
+
+    let tb_before1 = tb_client1.balance(&p1);
+    let received_one_sided =
+        amm1.remove_liquidity_one_sided(&p1, &(shares1 / 2), &ts1.tb_addr, &0_i128, &u64::MAX);
+    assert_eq!(tb_client1.balance(&p1) - tb_before1, received_one_sided);
+
+    // Manual remove + swap on identical pool
+    let ts2 = setup_pool(30);
+    let amm2 = AmmPoolClient::new(&ts2.env, &ts2.amm_addr);
+    let ta_sac2 = StellarAssetClient::new(&ts2.env, &ts2.ta_addr);
+    let tb_sac2 = StellarAssetClient::new(&ts2.env, &ts2.tb_addr);
+
+    let seed_lp2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&seed_lp2, &3_000_000_i128);
+    tb_sac2.mint(&seed_lp2, &6_000_000_i128);
+    AddLiquidity::new(&amm2, &seed_lp2, 3_000_000, 6_000_000).execute();
+
+    let p2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&p2, &1_000_000_i128);
+    tb_sac2.mint(&p2, &2_000_000_i128);
+    let shares2 = AddLiquidity::new(&amm2, &p2, 1_000_000, 2_000_000).execute();
+
+    let (withdrawn_a, withdrawn_b) =
+        amm2.remove_liquidity(&p2, &(shares2 / 2), &0_i128, &0_i128, &u64::MAX);
+    let swapped_b = amm2.swap(&p2, &ts2.ta_addr, &withdrawn_a, &0_i128, &u64::MAX);
+    let manual_total_b = withdrawn_b + swapped_b;
+
+    let diff = (received_one_sided - manual_total_b).abs();
+    assert!(
+        diff <= 1,
+        "tolerance 1 stroop: one_sided={received_one_sided}, manual={manual_total_b}"
+    );
+    assert_reserves_match_balances(&amm1, &ts1.env);
+    assert_reserves_match_balances(&amm2, &ts2.env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_protocol_fee_accrual_token_b_out() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_protocol_fee(&ts.admin, &ts.admin, &10_i128);
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &2_000_000_i128);
+    tb_sac.mint(&seed_lp, &4_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 2_000_000, 4_000_000).execute();
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &2_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 1_000_000, 2_000_000).execute();
+
+    // token_out is token_b -> unwanted token_a is swapped in. Protocol fee should accrue in token_a!
+    amm.remove_liquidity_one_sided(&provider, &(shares / 2), &ts.tb_addr, &0_i128, &u64::MAX);
+
+    let (fee_a, fee_b) = amm.get_accrued_fees();
+    assert!(fee_a > 0, "protocol fee must accrue to token_a");
+    assert_eq!(fee_b, 0, "no protocol fee should accrue to token_b");
+
+    assert_reserves_match_balances(&amm, env);
+
+    amm.withdraw_protocol_fees();
+    let info = amm.get_info();
+    let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&ts.amm_addr);
+    let bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&ts.amm_addr);
+    assert_eq!(info.reserve_a, bal_a);
+    assert_eq!(info.reserve_b, bal_b);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_protocol_fee_accrual_token_a_out() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_protocol_fee(&ts.admin, &ts.admin, &10_i128);
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &2_000_000_i128);
+    tb_sac.mint(&seed_lp, &4_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 2_000_000, 4_000_000).execute();
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &2_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 1_000_000, 2_000_000).execute();
+
+    // token_out is token_a -> unwanted token_b is swapped in. Protocol fee should accrue in token_b!
+    amm.remove_liquidity_one_sided(&provider, &(shares / 2), &ts.ta_addr, &0_i128, &u64::MAX);
+
+    let (fee_a, fee_b) = amm.get_accrued_fees();
+    assert_eq!(fee_a, 0, "no protocol fee should accrue to token_a");
+    assert!(fee_b > 0, "protocol fee must accrue to token_b");
+
+    assert_reserves_match_balances(&amm, env);
+
+    amm.withdraw_protocol_fees();
+    let info = amm.get_info();
+    let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&ts.amm_addr);
+    let bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&ts.amm_addr);
+    assert_eq!(info.reserve_a, bal_a);
+    assert_eq!(info.reserve_b, bal_b);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_lp_rebate() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_protocol_fee(&ts.admin, &ts.admin, &20_i128);
+    amm.set_lp_rebate(&ts.admin, &5_000_i128); // 50% rebate back to LP
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &2_000_000_i128);
+    tb_sac.mint(&seed_lp, &4_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 2_000_000, 4_000_000).execute();
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &2_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 1_000_000, 2_000_000).execute();
+
+    amm.remove_liquidity_one_sided(&provider, &(shares / 2), &ts.tb_addr, &0_i128, &u64::MAX);
+
+    assert_reserves_match_balances(&amm, env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_all_shares_redeemed() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &5_000_000_i128);
+    tb_sac.mint(&seed_lp, &5_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 5_000_000, 5_000_000).execute();
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    amm.remove_liquidity_one_sided(&provider, &shares, &ts.tb_addr, &0_i128, &u64::MAX);
+
+    assert_eq!(amm.shares_of(&provider), 0);
+    assert_reserves_match_balances(&amm, env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_alternating_both_sides() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let seed_lp = Address::generate(env);
+    ta_sac.mint(&seed_lp, &10_000_000_i128);
+    tb_sac.mint(&seed_lp, &20_000_000_i128);
+    AddLiquidity::new(&amm, &seed_lp, 10_000_000, 20_000_000).execute();
+
+    let p1 = Address::generate(env);
+    ta_sac.mint(&p1, &2_000_000_i128);
+    tb_sac.mint(&p1, &4_000_000_i128);
+    let s1 = AddLiquidity::new(&amm, &p1, 2_000_000, 4_000_000).execute();
+
+    let p2 = Address::generate(env);
+    ta_sac.mint(&p2, &2_000_000_i128);
+    tb_sac.mint(&p2, &4_000_000_i128);
+    let s2 = AddLiquidity::new(&amm, &p2, 2_000_000, 4_000_000).execute();
+
+    amm.remove_liquidity_one_sided(&p1, &(s1 / 2), &ts.ta_addr, &0_i128, &u64::MAX);
+    assert_reserves_match_balances(&amm, env);
+
+    amm.remove_liquidity_one_sided(&p2, &(s2 / 2), &ts.tb_addr, &0_i128, &u64::MAX);
+    assert_reserves_match_balances(&amm, env);
+
+    amm.remove_liquidity_one_sided(&p1, &(s1 / 2), &ts.tb_addr, &0_i128, &u64::MAX);
+    assert_reserves_match_balances(&amm, env);
+}
+
+#[test]
+fn test_remove_liquidity_one_sided_zero_fee_exact_parity() {
+    let ts1 = setup_pool(0);
+    let amm1 = AmmPoolClient::new(&ts1.env, &ts1.amm_addr);
+    let ta_sac1 = StellarAssetClient::new(&ts1.env, &ts1.ta_addr);
+    let tb_sac1 = StellarAssetClient::new(&ts1.env, &ts1.tb_addr);
+
+    let seed1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&seed1, &5_000_000_i128);
+    tb_sac1.mint(&seed1, &5_000_000_i128);
+    AddLiquidity::new(&amm1, &seed1, 5_000_000, 5_000_000).execute();
+
+    let p1 = Address::generate(&ts1.env);
+    ta_sac1.mint(&p1, &1_000_000_i128);
+    tb_sac1.mint(&p1, &1_000_000_i128);
+    let s1 = AddLiquidity::new(&amm1, &p1, 1_000_000, 1_000_000).execute();
+
+    let out1 = amm1.remove_liquidity_one_sided(&p1, &s1, &ts1.tb_addr, &0_i128, &u64::MAX);
+    assert_reserves_match_balances(&amm1, &ts1.env);
+
+    let ts2 = setup_pool(0);
+    let amm2 = AmmPoolClient::new(&ts2.env, &ts2.amm_addr);
+    let ta_sac2 = StellarAssetClient::new(&ts2.env, &ts2.ta_addr);
+    let tb_sac2 = StellarAssetClient::new(&ts2.env, &ts2.tb_addr);
+
+    let seed2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&seed2, &5_000_000_i128);
+    tb_sac2.mint(&seed2, &5_000_000_i128);
+    AddLiquidity::new(&amm2, &seed2, 5_000_000, 5_000_000).execute();
+
+    let p2 = Address::generate(&ts2.env);
+    ta_sac2.mint(&p2, &1_000_000_i128);
+    tb_sac2.mint(&p2, &1_000_000_i128);
+    let s2 = AddLiquidity::new(&amm2, &p2, 1_000_000, 1_000_000).execute();
+
+    let (wa, wb) = amm2.remove_liquidity(&p2, &s2, &0_i128, &0_i128, &u64::MAX);
+    let sw = amm2.swap(&p2, &ts2.ta_addr, &wa, &0_i128, &u64::MAX);
+    assert!((out1 - (wb + sw)).abs() <= 1);
+    assert_reserves_match_balances(&amm2, &ts2.env);
 }

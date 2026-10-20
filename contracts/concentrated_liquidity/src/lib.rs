@@ -22,6 +22,8 @@ const TICK_BASE_NUM: i128 = 1_000_100;
 const TICK_BASE_DEN: i128 = PRICE_SCALE;
 const MIN_TICK: i32 = -887_272;
 const MAX_TICK: i32 = 887_272;
+/// Fixed-point scale of the fee-growth accumulators (Q64 wide scale, issue #1098).
+pub const FEE_GROWTH_SCALE: i128 = 1_i128 << 64;
 
 // Per-user position state lives in persistent storage (see issue #346): it is
 // unbounded in the number of LPs and tick ranges, so it must not share the
@@ -2324,10 +2326,15 @@ impl ConcentratedLiquidity {
                                 .instance()
                                 .get(&DataKey::FeeGrowthGlobalA)
                                 .unwrap_or(0);
-                            env.storage().instance().set(
-                                &DataKey::FeeGrowthGlobalA,
-                                &(fg_a + lp_fee * 1_000_000 / active_liquidity),
-                            );
+                            let growth = math::mul_div(
+                                lp_fee as u128,
+                                FEE_GROWTH_SCALE as u128,
+                                active_liquidity as u128,
+                            )
+                            .unwrap_or(0) as i128;
+                            env.storage()
+                                .instance()
+                                .set(&DataKey::FeeGrowthGlobalA, &(fg_a + growth));
                         }
                     } else {
                         if protocol_fee > 0 {
@@ -2346,10 +2353,15 @@ impl ConcentratedLiquidity {
                                 .instance()
                                 .get(&DataKey::FeeGrowthGlobalB)
                                 .unwrap_or(0);
-                            env.storage().instance().set(
-                                &DataKey::FeeGrowthGlobalB,
-                                &(fg_b + lp_fee * 1_000_000 / active_liquidity),
-                            );
+                            let growth = math::mul_div(
+                                lp_fee as u128,
+                                FEE_GROWTH_SCALE as u128,
+                                active_liquidity as u128,
+                            )
+                            .unwrap_or(0) as i128;
+                            env.storage()
+                                .instance()
+                                .set(&DataKey::FeeGrowthGlobalB, &(fg_b + growth));
                         }
                     }
                 }
@@ -2430,10 +2442,15 @@ impl ConcentratedLiquidity {
                                     .instance()
                                     .get(&DataKey::FeeGrowthGlobalA)
                                     .unwrap_or(0);
-                                env.storage().instance().set(
-                                    &DataKey::FeeGrowthGlobalA,
-                                    &(fg_a + lp_fee * 1_000_000 / active_liquidity),
-                                );
+                                let growth = math::mul_div(
+                                    lp_fee as u128,
+                                    FEE_GROWTH_SCALE as u128,
+                                    active_liquidity as u128,
+                                )
+                                .unwrap_or(0) as i128;
+                                env.storage()
+                                    .instance()
+                                    .set(&DataKey::FeeGrowthGlobalA, &(fg_a + growth));
                             }
                         } else {
                             if protocol_fee > 0 {
@@ -2453,10 +2470,15 @@ impl ConcentratedLiquidity {
                                     .instance()
                                     .get(&DataKey::FeeGrowthGlobalB)
                                     .unwrap_or(0);
-                                env.storage().instance().set(
-                                    &DataKey::FeeGrowthGlobalB,
-                                    &(fg_b + lp_fee * 1_000_000 / active_liquidity),
-                                );
+                                let growth = math::mul_div(
+                                    lp_fee as u128,
+                                    FEE_GROWTH_SCALE as u128,
+                                    active_liquidity as u128,
+                                )
+                                .unwrap_or(0) as i128;
+                                env.storage()
+                                    .instance()
+                                    .set(&DataKey::FeeGrowthGlobalB, &(fg_b + growth));
                             }
                         }
                     }
@@ -2785,12 +2807,24 @@ impl ConcentratedLiquidity {
                     if zero_for_one {
                         protocol_fee_a_total += protocol_fee;
                         if lp_fee > 0 {
-                            fg_a += lp_fee * 1_000_000 / active_liquidity;
+                            let growth = math::mul_div(
+                                lp_fee as u128,
+                                FEE_GROWTH_SCALE as u128,
+                                active_liquidity as u128,
+                            )
+                            .unwrap_or(0) as i128;
+                            fg_a += growth;
                         }
                     } else {
                         protocol_fee_b_total += protocol_fee;
                         if lp_fee > 0 {
-                            fg_b += lp_fee * 1_000_000 / active_liquidity;
+                            let growth = math::mul_div(
+                                lp_fee as u128,
+                                FEE_GROWTH_SCALE as u128,
+                                active_liquidity as u128,
+                            )
+                            .unwrap_or(0) as i128;
+                            fg_b += growth;
                         }
                     }
                 }
@@ -2841,12 +2875,24 @@ impl ConcentratedLiquidity {
                         if zero_for_one {
                             protocol_fee_a_total += protocol_fee;
                             if lp_fee > 0 {
-                                fg_a += lp_fee * 1_000_000 / active_liquidity;
+                                let growth = math::mul_div(
+                                    lp_fee as u128,
+                                    FEE_GROWTH_SCALE as u128,
+                                    active_liquidity as u128,
+                                )
+                                .unwrap_or(0) as i128;
+                                fg_a += growth;
                             }
                         } else {
                             protocol_fee_b_total += protocol_fee;
                             if lp_fee > 0 {
-                                fg_b += lp_fee * 1_000_000 / active_liquidity;
+                                let growth = math::mul_div(
+                                    lp_fee as u128,
+                                    FEE_GROWTH_SCALE as u128,
+                                    active_liquidity as u128,
+                                )
+                                .unwrap_or(0) as i128;
+                                fg_b += growth;
                             }
                         }
                     }
@@ -3635,12 +3681,14 @@ impl ConcentratedLiquidity {
         let da = fg_inside_a - pos.fee_growth_inside_a;
         let db = fg_inside_b - pos.fee_growth_inside_b;
         let oa = if da > 0 {
-            pos.liquidity * da / 1_000_000
+            math::mul_div(pos.liquidity as u128, da as u128, FEE_GROWTH_SCALE as u128).unwrap_or(0)
+                as i128
         } else {
             0
         };
         let ob = if db > 0 {
-            pos.liquidity * db / 1_000_000
+            math::mul_div(pos.liquidity as u128, db as u128, FEE_GROWTH_SCALE as u128).unwrap_or(0)
+                as i128
         } else {
             0
         };
@@ -9837,5 +9885,73 @@ mod test_range_order_fill_status {
             &u64::MAX,
         );
         assert_eq!(result, Err(Ok(ClError::RangeOrderExists)));
+    }
+
+    // ── Issue #1098: Fee growth scale Q64 (1 << 64) ──────────────────────────
+
+    #[test]
+    fn test_fee_growth_large_liquidity_no_underflow_regression_1098() {
+        // In issue #1098, liquidity = 2e14 with fee = 300_000 underflowed to 0 under 1e6 scale:
+        // fee * 1e6 / 2e14 = 3e11 / 2e14 = 0!
+        // Under Q64 scale (1 << 64 ≈ 1.84e19):
+        // fee * 2^64 / 2e14 = 300_000 * 1.84467e19 / 2e14 ≈ 2.767e10 > 0!
+        let fee: u128 = 300_000;
+        let active_liquidity: u128 = 200_000_000_000_000; // 2e14
+        let growth = math::mul_div(fee, FEE_GROWTH_SCALE as u128, active_liquidity).unwrap();
+        assert!(
+            growth > 0,
+            "fee growth must not truncate to zero for 2e14 liquidity: growth={growth}"
+        );
+        assert_eq!(growth, 27_670_116_110);
+
+        // Position earning pending_fees on this growth
+        let earned = math::mul_div(active_liquidity, growth, FEE_GROWTH_SCALE as u128).unwrap();
+        // Recovers the 300_000 fee (within 1 stroop integer division floor)
+        assert!((earned as i128 - fee as i128).abs() <= 1);
+    }
+
+    #[test]
+    fn test_fee_growth_q64_collect_fees_end_to_end() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let token_a = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let cl_addr = env.register_contract(None, ConcentratedLiquidity);
+        let client = ConcentratedLiquidityClient::new(&env, &cl_addr);
+        client.initialize(&admin, &token_a, &token_b, &30_i128, &0_i32, &1_i32);
+
+        let provider = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&provider, &100_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&provider, &100_000_000_i128);
+
+        let trader = Address::generate(&env);
+
+        // Mint liquidity for provider across -1000..1000
+        client.mint_position(
+            &provider,
+            &-1000,
+            &1000,
+            &50_000_000,
+            &50_000_000,
+            &0,
+            &0,
+            &u64::MAX,
+        );
+
+        // Trader performs a swap of 1_000_000 token A
+        StellarAssetClient::new(&env, &token_a).mint(&trader, &10_000_000);
+        client.swap(&trader, &true, &1_000_000, &0, &0, &u64::MAX);
+
+        // Provider collects fees
+        let (collected_a, collected_b) = client.collect_fees(&provider, &-1000, &1000);
+        assert!(collected_a > 0, "provider must collect fee A");
+        assert_eq!(collected_b, 0, "no fee B accrued on zero_for_one swap");
+        assert!((2990..=3010).contains(&collected_a));
     }
 }

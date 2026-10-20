@@ -194,20 +194,14 @@ assert_not_contains() {
 
 # invoke_as ACCOUNT CONTRACT_ID FN ARGS... — invoke with a different signer.
 #
-# Two transient failures get one more attempt:
+# Simulation failing gets one more attempt:
 #
-# - Simulation failing. The public RPC endpoint is load-balanced, and the node
+# - The public RPC endpoint is load-balanced, and the node
 #   that simulates can be a ledger behind the one that confirmed the caller's
 #   previous transaction, so a call that spends what that transaction minted
 #   sees the old balance. The retry waits a ledger first. A genuine failure
 #   fails again; expect_fail turns this off (E2E_SIM_RETRY=0) so negative
 #   checks don't pay for the wait.
-# - ResourceLimitExceeded on submit. The token contract appends a balance checkpoint the first time an
-# account's balance changes in a ledger and overwrites it on later changes in
-# the same ledger, so a call simulated on the ledger that just applied the
-# account's previous transfer is budgeted for the overwrite, runs one ledger
-# later as an append, and writes more bytes than it declared. The rejected
-# transaction changes no state, and the new simulation runs on a later ledger.
 invoke_as() {
   local account="$1"
   local contract_id="$2"
@@ -225,9 +219,7 @@ invoke_as() {
     if [[ "$rc" -eq 0 || "$attempt" -eq 2 ]]; then
       break
     fi
-    if grep -q 'ResourceLimitExceeded' "$err"; then
-      printf '[retry] %s rejected with ResourceLimitExceeded; simulating and sending again\n' "$1" >&2
-    elif [[ "${E2E_SIM_RETRY:-1}" == "1" ]] && grep -q 'transaction simulation failed' "$err"; then
+    if [[ "${E2E_SIM_RETRY:-1}" == "1" ]] && grep -q 'transaction simulation failed' "$err"; then
       printf '[retry] %s simulation failed; waiting a ledger in case the RPC node lags, then retrying\n' "$1" >&2
       sleep 6
     else

@@ -162,171 +162,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "Snapshot"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u64": 10000
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Snapshot"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                    },
-                    {
-                      "u64": 10000
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "cum_a"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 1000
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cum_b"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "pool_ts"
-                      },
-                      "val": {
-                        "u64": 10000
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          120960
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "Snapshot"
-                },
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u64": 10060
-                }
-              ]
-            },
-            "durability": "persistent"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-                "key": {
-                  "vec": [
-                    {
-                      "symbol": "Snapshot"
-                    },
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                    },
-                    {
-                      "u64": 10060
-                    }
-                  ]
-                },
-                "durability": "persistent",
-                "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "symbol": "cum_a"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 1000
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "cum_b"
-                      },
-                      "val": {
-                        "i128": {
-                          "hi": 0,
-                          "lo": 0
-                        }
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "pool_ts"
-                      },
-                      "val": {
-                        "u64": 10000
-                      }
-                    }
-                  ]
-                }
-              }
-            },
-            "ext": "v0"
-          },
-          120960
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-            "key": {
-              "vec": [
-                {
-                  "symbol": "SnapshotTimestamps"
+                  "symbol": "Snapshots"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -346,7 +182,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "SnapshotTimestamps"
+                      "symbol": "Snapshots"
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -357,10 +193,48 @@
                 "val": {
                   "vec": [
                     {
-                      "u64": 10000
+                      "vec": [
+                        {
+                          "u64": 10000
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000
+                          }
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 0
+                          }
+                        },
+                        {
+                          "u64": 10000
+                        }
+                      ]
                     },
                     {
-                      "u64": 10060
+                      "vec": [
+                        {
+                          "u64": 10060
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000
+                          }
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 0
+                          }
+                        },
+                        {
+                          "u64": 10000
+                        }
+                      ]
                     }
                   ]
                 }
@@ -378,7 +252,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "TrackedPoolsPersistent"
+                  "symbol": "TrackedPools"
                 }
               ]
             },
@@ -395,7 +269,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "TrackedPoolsPersistent"
+                      "symbol": "TrackedPools"
                     }
                   ]
                 },
@@ -403,7 +277,28 @@
                 "val": {
                   "vec": [
                     {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "address"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "pool_type"
+                          },
+                          "val": {
+                            "vec": [
+                              {
+                                "symbol": "Cl"
+                              }
+                            ]
+                          }
+                        }
+                      ]
                     }
                   ]
                 }

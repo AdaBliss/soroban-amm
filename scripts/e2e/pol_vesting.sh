@@ -84,11 +84,6 @@ run_pol_vesting_flow() {
     "$(invoke "$vest" get_vesting --beneficiary "$beneficiary" --schedule_id "$schedule_id" | json_num released)" "$released"
 
   # ── revoke_vesting: remaining tokens split, total conserved ─────────────
-  # revoke_vesting pays the beneficiary vested - released only when it is
-  # positive. Simulated on the ledger release just landed in, that is 0, so the
-  # beneficiary transfer is left out of the footprint, and applying one ledger
-  # later (when more has vested) traps on it. Wait for a later ledger first.
-  sleep 6
   local bal1 treasury0 to_beneficiary to_treasury
   bal1=$(balance_of "$lp" "$beneficiary")
   treasury0=$(balance_of "$lp" "$treasury")
@@ -96,12 +91,26 @@ run_pol_vesting_flow() {
     --governance "$governance" --beneficiary "$beneficiary" --schedule_id "$schedule_id" >/dev/null
   to_beneficiary=$(( $(balance_of "$lp" "$beneficiary") - bal1 ))
   to_treasury=$(( $(balance_of "$lp" "$treasury") - treasury0 ))
+  assert_eq "pol_vesting: revoke does not pay beneficiary directly" "$to_beneficiary" "0"
   assert_gt "pol_vesting: treasury receives the unvested remainder" "$to_treasury" 0
-  assert_eq "pol_vesting: released + vested + unvested equals total" \
-    "$(( released + to_beneficiary + to_treasury ))" "$total"
-  assert_eq "pol_vesting: contract is emptied by revoke" "$(balance_of "$lp" "$vest")" "0"
-  expect_fail "pol_vesting: revoked schedule no longer exists" \
-    invoke "$vest" get_vesting --beneficiary "$beneficiary" --schedule_id "$schedule_id"
+
+  local revoked_schedule
+  revoked_schedule=$(invoke "$vest" get_vesting --beneficiary "$beneficiary" --schedule_id "$schedule_id")
+  assert_contains "pol_vesting: schedule is marked revoked" "$revoked_schedule" "true"
+
+  # ── release after revoke: beneficiary claims frozen remainder ───────────
+  local claimable bal2 remainder_released
+  claimable=$(invoke "$vest" releasable_amount --beneficiary "$beneficiary" --schedule_id "$schedule_id" | parse_i128)
+  assert_gt "pol_vesting: claimable remainder after revoke is positive" "$claimable" 0
+  bal2=$(balance_of "$lp" "$beneficiary")
+  remainder_released=$(invoke "$vest" release --beneficiary "$beneficiary" --schedule_id "$schedule_id" | parse_i128)
+  assert_eq "pol_vesting: release pays out frozen remainder" "$remainder_released" "$claimable"
+  assert_eq "pol_vesting: beneficiary credited by remainder release" "$(balance_of "$lp" "$beneficiary")" "$(( bal2 + remainder_released ))"
+  assert_eq "pol_vesting: released + remainder + unvested equals total" \
+    "$(( released + remainder_released + to_treasury ))" "$total"
+  assert_eq "pol_vesting: contract is emptied after remainder release" "$(balance_of "$lp" "$vest")" "0"
+  expect_fail "pol_vesting: second release has nothing to release" \
+    invoke "$vest" release --beneficiary "$beneficiary" --schedule_id "$schedule_id"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

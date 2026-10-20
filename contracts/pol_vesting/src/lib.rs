@@ -82,6 +82,7 @@ pub struct PolVesting {
     pub cliff_ledger: u32,
     pub end_ledger: u32,
     pub beneficiary: Address,
+    pub revoked: bool,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -326,6 +327,7 @@ impl PolVestingContract {
             cliff_ledger,
             end_ledger,
             beneficiary: beneficiary.clone(),
+            revoked: false,
         };
         env.storage().persistent().set(&key, &schedule);
         env.storage()
@@ -576,6 +578,10 @@ impl PolVestingContract {
             .get(&old_key)
             .ok_or(VestingError::VestingNotFound)?;
 
+        if schedule.revoked {
+            return Err(VestingError::InvalidSchedule);
+        }
+
         // Validate the destination before mutating anything: returning `Err`
         // does not roll storage back, so a rejected move must leave the old
         // schedule and both id lists untouched.
@@ -640,8 +646,9 @@ impl PolVestingContract {
         Ok(new_schedule_id)
     }
 
-    /// Governance cancels a vesting schedule. Any unreleased tokens are
-    /// returned to the treasury; already-released tokens are unaffected.
+    /// Governance cancels a vesting schedule. The schedule's vested amount is
+    /// frozen, unvested tokens are returned to the treasury, and the beneficiary
+    /// can claim the vested remainder via `release`.
     pub fn revoke_vesting(
         env: Env,
         governance: Address,
@@ -653,11 +660,15 @@ impl PolVestingContract {
         Self::require_governance(&env, &governance)?;
 
         let key = DataKey::Vesting(beneficiary.clone(), schedule_id);
-        let schedule: PolVesting = env
+        let mut schedule: PolVesting = env
             .storage()
             .persistent()
             .get(&key)
             .ok_or(VestingError::VestingNotFound)?;
+
+        if schedule.revoked {
+            return Err(VestingError::InvalidSchedule);
+        }
 
         env.storage()
             .persistent()
@@ -665,39 +676,41 @@ impl PolVestingContract {
 
         let current_ledger = env.ledger().sequence();
         let vested = Self::vested_at(&schedule, current_ledger);
-        // Tokens already vested but not yet released go to beneficiary first.
+        // Under the new model, revoke_vesting NEVER transfers directly to the
+        // beneficiary. The beneficiary claims vested-but-unreleased tokens
+        // later by calling `release`.
         let to_beneficiary = vested - schedule.released;
         let to_treasury = schedule.total - vested;
 
         let lp = token::Client::new(&env, &schedule.lp_token);
         let contract_addr = env.current_contract_address();
 
-        if to_beneficiary > 0 {
-            lp.transfer(&contract_addr, &beneficiary, &to_beneficiary);
-        }
         if to_treasury > 0 {
             let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
             lp.transfer(&contract_addr, &treasury, &to_treasury);
         }
 
-        // The unreleased remainder leaves the commitment book with the
-        // schedule. See the matching comment in `release` for why this must
-        // trap on underflow rather than saturate.
-        let committed_key = DataKey::Committed(schedule.lp_token.clone());
-        let committed = Self::read_committed(&env, &schedule.lp_token);
-        let remaining = schedule.total - schedule.released;
-        let new_committed = committed
-            .checked_sub(remaining)
-            .filter(|c| *c >= 0)
-            .expect("pol_vesting: committed underflow - invariant violated");
-        env.storage()
-            .persistent()
-            .set(&committed_key, &new_committed);
-        env.storage()
-            .persistent()
-            .extend_ttl(&committed_key, MIN_TTL, BUMP_TO);
+        // Only the treasury refund leaves the commitment book upon revoke,
+        // because the frozen remainder is still owed to the beneficiary.
+        if to_treasury > 0 {
+            let committed_key = DataKey::Committed(schedule.lp_token.clone());
+            let committed = Self::read_committed(&env, &schedule.lp_token);
+            let new_committed = committed
+                .checked_sub(to_treasury)
+                .filter(|c| *c >= 0)
+                .expect("pol_vesting: committed underflow - invariant violated");
+            env.storage()
+                .persistent()
+                .set(&committed_key, &new_committed);
+            env.storage()
+                .persistent()
+                .extend_ttl(&committed_key, MIN_TTL, BUMP_TO);
+        }
 
-        env.storage().persistent().remove(&key);
+        schedule.total = vested;
+        schedule.revoked = true;
+
+        env.storage().persistent().set(&key, &schedule);
         Self::remove_schedule_id(&env, &schedule.beneficiary, schedule_id);
 
         soroban_amm_sdk::emit_versioned_event!(
@@ -792,6 +805,9 @@ impl PolVestingContract {
     /// protocol-owned liquidity that contradicts the documented schedule and
     /// the "cannot be withdrawn in a single step" guarantee.
     fn vested_at(schedule: &PolVesting, current_ledger: u32) -> i128 {
+        if schedule.revoked {
+            return schedule.total;
+        }
         if current_ledger < schedule.cliff_ledger {
             return 0;
         }
@@ -974,16 +990,26 @@ mod tests {
         client.revoke_vesting(&s.governance, &s.beneficiary, &schedule_id);
 
         let lp = TokenClient::new(&s.env, &s.lp_token);
-        // 25% went to beneficiary, 75% to treasury
-        assert_eq!(lp.balance(&s.beneficiary), 250_000);
+        // Revoke never transfers directly to beneficiary; 75% goes to treasury
+        assert_eq!(lp.balance(&s.beneficiary), 0);
         assert_eq!(lp.balance(&s.treasury), 750_000);
 
-        // Schedule is gone.
+        // Schedule is frozen, marked revoked, and remains queryable.
+        let sched = client.get_vesting(&s.beneficiary, &schedule_id);
+        assert!(sched.revoked);
+        assert_eq!(sched.total, 250_000);
+        assert_eq!(sched.released, 0);
+
+        // Beneficiary claims the remaining vested tokens via release.
+        assert_eq!(client.release(&s.beneficiary, &schedule_id), 250_000);
+        assert_eq!(lp.balance(&s.beneficiary), 250_000);
+
+        // Second release returns NothingToRelease.
         let err = client
-            .try_get_vesting(&s.beneficiary, &schedule_id)
+            .try_release(&s.beneficiary, &schedule_id)
             .unwrap_err()
             .unwrap();
-        assert_eq!(err, VestingError::VestingNotFound);
+        assert_eq!(err, VestingError::NothingToRelease);
     }
 
     #[test]
@@ -1579,8 +1605,13 @@ mod tests {
         s.env.ledger().set_sequence_number(250);
         client.revoke_vesting(&s.governance, &s.beneficiary, &id);
 
-        assert_eq!(client.committed(&s.lp_token), 0);
+        // Treasury takes 750_000, so committed drops by 750_000 to 250_000
+        assert_eq!(client.committed(&s.lp_token), 250_000);
         assert_eq!(client.schedule_count(&s.beneficiary), 0);
+
+        // Claiming the remainder via release reduces committed to 0
+        assert_eq!(client.release(&s.beneficiary, &id), 250_000);
+        assert_eq!(client.committed(&s.lp_token), 0);
     }
 
     #[test]
@@ -1931,5 +1962,270 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── Tests for Issue #1073: revoke_vesting never transfers to beneficiary ──
+
+    #[test]
+    fn test_revoke_never_transfers_to_beneficiary() {
+        let s = setup();
+        let schedule_id = create_schedule(&s, 0, 0, 1000);
+
+        s.env.ledger().set_sequence_number(500);
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let lp = TokenClient::new(&s.env, &s.lp_token);
+
+        let bal_before = lp.balance(&s.beneficiary);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &schedule_id);
+        let bal_after = lp.balance(&s.beneficiary);
+
+        // revoke_vesting NEVER transfers to beneficiary
+        assert_eq!(bal_before, 0);
+        assert_eq!(bal_after, 0);
+        assert_eq!(lp.balance(&s.treasury), 500_000);
+    }
+
+    #[test]
+    fn test_revoke_simulation_apply_regression_identical_recipients() {
+        // Build the same state twice (create, release at ledger L).
+        // Call revoke_vesting at ledger L in env1 and at L+1 in env2.
+        // Assert the set of transfer recipients is identical in both (only treasury).
+        let s1 = setup();
+        let s2 = setup();
+
+        let id1 = create_schedule(&s1, 0, 0, 1000);
+        let id2 = create_schedule(&s2, 0, 0, 1000);
+
+        let l = 200;
+        s1.env.ledger().set_sequence_number(l);
+        s2.env.ledger().set_sequence_number(l);
+
+        let client1 = PolVestingContractClient::new(&s1.env, &s1.contract_id);
+        let client2 = PolVestingContractClient::new(&s2.env, &s2.contract_id);
+
+        let lp1 = TokenClient::new(&s1.env, &s1.lp_token);
+        let lp2 = TokenClient::new(&s2.env, &s2.lp_token);
+
+        // Both release at ledger L
+        assert_eq!(client1.release(&s1.beneficiary, &id1), 200_000);
+        assert_eq!(client2.release(&s2.beneficiary, &id2), 200_000);
+
+        // Env1 calls revoke at ledger L
+        let b1_before = lp1.balance(&s1.beneficiary);
+        let t1_before = lp1.balance(&s1.treasury);
+        client1.revoke_vesting(&s1.governance, &s1.beneficiary, &id1);
+        let b1_diff = lp1.balance(&s1.beneficiary) - b1_before;
+        let t1_diff = lp1.balance(&s1.treasury) - t1_before;
+
+        // Env2 advances to ledger L+1 before calling revoke
+        s2.env.ledger().set_sequence_number(l + 1);
+        let b2_before = lp2.balance(&s2.beneficiary);
+        let t2_before = lp2.balance(&s2.treasury);
+        client2.revoke_vesting(&s2.governance, &s2.beneficiary, &id2);
+        let b2_diff = lp2.balance(&s2.beneficiary) - b2_before;
+        let t2_diff = lp2.balance(&s2.treasury) - t2_before;
+
+        // In both environments, beneficiary received exactly 0 from revoke_vesting
+        assert_eq!(b1_diff, 0);
+        assert_eq!(b2_diff, 0);
+
+        // In both environments, the only transfer recipient is the treasury
+        assert!(t1_diff > 0);
+        assert!(t2_diff > 0);
+        assert_eq!(t1_diff, 800_000);
+        assert_eq!(t2_diff, 799_000);
+    }
+
+    #[test]
+    fn test_revoke_beneficiary_claims_remainder_via_release() {
+        let s = setup();
+        let id = create_schedule(&s, 0, 0, 1000);
+
+        s.env.ledger().set_sequence_number(200);
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        assert_eq!(client.release(&s.beneficiary, &id), 200_000);
+
+        s.env.ledger().set_sequence_number(600);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        // Claimable is frozen at 600_000 - 200_000 = 400_000
+        assert_eq!(client.releasable_amount(&s.beneficiary, &id), 400_000);
+
+        // Advance far past end_ledger; releasable_amount remains frozen
+        s.env.ledger().set_sequence_number(5000);
+        assert_eq!(client.releasable_amount(&s.beneficiary, &id), 400_000);
+
+        // Claim frozen remainder
+        let claimed = client.release(&s.beneficiary, &id);
+        assert_eq!(claimed, 400_000);
+
+        let lp = TokenClient::new(&s.env, &s.lp_token);
+        assert_eq!(lp.balance(&s.beneficiary), 600_000);
+
+        // Second release returns NothingToRelease even after end_ledger
+        let err = client
+            .try_release(&s.beneficiary, &id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::NothingToRelease);
+    }
+
+    #[test]
+    fn test_conservation_revoke_before_cliff() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 100, 300, 1000);
+
+        s.env.ledger().set_sequence_number(200);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        let lp = TokenClient::new(&s.env, &s.lp_token);
+        let released = 0i128;
+        let claimable = client.releasable_amount(&s.beneficiary, &id);
+        let to_treasury = lp.balance(&s.treasury);
+
+        assert_eq!(claimable, 0);
+        assert_eq!(to_treasury, 1_000_000);
+        assert_eq!(released + claimable + to_treasury, 1_000_000);
+
+        let err = client
+            .try_release(&s.beneficiary, &id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::NothingToRelease);
+    }
+
+    #[test]
+    fn test_conservation_revoke_mid_vesting() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 200, 1000);
+
+        // Release at ledger 400: elapsed = 200, duration = 800 -> 250_000
+        s.env.ledger().set_sequence_number(400);
+        let released = client.release(&s.beneficiary, &id);
+        assert_eq!(released, 250_000);
+
+        // Revoke at ledger 600: elapsed = 400, duration = 800 -> 500_000 vested
+        s.env.ledger().set_sequence_number(600);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        let lp = TokenClient::new(&s.env, &s.lp_token);
+        let claimable = client.releasable_amount(&s.beneficiary, &id);
+        let to_treasury = lp.balance(&s.treasury);
+
+        assert_eq!(claimable, 250_000);
+        assert_eq!(to_treasury, 500_000);
+        assert_eq!(released + claimable + to_treasury, 1_000_000);
+
+        // Claim remainder
+        let remainder = client.release(&s.beneficiary, &id);
+        assert_eq!(remainder, 250_000);
+        assert_eq!(lp.balance(&s.beneficiary), 500_000);
+
+        let err = client
+            .try_release(&s.beneficiary, &id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::NothingToRelease);
+    }
+
+    #[test]
+    fn test_conservation_revoke_after_end() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 0, 1000);
+
+        s.env.ledger().set_sequence_number(400);
+        let released = client.release(&s.beneficiary, &id);
+        assert_eq!(released, 400_000);
+
+        s.env.ledger().set_sequence_number(1200);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        let lp = TokenClient::new(&s.env, &s.lp_token);
+        let claimable = client.releasable_amount(&s.beneficiary, &id);
+        let to_treasury = lp.balance(&s.treasury);
+
+        assert_eq!(claimable, 600_000);
+        assert_eq!(to_treasury, 0);
+        assert_eq!(released + claimable + to_treasury, 1_000_000);
+
+        let remainder = client.release(&s.beneficiary, &id);
+        assert_eq!(remainder, 600_000);
+        assert_eq!(lp.balance(&s.beneficiary), 1_000_000);
+
+        let err = client
+            .try_release(&s.beneficiary, &id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::NothingToRelease);
+    }
+
+    #[test]
+    fn test_get_vesting_on_revoked_schedule_reports_revoked_and_frozen_total() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 0, 1000);
+
+        s.env.ledger().set_sequence_number(350);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        let sched = client.get_vesting(&s.beneficiary, &id);
+        assert!(sched.revoked);
+        assert_eq!(sched.total, 350_000);
+        assert_eq!(sched.released, 0);
+        assert_eq!(client.vested_amount(&s.beneficiary, &id), 350_000);
+
+        s.env.ledger().set_sequence_number(9999);
+        assert_eq!(client.vested_amount(&s.beneficiary, &id), 350_000);
+        assert_eq!(client.releasable_amount(&s.beneficiary, &id), 350_000);
+    }
+
+    #[test]
+    fn test_cannot_revoke_already_revoked_schedule() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 0, 1000);
+
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+        let err = client
+            .try_revoke_vesting(&s.governance, &s.beneficiary, &id)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::InvalidSchedule);
+    }
+
+    #[test]
+    fn test_cannot_change_beneficiary_of_revoked_schedule() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 0, 1000);
+
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+        let new_beneficiary = Address::generate(&s.env);
+        let err = client
+            .try_change_beneficiary(&s.governance, &s.beneficiary, &id, &new_beneficiary)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, VestingError::InvalidSchedule);
+    }
+
+    #[test]
+    fn test_revoke_committed_accounting_only_deducts_treasury() {
+        let s = setup();
+        let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        let id = create_schedule(&s, 0, 0, 1000);
+        assert_eq!(client.committed(&s.lp_token), 1_000_000);
+
+        s.env.ledger().set_sequence_number(400);
+        client.revoke_vesting(&s.governance, &s.beneficiary, &id);
+
+        // Treasury received 600_000, committed drops from 1_000_000 to 400_000
+        assert_eq!(client.committed(&s.lp_token), 400_000);
+
+        // Beneficiary claims the remaining 400_000, committed drops to 0
+        client.release(&s.beneficiary, &id);
+        assert_eq!(client.committed(&s.lp_token), 0);
     }
 }

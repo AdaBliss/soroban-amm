@@ -1601,6 +1601,7 @@ mod stateful {
 
     /// Execute a script, returning the final context and the deepest
     /// tick-crossing distance observed across all swaps.
+    #[allow(clippy::type_complexity)]
     fn run_script(
         params: (
             i128,
@@ -1815,21 +1816,19 @@ mod stateful {
                     Ok(Ok(pos)) => pos,
                     _ => continue,
                 };
-                if pos.liquidity > 0 {
-                    if client
+                if pos.liquidity > 0
+                    && client
                         .try_burn_position(&ctx.provider, &p.lower, &p.upper, &pos.liquidity)
                         .is_ok()
-                    {
-                        progress = true;
-                    }
+                {
+                    progress = true;
                 }
-                if pos.tokens_owed != (0, 0) {
-                    if client
+                if pos.tokens_owed != (0, 0)
+                    && client
                         .try_collect_fees(&ctx.provider, &p.lower, &p.upper)
                         .is_ok()
-                    {
-                        progress = true;
-                    }
+                {
+                    progress = true;
                 }
             }
             if !progress {

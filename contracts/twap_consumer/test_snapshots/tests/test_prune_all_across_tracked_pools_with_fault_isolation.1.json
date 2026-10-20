@@ -48,6 +48,8 @@
     [],
     [],
     [],
+    [],
+    [],
     []
   ],
   "ledger": {
@@ -100,7 +102,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "SnapshotTimestamps"
+                  "symbol": "Snapshots"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -120,7 +122,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "SnapshotTimestamps"
+                      "symbol": "Snapshots"
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -145,7 +147,7 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "SnapshotTimestamps"
+                  "symbol": "Snapshots"
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -165,7 +167,7 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "SnapshotTimestamps"
+                      "symbol": "Snapshots"
                     },
                     {
                       "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
@@ -176,7 +178,26 @@
                 "val": {
                   "vec": [
                     {
-                      "u64": 300
+                      "vec": [
+                        {
+                          "u64": 300
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000
+                          }
+                        },
+                        {
+                          "i128": {
+                            "hi": 0,
+                            "lo": 1000
+                          }
+                        },
+                        {
+                          "u64": 300
+                        }
+                      ]
                     }
                   ]
                 }

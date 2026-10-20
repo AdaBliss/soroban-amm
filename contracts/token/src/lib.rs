@@ -79,6 +79,10 @@ pub enum DataKey {
     /// pre-history zero balance from a queried ledger whose covering checkpoint
     /// has been evicted.
     CheckpointsTruncated(Address),
+    /// Checkpoint page holding up to PAGE_SIZE entries for an account.
+    CheckpointPage(Address, u32),
+    /// Tracks pagination metadata (oldest retained page and total appended count).
+    CheckpointTracker(Address),
 }
 
 #[contracttype]
@@ -86,6 +90,13 @@ pub enum DataKey {
 pub struct Checkpoint {
     pub ledger: u32,
     pub balance: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointTracker {
+    pub start_page: u32,
+    pub total_count: u32,
 }
 
 /// SEP-41 allowance value.
@@ -104,6 +115,7 @@ impl LpToken {
     pub const MIN_TTL: u32 = 120_960;
     pub const BUMP_TO: u32 = 2_419_200;
     pub const MAX_CHECKPOINTS: u32 = 1024;
+    pub const PAGE_SIZE: u32 = 32;
 
     /// Extend the contract's **instance** storage TTL.
     ///
@@ -198,45 +210,120 @@ impl LpToken {
     /// that would corrupt governance snapshots.
     pub fn balance_at(env: Env, id: Address, ledger: u32) -> Result<i128, TokenError> {
         Self::extend_ttl(&env);
-        let key = DataKey::Checkpoints(id.clone());
-        let checkpoints: Vec<Checkpoint> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(&env));
-        let len = checkpoints.len();
-        if len == 0 {
-            return Ok(0);
-        }
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, Self::MIN_TTL, Self::BUMP_TO);
+        let tracker_key = DataKey::CheckpointTracker(id.clone());
+        let tracker_opt: Option<CheckpointTracker> = env.storage().persistent().get(&tracker_key);
 
-        // The truncation flag is written only inside the eviction branch, which
-        // fires exclusively once the list has reached `MAX_CHECKPOINTS` (and the
-        // list then stays at capacity). Below capacity the flag is provably
-        // absent, so we skip the storage read entirely and only probe — and keep
-        // its TTL in lockstep with the checkpoints it guards — when a query could
-        // actually have been truncated.
-        let truncated: bool = if len >= Self::MAX_CHECKPOINTS {
-            let trunc_key = DataKey::CheckpointsTruncated(id);
-            let t: bool = env.storage().persistent().get(&trunc_key).unwrap_or(false);
-            if t {
+        if tracker_opt.is_none() {
+            // Check legacy checkpoints entry (single Vec) for pre-upgrade tokens
+            let legacy_key = DataKey::Checkpoints(id.clone());
+            if let Some(checkpoints) = env
+                .storage()
+                .persistent()
+                .get::<_, Vec<Checkpoint>>(&legacy_key)
+            {
+                let len = checkpoints.len();
+                if len == 0 {
+                    return Ok(0);
+                }
                 env.storage()
                     .persistent()
-                    .extend_ttl(&trunc_key, Self::MIN_TTL, Self::BUMP_TO);
+                    .extend_ttl(&legacy_key, Self::MIN_TTL, Self::BUMP_TO);
+
+                let trunc_key = DataKey::CheckpointsTruncated(id);
+                let truncated: bool = env.storage().persistent().get(&trunc_key).unwrap_or(false);
+                if truncated {
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&trunc_key, Self::MIN_TTL, Self::BUMP_TO);
+                }
+
+                let mut low = 0;
+                let mut high = len;
+                while low < high {
+                    let mid = low + (high - low) / 2;
+                    let cp = checkpoints.get(mid).unwrap();
+                    if cp.ledger <= ledger {
+                        low = mid + 1;
+                    } else {
+                        high = mid;
+                    }
+                }
+
+                if low == 0 {
+                    if truncated {
+                        return Err(TokenError::BalanceUnavailable);
+                    }
+                    return Ok(0);
+                } else {
+                    return Ok(checkpoints.get(low - 1).unwrap().balance);
+                }
+            } else {
+                let trunc_key = DataKey::CheckpointsTruncated(id);
+                if env.storage().persistent().has(&trunc_key) {
+                    return Err(TokenError::BalanceUnavailable);
+                }
+                return Ok(0);
             }
-            t
-        } else {
-            false
-        };
+        }
+
+        let tracker = tracker_opt.unwrap();
+        if tracker.total_count == 0 {
+            return Ok(0);
+        }
+
+        env.storage()
+            .persistent()
+            .extend_ttl(&tracker_key, Self::MIN_TTL, Self::BUMP_TO);
+
+        let trunc_key = DataKey::CheckpointsTruncated(id.clone());
+        let truncated: bool = env.storage().persistent().has(&trunc_key);
+        if truncated {
+            env.storage()
+                .persistent()
+                .extend_ttl(&trunc_key, Self::MIN_TTL, Self::BUMP_TO);
+        }
+
+        let end_page = (tracker.total_count - 1) / Self::PAGE_SIZE;
+
+        // Binary search across pages: find the last page whose first checkpoint has ledger <= queried ledger
+        let mut low_page = tracker.start_page;
+        let mut high_page = end_page + 1;
+        while low_page < high_page {
+            let mid_page = low_page + (high_page - low_page) / 2;
+            let page: Vec<Checkpoint> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(id.clone(), mid_page))
+                .unwrap();
+            let first_ledger = page.get(0).unwrap().ledger;
+            if first_ledger <= ledger {
+                low_page = mid_page + 1;
+            } else {
+                high_page = mid_page;
+            }
+        }
+
+        if low_page == tracker.start_page {
+            // The queried ledger precedes every surviving checkpoint in the retained pages.
+            if truncated {
+                return Err(TokenError::BalanceUnavailable);
+            }
+            return Ok(0);
+        }
+
+        let target_page_idx = low_page - 1;
+        let page_key = DataKey::CheckpointPage(id.clone(), target_page_idx);
+        let target_page: Vec<Checkpoint> = env.storage().persistent().get(&page_key).unwrap();
+        env.storage()
+            .persistent()
+            .extend_ttl(&page_key, Self::MIN_TTL, Self::BUMP_TO);
 
         let mut low = 0;
-        let mut high = len;
+        let mut high = target_page.len();
         while low < high {
             let mid = low + (high - low) / 2;
-            let checkpoint = checkpoints.get(mid).unwrap();
-            if checkpoint.ledger <= ledger {
+            let cp = target_page.get(mid).unwrap();
+            if cp.ledger <= ledger {
                 low = mid + 1;
             } else {
                 high = mid;
@@ -244,16 +331,12 @@ impl LpToken {
         }
 
         if low == 0 {
-            // The queried ledger precedes every surviving checkpoint. If this
-            // account's history was truncated, the checkpoint that actually
-            // covered `ledger` may have been evicted — we cannot honestly
-            // answer, so error instead of returning a bogus 0.
             if truncated {
                 return Err(TokenError::BalanceUnavailable);
             }
             Ok(0)
         } else {
-            Ok(checkpoints.get(low - 1).unwrap().balance)
+            Ok(target_page.get(low - 1).unwrap().balance)
         }
     }
 
@@ -724,66 +807,100 @@ impl LpToken {
 
     fn write_checkpoint(env: &Env, account: &Address) {
         let balance = Self::balance(env.clone(), account.clone());
-        let key = DataKey::Checkpoints(account.clone());
         let ledger = env.ledger().sequence();
-        let mut checkpoints: Vec<Checkpoint> = env
+
+        let tracker_key = DataKey::CheckpointTracker(account.clone());
+        let mut tracker: CheckpointTracker = if let Some(tr) =
+            env.storage().persistent().get(&tracker_key)
+        {
+            tr
+        } else if let Some(legacy_checkpoints) = env
             .storage()
             .persistent()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(env));
-
-        let len = checkpoints.len();
-        if len > 0 {
-            let last_idx = len - 1;
-            let mut last = checkpoints.get(last_idx).unwrap();
-            if last.ledger == ledger {
-                last.balance = balance;
-                checkpoints.set(last_idx, last);
-                env.storage().persistent().set(&key, &checkpoints);
-                Self::bump_checkpoint_ttl(env, account, checkpoints.len());
-                return;
+            .get::<_, Vec<Checkpoint>>(&DataKey::Checkpoints(account.clone()))
+        {
+            // Migration: convert legacy vector into pages on first write
+            let legacy_len = legacy_checkpoints.len();
+            let mut page_idx = 0;
+            let mut current_page_vec = Vec::new(env);
+            for i in 0..legacy_len {
+                current_page_vec.push_back(legacy_checkpoints.get(i).unwrap());
+                if current_page_vec.len() == Self::PAGE_SIZE || i + 1 == legacy_len {
+                    let page_key = DataKey::CheckpointPage(account.clone(), page_idx);
+                    env.storage().persistent().set(&page_key, &current_page_vec);
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&page_key, Self::MIN_TTL, Self::BUMP_TO);
+                    page_idx += 1;
+                    current_page_vec = Vec::new(env);
+                }
             }
-        }
+            env.storage()
+                .persistent()
+                .remove(&DataKey::Checkpoints(account.clone()));
+            CheckpointTracker {
+                start_page: 0,
+                total_count: legacy_len,
+            }
+        } else {
+            CheckpointTracker {
+                start_page: 0,
+                total_count: 0,
+            }
+        };
 
-        if checkpoints.len() >= Self::MAX_CHECKPOINTS {
-            checkpoints.remove(0);
-            // Record that the oldest history has been dropped so `balance_at`
-            // errors on queries it can no longer answer accurately rather than
-            // silently returning a wrong balance. A truncated account stays at
-            // MAX_CHECKPOINTS forever, so every later distinct-ledger write
-            // re-enters this branch; extending the flag's TTL here (together
-            // with `balance_at` doing the same on reads) keeps it alive in
-            // lockstep with the checkpoints it guards, without adding any cost
-            // to the common, non-truncated write path.
+        // Eviction: drop the oldest whole page once the retained total would exceed MAX_CHECKPOINTS.
+        // Retained count is: total_count - (start_page * PAGE_SIZE).
+        if tracker.total_count >= (tracker.start_page * Self::PAGE_SIZE) + Self::MAX_CHECKPOINTS {
+            let evict_page_key = DataKey::CheckpointPage(account.clone(), tracker.start_page);
+            env.storage().persistent().remove(&evict_page_key);
+            tracker.start_page += 1;
+
             let trunc_key = DataKey::CheckpointsTruncated(account.clone());
             if !env.storage().persistent().has(&trunc_key) {
                 env.storage().persistent().set(&trunc_key, &true);
             }
         }
-        checkpoints.push_back(Checkpoint { ledger, balance });
-        env.storage().persistent().set(&key, &checkpoints);
-        Self::bump_checkpoint_ttl(env, account, checkpoints.len());
+
+        let current_page = tracker.total_count / Self::PAGE_SIZE;
+        let page_key = DataKey::CheckpointPage(account.clone(), current_page);
+        let mut page: Vec<Checkpoint> = if tracker.total_count.is_multiple_of(Self::PAGE_SIZE) {
+            Vec::new(env)
+        } else {
+            env.storage()
+                .persistent()
+                .get(&page_key)
+                .unwrap_or_else(|| Vec::new(env))
+        };
+
+        page.push_back(Checkpoint { ledger, balance });
+        env.storage().persistent().set(&page_key, &page);
+        env.storage()
+            .persistent()
+            .extend_ttl(&page_key, Self::MIN_TTL, Self::BUMP_TO);
+
+        tracker.total_count += 1;
+        env.storage().persistent().set(&tracker_key, &tracker);
+        env.storage()
+            .persistent()
+            .extend_ttl(&tracker_key, Self::MIN_TTL, Self::BUMP_TO);
+
+        Self::bump_checkpoint_ttl(env, account, current_page);
     }
 
-    /// Extends the TTL of an account's checkpoint list and, when present, its
-    /// truncation flag, keeping the two entries alive together so `balance_at`
-    /// never sees checkpoints without the flag that guards them.
-    ///
-    /// `checkpoint_count` is the post-write length of the list. The truncation
-    /// flag can only exist once the list has reached `MAX_CHECKPOINTS` (it is set
-    /// exclusively in the eviction branch, after which the list stays at
-    /// capacity), so below capacity the flag is provably absent and we skip the
-    /// storage probe entirely — keeping the common write path free of the extra
-    /// read that would otherwise run on every checkpoint.
-    fn bump_checkpoint_ttl(env: &Env, account: &Address, checkpoint_count: u32) {
+    /// Extends the TTL of an account's active checkpoint page and metadata,
+    /// keeping the page, tracker, and truncation flag (if present) alive together.
+    fn bump_checkpoint_ttl(env: &Env, account: &Address, current_page: u32) {
         env.storage().persistent().extend_ttl(
-            &DataKey::Checkpoints(account.clone()),
+            &DataKey::CheckpointTracker(account.clone()),
             Self::MIN_TTL,
             Self::BUMP_TO,
         );
-        if checkpoint_count < Self::MAX_CHECKPOINTS {
-            return;
-        }
+        env.storage().persistent().extend_ttl(
+            &DataKey::CheckpointPage(account.clone(), current_page),
+            Self::MIN_TTL,
+            Self::BUMP_TO,
+        );
         let trunc_key = DataKey::CheckpointsTruncated(account.clone());
         if env.storage().persistent().has(&trunc_key) {
             env.storage()
@@ -1137,9 +1254,10 @@ mod tests {
         let alice = mint_until_truncated(&ts);
 
         // Ledgers still covered by surviving checkpoints resolve correctly:
-        // eviction only drops the front, so the retained tail stays accurate.
-        // Ledger 101 was the first loop mint (1_000 + 1 = 1_001).
-        assert_eq!(client.balance_at(&alice, &101_u32), 1_001);
+        // page eviction drops the oldest whole page of 32 checkpoints (ledger 100
+        // plus loop mints at 101..=131).
+        // Ledger 132 is the first surviving checkpoint (1_000 + 32 = 1_032).
+        assert_eq!(client.balance_at(&alice, &132_u32), 1_032);
         // Final checkpoint: 1_000 + MAX_CHECKPOINTS increments of 1.
         let last_ledger = 101 + LpToken::MAX_CHECKPOINTS - 1;
         assert_eq!(
@@ -1658,5 +1776,515 @@ mod tests {
         let (version, data): (u32, (BytesN<32>,)) = last_versioned_event(&ts, "upgraded");
         assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
         assert_eq!(data, (new_hash,));
+    }
+
+    // ── Issue #1074: Paged checkpoints for O(1) balance writes ──────────────
+
+    #[test]
+    fn test_checkpoint_multiple_writes_same_ledger() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let bob = Address::generate(&ts.env);
+
+        ts.env.ledger().set_sequence_number(100);
+        client.mint(&alice, &1_000_i128);
+        client.mint(&alice, &500_i128);
+        client.transfer(&alice, &bob, &200_i128);
+
+        // Balance queries at ledger 100 return the final balance at that ledger.
+        assert_eq!(client.balance_at(&alice, &100_u32), 1_300);
+        assert_eq!(client.balance_at(&bob, &100_u32), 200);
+
+        // Verify storage layout: tracker total_count is 3 for alice, 1 for bob.
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker_alice: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker_alice.total_count, 3);
+            assert_eq!(tracker_alice.start_page, 0);
+
+            let page_alice: Vec<Checkpoint> = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(alice.clone(), 0))
+                .unwrap();
+            assert_eq!(page_alice.len(), 3);
+            assert_eq!(page_alice.get(0).unwrap().balance, 1_000);
+            assert_eq!(page_alice.get(1).unwrap().balance, 1_500);
+            assert_eq!(page_alice.get(2).unwrap().balance, 1_300);
+        });
+    }
+
+    #[test]
+    fn test_checkpoint_page_boundary_crossing() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Mint PAGE_SIZE (32) times.
+        for i in 0..LpToken::PAGE_SIZE {
+            ts.env.ledger().set_sequence_number(100 + i);
+            client.mint(&alice, &10_i128);
+            ts.env.budget().reset_default();
+        }
+
+        // Verify exactly 1 page exists, full with 32 entries.
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 32);
+            assert_eq!(tracker.start_page, 0);
+
+            let page0: Vec<Checkpoint> = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(alice.clone(), 0))
+                .unwrap();
+            assert_eq!(page0.len(), 32);
+            assert!(!ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 1)));
+        });
+
+        // 33rd mint crosses to page 1.
+        ts.env.ledger().set_sequence_number(200);
+        client.mint(&alice, &10_i128);
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 33);
+            assert_eq!(tracker.start_page, 0);
+
+            let page1: Vec<Checkpoint> = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(alice.clone(), 1))
+                .unwrap();
+            assert_eq!(page1.len(), 1);
+            assert_eq!(page1.get(0).unwrap().balance, 330);
+        });
+
+        // balance_at across page boundary resolves correctly.
+        assert_eq!(client.balance_at(&alice, &100_u32), 10);
+        assert_eq!(client.balance_at(&alice, &131_u32), 320);
+        assert_eq!(client.balance_at(&alice, &150_u32), 320);
+        assert_eq!(client.balance_at(&alice, &200_u32), 330);
+        assert_eq!(client.balance_at(&alice, &300_u32), 330);
+    }
+
+    #[test]
+    fn test_checkpoint_eviction_drops_oldest_page() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Fill exactly MAX_CHECKPOINTS (1024) checkpoints, spanning 32 pages (pages 0..31).
+        for i in 0..LpToken::MAX_CHECKPOINTS {
+            ts.env.ledger().set_sequence_number(100 + i);
+            client.mint(&alice, &1_i128);
+            ts.env.budget().reset_default();
+        }
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 1024);
+            assert_eq!(tracker.start_page, 0);
+            assert!(ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 0)));
+            assert!(ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 31)));
+        });
+
+        // 1025th checkpoint triggers eviction of page 0.
+        ts.env.ledger().set_sequence_number(2000);
+        client.mint(&alice, &1_i128);
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 1025);
+            assert_eq!(tracker.start_page, 1);
+            // Page 0 was removed!
+            assert!(!ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 0)));
+            // Page 32 was created!
+            assert!(ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 32)));
+        });
+
+        // Querying an evicted ledger returns BalanceUnavailable.
+        assert_eq!(
+            client.try_balance_at(&alice, &100_u32),
+            Err(Ok(TokenError::BalanceUnavailable))
+        );
+        // Querying ledger 131 (last item in page 0) also errors.
+        assert_eq!(
+            client.try_balance_at(&alice, &131_u32),
+            Err(Ok(TokenError::BalanceUnavailable))
+        );
+        // Querying ledger 132 (first item in page 1) succeeds.
+        assert_eq!(client.balance_at(&alice, &132_u32), 33);
+    }
+
+    #[test]
+    fn test_checkpoint_legacy_migration_on_read() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Seed legacy DataKey::Checkpoints entry with no CheckpointTracker.
+        ts.env.as_contract(&ts.contract_addr, || {
+            let mut checkpoints = Vec::new(&ts.env);
+            checkpoints.push_back(Checkpoint {
+                ledger: 50,
+                balance: 100,
+            });
+            checkpoints.push_back(Checkpoint {
+                ledger: 100,
+                balance: 250,
+            });
+            ts.env
+                .storage()
+                .persistent()
+                .set(&DataKey::Checkpoints(alice.clone()), &checkpoints);
+        });
+
+        // balance_at reads from legacy format seamlessly.
+        assert_eq!(client.balance_at(&alice, &40_u32), 0);
+        assert_eq!(client.balance_at(&alice, &50_u32), 100);
+        assert_eq!(client.balance_at(&alice, &75_u32), 100);
+        assert_eq!(client.balance_at(&alice, &100_u32), 250);
+        assert_eq!(client.balance_at(&alice, &150_u32), 250);
+    }
+
+    #[test]
+    fn test_checkpoint_legacy_migration_on_write() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Seed 40 legacy checkpoints.
+        ts.env.as_contract(&ts.contract_addr, || {
+            let mut checkpoints = Vec::new(&ts.env);
+            for i in 0..40u32 {
+                checkpoints.push_back(Checkpoint {
+                    ledger: 10 + i,
+                    balance: (i as i128 + 1) * 10,
+                });
+            }
+            ts.env
+                .storage()
+                .persistent()
+                .set(&DataKey::Checkpoints(alice.clone()), &checkpoints);
+            ts.env
+                .storage()
+                .persistent()
+                .set(&DataKey::Balance(alice.clone()), &400_i128);
+        });
+
+        // Trigger a write on ledger 100.
+        ts.env.ledger().set_sequence_number(100);
+        client.mint(&alice, &50_i128);
+
+        // Legacy key must be deleted, and pages created.
+        ts.env.as_contract(&ts.contract_addr, || {
+            assert!(!ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::Checkpoints(alice.clone())));
+
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 41);
+            assert_eq!(tracker.start_page, 0);
+
+            let page0: Vec<Checkpoint> = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(alice.clone(), 0))
+                .unwrap();
+            assert_eq!(page0.len(), 32);
+
+            let page1: Vec<Checkpoint> = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointPage(alice.clone(), 1))
+                .unwrap();
+            assert_eq!(page1.len(), 9);
+            assert_eq!(page1.get(8).unwrap().balance, 450);
+        });
+
+        // Verification of query results across migrated pages.
+        assert_eq!(client.balance_at(&alice, &10_u32), 10);
+        assert_eq!(client.balance_at(&alice, &41_u32), 320);
+        assert_eq!(client.balance_at(&alice, &49_u32), 400);
+        assert_eq!(client.balance_at(&alice, &100_u32), 450);
+    }
+
+    #[test]
+    fn test_checkpoint_write_bounded_by_single_page() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Populate 100 checkpoints across multiple pages.
+        for i in 0..100 {
+            ts.env.ledger().set_sequence_number(100 + i);
+            client.mint(&alice, &1_i128);
+            ts.env.budget().reset_default();
+        }
+
+        // Each page holds at most PAGE_SIZE (32) checkpoints.
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tracker: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tracker.total_count, 100);
+
+            for page_idx in tracker.start_page..=(tracker.total_count / LpToken::PAGE_SIZE) {
+                if let Some(page) =
+                    ts.env.storage().persistent().get::<_, Vec<Checkpoint>>(
+                        &DataKey::CheckpointPage(alice.clone(), page_idx),
+                    )
+                {
+                    assert!(
+                        page.len() <= LpToken::PAGE_SIZE,
+                        "page {page_idx} exceeded PAGE_SIZE: {}",
+                        page.len()
+                    );
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn test_checkpoint_simulation_and_apply_write_size_identical() {
+        // Since there is no same-ledger coalescing, every balance change appends
+        // exactly 1 checkpoint to the current page. Simulation at ledger L and apply
+        // at ledger L+1 write to the exact same page index and append the exact same size.
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        ts.env.ledger().set_sequence_number(100);
+        client.mint(&alice, &100_i128);
+
+        // Simulation at ledger 100 appends to page 0.
+        // Apply at ledger 100 or 101 also appends to page 0.
+        client.mint(&alice, &50_i128);
+        ts.env.ledger().set_sequence_number(101);
+        client.mint(&alice, &50_i128);
+
+        assert_eq!(client.balance_at(&alice, &100_u32), 150);
+        assert_eq!(client.balance_at(&alice, &101_u32), 200);
+    }
+
+    #[test]
+    fn test_checkpoint_binary_search_exact_and_between_ledgers() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Write at ledgers 100, 200, 300 across multiple pages.
+        // To force multi-page, add 30 dummy writes at ledger 100, 1 write at 200, 30 writes at 300.
+        ts.env.ledger().set_sequence_number(100);
+        for _ in 0..30 {
+            client.mint(&alice, &1_i128);
+            ts.env.budget().reset_default();
+        }
+
+        ts.env.ledger().set_sequence_number(200);
+        client.mint(&alice, &10_i128); // 31st (still page 0)
+        client.mint(&alice, &10_i128); // 32nd (page 0 full)
+        client.mint(&alice, &10_i128); // 33rd (page 1)
+
+        ts.env.ledger().set_sequence_number(300);
+        client.mint(&alice, &100_i128);
+
+        // Exact matches
+        assert_eq!(client.balance_at(&alice, &100_u32), 30);
+        assert_eq!(client.balance_at(&alice, &200_u32), 60);
+        assert_eq!(client.balance_at(&alice, &300_u32), 160);
+
+        // Intermediate queries
+        assert_eq!(client.balance_at(&alice, &150_u32), 30);
+        assert_eq!(client.balance_at(&alice, &250_u32), 60);
+        assert_eq!(client.balance_at(&alice, &350_u32), 160);
+    }
+
+    #[test]
+    fn test_checkpoint_query_before_first_ledger_returns_zero() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        ts.env.ledger().set_sequence_number(500);
+        client.mint(&alice, &1_000_i128);
+
+        assert_eq!(client.balance_at(&alice, &499_u32), 0);
+        assert_eq!(client.balance_at(&alice, &1_u32), 0);
+    }
+
+    #[test]
+    fn test_checkpoint_transfer_updates_both_accounts_paged() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let bob = Address::generate(&ts.env);
+
+        ts.env.ledger().set_sequence_number(100);
+        client.mint(&alice, &1_000_i128);
+        client.transfer(&alice, &bob, &300_i128);
+
+        assert_eq!(client.balance_at(&alice, &100_u32), 700);
+        assert_eq!(client.balance_at(&bob, &100_u32), 300);
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tr_a: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            let tr_b: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(bob.clone()))
+                .unwrap();
+            assert_eq!(tr_a.total_count, 2); // mint + transfer
+            assert_eq!(tr_b.total_count, 1); // transfer
+        });
+    }
+
+    #[test]
+    fn test_checkpoint_burn_records_paged_checkpoint() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        ts.env.ledger().set_sequence_number(100);
+        client.mint(&alice, &1_000_i128);
+        ts.env.ledger().set_sequence_number(105);
+        client.burn(&alice, &400_i128);
+
+        assert_eq!(client.balance_at(&alice, &100_u32), 1_000);
+        assert_eq!(client.balance_at(&alice, &104_u32), 1_000);
+        assert_eq!(client.balance_at(&alice, &105_u32), 600);
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tr: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tr.total_count, 2);
+        });
+    }
+
+    #[test]
+    fn test_checkpoint_consecutive_page_evictions() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        // Fill 1024 checkpoints (pages 0..31)
+        for i in 0..LpToken::MAX_CHECKPOINTS {
+            ts.env.ledger().set_sequence_number(100 + i);
+            client.mint(&alice, &1_i128);
+            ts.env.budget().reset_default();
+        }
+
+        // Add 64 more checkpoints across two new pages (pages 32 and 33).
+        // This should evict page 0, then page 1.
+        for i in 0..64 {
+            ts.env.ledger().set_sequence_number(2000 + i);
+            client.mint(&alice, &1_i128);
+            ts.env.budget().reset_default();
+        }
+
+        ts.env.as_contract(&ts.contract_addr, || {
+            let tr: CheckpointTracker = ts
+                .env
+                .storage()
+                .persistent()
+                .get(&DataKey::CheckpointTracker(alice.clone()))
+                .unwrap();
+            assert_eq!(tr.total_count, 1024 + 64);
+            assert_eq!(tr.start_page, 2);
+            assert!(!ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 0)));
+            assert!(!ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 1)));
+            assert!(ts
+                .env
+                .storage()
+                .persistent()
+                .has(&DataKey::CheckpointPage(alice.clone(), 2)));
+        });
+
+        // Ledgers in page 1 (up to ledger 100 + 63 = 163) are unavailable.
+        assert_eq!(
+            client.try_balance_at(&alice, &163_u32),
+            Err(Ok(TokenError::BalanceUnavailable))
+        );
+        // Ledger in page 2 (ledger 100 + 64 = 164) is available.
+        assert_eq!(client.balance_at(&alice, &164_u32), 65);
     }
 }

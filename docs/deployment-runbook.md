@@ -670,6 +670,34 @@ is running at the same address against the old storage, restores the original,
 checks that all prior state matches and still works, and checks the typed
 rejection of a non-admin caller.
 
+### 5.6 Storage migrations and layout updates
+
+#### 5.6.1 Token paged checkpoints (Issue #1074)
+- **Problem addressed:** Previously, token balance changes rewrote an account's entire checkpoint vector in one persistent entry (`DataKey::Checkpoints(Address)`). This created two failures:
+  1. Simulation/apply write byte count mismatch when an account had already transacted in the simulation ledger (overwrite branch vs append branch), triggering `ResourceLimitExceeded`.
+  2. Write sizes grew linearly with history ($O(N)$), causing active pools to hit the network's `tx_max_write_bytes` (132 KB) around 880 checkpoints.
+- **New storage layout:** Checkpoints are stored in fixed-size pages of 32 entries (`DataKey::CheckpointPage(Address, page)`), coordinated by `DataKey::CheckpointTracker(Address)`.
+- **Properties:**
+  - Storage writes touch only the current page and the tracker, ensuring $O(1)$ write byte count bounded by $\approx 2.3\text{ KB}$ regardless of history length.
+  - No same-ledger coalescing: always append, ensuring write footprint and bytes are strictly identical between simulation and apply ledgers.
+- **Upgrade and migration:**
+  - For deployed tokens upgrading to the new WASM, `balance_at` falls back seamlessly to the legacy `DataKey::Checkpoints(Address)` entry for accounts not yet migrated.
+  - On an account's first write (transfer, mint, or burn) post-upgrade, the contract automatically migrates legacy checkpoints into paged storage and removes the legacy entry. At the 1024 checkpoint cap, migration writes $\approx 74\text{ KB}$, well within the 132 KB transaction write limit.
+
+#### 5.6.2 Concentrated liquidity fee growth scale (Issue #1098)
+- **Problem addressed:** Concentrated liquidity previously tracked `fee_growth_global` and position fee growth using a fixed-point scale of $10^6$ (`1_000_000`). For realistic pool liquidities ($L \sim 10^{11} - 10^{15}$), any swap whose fee was smaller than $L / 10^6$ credited 0 growth, permanently locking fee dust.
+- **New scale:** Switched to wide fixed-point scale $2^{64}$ (Q64, `FEE_GROWTH_SCALE = 1_i128 << 64`). Fee growth math uses 256-bit wide arithmetic (`mul_div`, `mul_wide`) to prevent overflow.
+- **Parity:** Simulator (`packages/amm-simulator`) and contract use identical Q64 arithmetic and pass zero-tolerance parity tests.
+- **Migration decision:** Pre-launch breaking change. Concentrated liquidity pools are redeployed with the new scale; existing pre-launch testnet pools should be re-created.
+
+#### 5.6.3 POL vesting revocation semantics (Issue #1073)
+- **Problem addressed:** `revoke_vesting` previously executed token transfers directly to both the treasury and the beneficiary. When invoked immediately after a `release` in the same ledger, simulation observed 0 unreleased vested tokens for the beneficiary (skipping the beneficiary transfer in the footprint), but applying in a later ledger attempted a positive transfer and trapped.
+- **Resolution:**
+  - `revoke_vesting` only ever transfers unvested tokens (`total - vested`) to the treasury. It never transfers directly to the beneficiary.
+  - The schedule is frozen at the revocation ledger (`schedule.total = vested; schedule.revoked = true;`).
+  - The beneficiary claims any vested-but-unreleased remainder via the standard `release` entrypoint.
+  - Only treasury tokens are deducted from `Committed(lp_token)` on revoke; the beneficiary remainder remains committed until released.
+
 ---
 
 ## 6. Emergency Procedures

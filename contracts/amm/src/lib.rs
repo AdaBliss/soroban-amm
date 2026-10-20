@@ -1868,16 +1868,8 @@ impl AmmPool {
         };
 
         // Update reserves: deduct the withdrawn amounts.
-        let new_reserve_a = if token_out == token_a {
-            reserve_a - withdraw_a
-        } else {
-            reserve_a - withdraw_b
-        };
-        let new_reserve_b = if token_out == token_a {
-            reserve_b - withdraw_b
-        } else {
-            reserve_b - withdraw_a
-        };
+        let new_reserve_a = reserve_a - withdraw_a;
+        let new_reserve_b = reserve_b - withdraw_b;
 
         env.storage()
             .instance()
@@ -1928,18 +1920,29 @@ impl AmmPool {
         } else {
             0
         };
+        let lp_rebate_bps: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LpRebateBps)
+            .unwrap_or(0);
+        let lp_rebate = if protocol_fee > 0 && lp_rebate_bps > 0 {
+            protocol_fee * lp_rebate_bps / 10_000
+        } else {
+            0
+        };
+        let net_protocol_fee = protocol_fee - lp_rebate;
 
         let final_reserve_a = if token_out == token_a {
             // We paid out swap_output of token_a
             new_reserve_a - swap_output
         } else {
-            // We received amount_swap of token_a (minus protocol fee)
-            new_reserve_a + amount_swap - protocol_fee
+            // We received amount_swap of token_a (minus net protocol fee)
+            new_reserve_a + amount_swap - net_protocol_fee
         };
 
         let final_reserve_b = if token_out == token_a {
-            // We received amount_swap of token_b (minus protocol fee)
-            new_reserve_b + amount_swap - protocol_fee
+            // We received amount_swap of token_b (minus net protocol fee)
+            new_reserve_b + amount_swap - net_protocol_fee
         } else {
             // We paid out swap_output of token_b
             new_reserve_b - swap_output
@@ -1953,7 +1956,7 @@ impl AmmPool {
             .set(&DataKey::ReserveB, &final_reserve_b);
 
         // Track protocol fees if applicable.
-        if protocol_fee > 0 {
+        if net_protocol_fee > 0 {
             let token_to_accrue = if token_out == token_a {
                 token_b.clone()
             } else {
@@ -1968,7 +1971,7 @@ impl AmmPool {
                     .unwrap_or(0);
                 env.storage()
                     .instance()
-                    .set(&DataKey::AccruedFeeA, &(accrued + protocol_fee));
+                    .set(&DataKey::AccruedFeeA, &(accrued + net_protocol_fee));
             } else {
                 let accrued: i128 = env
                     .storage()
@@ -1977,7 +1980,7 @@ impl AmmPool {
                     .unwrap_or(0);
                 env.storage()
                     .instance()
-                    .set(&DataKey::AccruedFeeB, &(accrued + protocol_fee));
+                    .set(&DataKey::AccruedFeeB, &(accrued + net_protocol_fee));
             }
         }
 

@@ -6,6 +6,7 @@
 //!
 //! All tests run fully in-process using the Soroban test environment —
 //! no external network calls are made.
+#![allow(unexpected_cfgs)]
 
 pub mod fixture;
 

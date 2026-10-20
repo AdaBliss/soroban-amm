@@ -28,6 +28,7 @@
 //! ```
 
 #![no_std]
+#![allow(unexpected_cfgs)]
 
 pub mod client;
 pub mod events;

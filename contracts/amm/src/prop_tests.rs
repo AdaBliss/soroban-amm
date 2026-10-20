@@ -798,3 +798,60 @@ fn test_simulate_swap_price_impact_bps() {
         "medium swap must have larger price impact than tiny"
     );
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(20))]
+    #[test]
+    fn prop_test_reserves_balance_invariant_random_operations(
+        ops in prop::collection::vec((0u8..=3, 100_i128..=50_000_i128), 5..=15),
+    ) {
+        let ts = setup_pool(30);
+        let env = &ts.env;
+        let amm = AmmPoolClient::new(env, &ts.amm_addr);
+        let ta_sac = soroban_sdk::token::StellarAssetClient::new(env, &ts.ta_addr);
+        let tb_sac = soroban_sdk::token::StellarAssetClient::new(env, &ts.tb_addr);
+
+        amm.set_protocol_fee(&ts.admin, &ts.admin, &10_i128);
+        amm.set_lp_rebate(&ts.admin, &200_i128);
+
+        let seed_lp = Address::generate(env);
+        ta_sac.mint(&seed_lp, &10_000_000_i128);
+        tb_sac.mint(&seed_lp, &10_000_000_i128);
+        AddLiquidity::new(&amm, &seed_lp, 10_000_000, 10_000_000).execute();
+
+        let user = Address::generate(env);
+        ta_sac.mint(&user, &10_000_000_i128);
+        tb_sac.mint(&user, &10_000_000_i128);
+
+        for (action, amount) in ops {
+            match action {
+                0 => {
+                    // add_liquidity
+                    AddLiquidity::new(&amm, &user, amount, amount).execute();
+                }
+                1 => {
+                    // swap A for B
+                    Swap::new(&amm, &user, &ts.ta_addr, amount).execute();
+                }
+                2 => {
+                    // remove_liquidity_one_sided (token_a)
+                    let shares = amm.shares_of(&user);
+                    if shares > 10 {
+                        let to_burn = (shares / 4).max(1);
+                        let _ = amm.remove_liquidity_one_sided(&user, &to_burn, &ts.ta_addr, &0_i128, &u64::MAX);
+                    }
+                }
+                3 => {
+                    // remove_liquidity_one_sided (token_b)
+                    let shares = amm.shares_of(&user);
+                    if shares > 10 {
+                        let to_burn = (shares / 4).max(1);
+                        let _ = amm.remove_liquidity_one_sided(&user, &to_burn, &ts.tb_addr, &0_i128, &u64::MAX);
+                    }
+                }
+                _ => {}
+            }
+            assert_reserves_match_balances(&amm, env);
+        }
+    }
+}

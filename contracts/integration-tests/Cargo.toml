@@ -8,8 +8,6 @@ edition = "2021"
 name = "integration_tests"
 path = "src/lib.rs"
 
-[features]
-legacy-integration-matrix = []
 
 # `pub mod fixture` (src/fixture.rs) is not `#[cfg(test)]`-gated, since it is
 # also linked by the external `tests/v2_to_v3_migration.rs` test binary, which

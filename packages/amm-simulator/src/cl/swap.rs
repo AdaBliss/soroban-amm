@@ -82,22 +82,27 @@ impl ClPoolState {
         let mut crossings: Vec<(i32, i128, i128)> = Vec::new();
 
         // Splits one step's fee and books it against the side being paid in.
-        let mut accrue =
-            |fee: i128, active: i128, fg_a: &mut i128, fg_b: &mut i128| -> Result<()> {
-                let protocol_fee = overflow(fee.checked_mul(protocol_fee_bps))? / 10_000;
-                let lp_fee = fee - protocol_fee;
-                protocol_fee_total += protocol_fee;
-                lp_fee_total += lp_fee;
-                if lp_fee > 0 {
-                    let growth = overflow(lp_fee.checked_mul(FEE_GROWTH_SCALE))? / active;
-                    if zero_for_one {
-                        *fg_a += growth;
-                    } else {
-                        *fg_b += growth;
-                    }
+        let mut accrue = |fee: i128,
+                          active: i128,
+                          fg_a: &mut i128,
+                          fg_b: &mut i128|
+         -> Result<()> {
+            let protocol_fee = overflow(fee.checked_mul(protocol_fee_bps))? / 10_000;
+            let lp_fee = fee - protocol_fee;
+            protocol_fee_total += protocol_fee;
+            lp_fee_total += lp_fee;
+            if lp_fee > 0 {
+                let growth =
+                    swap_math::mul_div(lp_fee as u128, FEE_GROWTH_SCALE as u128, active as u128)
+                        .ok_or(SimulationError::Overflow)? as i128;
+                if zero_for_one {
+                    *fg_a += growth;
+                } else {
+                    *fg_b += growth;
                 }
-                Ok(())
-            };
+            }
+            Ok(())
+        };
         // Input needed for `after_fee` to reach the pool, rounded up.
         let gross_up = |after_fee: i128| -> Result<i128> {
             Ok(
@@ -339,16 +344,13 @@ mod tests {
         assert!(r.ticks_crossed.is_empty());
         assert_eq!(r.fee, 300_000);
         assert_eq!(p.accrued_fee_a, 300_000);
-        // 300_000 * 1e6 / 6e9 per unit of liquidity.
-        assert_eq!(p.fee_growth_global_a, 50);
-        assert_eq!(
-            p.position_fees("wide", -10_000, 10_000).unwrap(),
-            (50_000, 0)
-        );
-        assert_eq!(
-            p.position_fees("narrow", -5_000, 5_000).unwrap(),
-            (250_000, 0)
-        );
+        // 300_000 * 2^64 / 6e9 per unit of liquidity.
+        let expected_fg = (300_000_u128 * (1u128 << 64) / 6_000_000_000_u128) as i128;
+        assert_eq!(p.fee_growth_global_a, expected_fg);
+        let (wide_a, _) = p.position_fees("wide", -10_000, 10_000).unwrap();
+        assert!((wide_a - 50_000).abs() <= 1);
+        let (narrow_a, _) = p.position_fees("narrow", -5_000, 5_000).unwrap();
+        assert!((narrow_a - 250_000).abs() <= 1);
         // A range the price never entered earns nothing.
         p.add_liquidity("idle", 20_000, 30_000, 1_000_000_000)
             .unwrap();
