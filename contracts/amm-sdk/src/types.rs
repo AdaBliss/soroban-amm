@@ -56,6 +56,9 @@ pub enum SdkAmmError {
     AlreadyExecuted = 19,
     ProposalExpired = 20,
     NotInitialized = 21,
+    PoolDrained = 22,
+    QuorumNotMet = 23,
+    NoPendingProposal = 24,
 }
 
 // ── Pool state ────────────────────────────────────────────────────────────────

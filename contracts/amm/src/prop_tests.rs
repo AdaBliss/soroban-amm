@@ -263,35 +263,34 @@ fn test_emergency_withdraw_zeros_total_shares_and_allows_redeposit() {
     let recipient = Address::generate(&env);
     amm.emergency_withdraw(&recipient);
 
-    // After drain: reserves AND total_shares must all be 0.
+    // After drain: reserves are 0, total_shares is preserved, and pool is in terminal drained state (#1095).
     let info_after = amm.get_info();
     assert_eq!(info_after.reserve_a, 0, "reserve_a not zeroed");
     assert_eq!(info_after.reserve_b, 0, "reserve_b not zeroed");
     assert_eq!(
-        info_after.total_shares, 0,
-        "total_shares must be zeroed after emergency_withdraw (issue #569)"
+        info_after.total_shares, info.total_shares,
+        "total_shares must remain intact after emergency_withdraw (#1095)"
     );
+    assert!(amm.is_drained(), "pool must be marked drained");
 
-    // Re-deposit must not panic (was previously bricked by divide-by-zero).
+    // Re-deposit and redemption are blocked with PoolDrained so old LP tokens cannot drain new deposits.
     let new_provider = Address::generate(&env);
     ta_sac.mint(&new_provider, &2_000_000_i128);
     tb_sac.mint(&new_provider, &1_000_000_i128);
-    let shares = AddLiquidity::new(&amm, &new_provider, 2_000_000, 1_000_000).execute();
-    assert!(
-        shares > 0,
-        "re-deposit after emergency_withdraw must mint shares"
+    let res = amm.try_add_liquidity(
+        &new_provider,
+        &2_000_000_i128,
+        &1_000_000_i128,
+        &0_i128,
+        &u64::MAX,
     );
-
-    let info_final = amm.get_info();
-    assert!(info_final.reserve_a > 0);
-    assert!(info_final.reserve_b > 0);
-    assert!(info_final.total_shares > 0);
+    assert_eq!(res, Err(Ok(AmmError::PoolDrained)));
 }
 
-/// Regression test for issue #569 — multisig path.
+/// Regression test for issue #1095 — multisig path.
 ///
-/// `exec_multisig_emergency_wd` must also zero `TotalShares` so that
-/// add_liquidity can be called successfully after the multisig drain.
+/// `exec_multisig_emergency_wd` enters the terminal drained state, preserving
+/// `TotalShares` and rejecting post-drain deposits and redemptions with `PoolDrained`.
 #[test]
 fn test_multisig_emergency_wd_zeros_total_shares_and_allows_redeposit() {
     let (env, admin, amm_addr, lp_addr, _) = setup();
@@ -328,24 +327,28 @@ fn test_multisig_emergency_wd_zeros_total_shares_and_allows_redeposit() {
     amm.propose_emergency_withdraw(&signer, &recipient);
     amm.exec_multisig_emergency_wd(&signer);
 
-    // After drain: reserves AND total_shares must all be 0.
+    // After drain: reserves are 0, total_shares is preserved, and pool is drained (#1095).
     let info_after = amm.get_info();
     assert_eq!(info_after.reserve_a, 0, "reserve_a not zeroed");
     assert_eq!(info_after.reserve_b, 0, "reserve_b not zeroed");
     assert_eq!(
-        info_after.total_shares, 0,
-        "total_shares must be zeroed after exec_multisig_emergency_wd (issue #569)"
+        info_after.total_shares, info.total_shares,
+        "total_shares must remain intact after exec_multisig_emergency_wd (#1095)"
     );
+    assert!(amm.is_drained(), "pool must be marked drained");
 
-    // Re-deposit must not panic.
+    // Re-deposit is rejected with PoolDrained.
     let new_provider = Address::generate(&env);
     ta_sac.mint(&new_provider, &2_000_000_i128);
     tb_sac.mint(&new_provider, &1_000_000_i128);
-    let shares = AddLiquidity::new(&amm, &new_provider, 2_000_000, 1_000_000).execute();
-    assert!(
-        shares > 0,
-        "re-deposit after multisig emergency_wd must mint shares"
+    let res = amm.try_add_liquidity(
+        &new_provider,
+        &2_000_000_i128,
+        &1_000_000_i128,
+        &0_i128,
+        &u64::MAX,
     );
+    assert_eq!(res, Err(Ok(AmmError::PoolDrained)));
 }
 
 #[test]

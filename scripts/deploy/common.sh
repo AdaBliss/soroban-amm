@@ -435,10 +435,47 @@ verify_factory_hashes() {
   return 1
 }
 
+verify_governance_admin() {
+  local contract_id="$1"
+  local expected_admin="$2"
+  local attempt out err admin rc
+  for attempt in 1 2 3 4 5; do
+    err=$(mktemp)
+    out=$(stellar contract invoke \
+      --id "$contract_id" \
+      --network "$NETWORK" \
+      --source "$SOURCE_ACCOUNT" \
+      -- get_admin 2>"$err")
+    rc=$?
+    admin=""
+    if [[ $rc -eq 0 ]]; then
+      admin=$(printf '%s\n' "$out" | grep -Eo '[GC][A-Z2-7]{55}' | tail -n 1 || true)
+    fi
+    if [[ -n "$admin" ]]; then
+      rm -f "$err"
+      break
+    fi
+    log "governance $contract_id admin read attempt $attempt/5 failed, retrying: $(cat "$err")"
+    rm -f "$err"
+    sleep 2
+  done
+  if [[ -z "$admin" ]]; then
+    die "governance $contract_id admin read returned empty after retries — possible front-run or uninitialized contract"
+  fi
+  if [[ "$admin" != "$expected_admin" ]]; then
+    die "governance $contract_id admin mismatch: expected $expected_admin got $admin — possible front-run, aborting deploy"
+  fi
+  log "verified governance $contract_id admin=$admin"
+}
+
 verify_governance() {
   local gov_id="$1"
   local expected_pool="$2"
   local expected_lp="$3"
+  local expected_admin="${4:-}"
+  if [[ -n "$expected_admin" ]]; then
+    verify_governance_admin "$gov_id" "$expected_admin"
+  fi
   local out
   out=$(invoke_read "$gov_id" get_params 2>/dev/null || true)
   if echo "$out" | grep -q "$expected_pool" || echo "$out" | grep -q "$expected_lp"; then

@@ -128,9 +128,34 @@ fn scenario_multisig_single_approval_does_not_execute() {
 
     amm.propose_emergency_withdraw(&a, &recipient);
 
-    // Only one approval collected; execution must fail before quorum is reached.
+    // Only one approval collected; execution must fail with QuorumNotMet before quorum is reached.
     let result = amm.try_exec_multisig_emergency_wd(&a);
-    assert!(result.is_err(), "execution with 1/2 approvals should fail");
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::QuorumNotMet)),
+        "execution with 1/2 approvals should fail with QuorumNotMet"
+    );
+}
+
+#[test]
+fn scenario_multisig_exec_without_proposal_returns_no_pending_proposal() {
+    let s = setup_suite();
+    let a = Address::generate(&s.env);
+    let b = Address::generate(&s.env);
+
+    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
+    amm.set_multisig(
+        &s.admin,
+        &signer_vec(&s.env, &[a.clone(), b.clone()]),
+        &2u32,
+    );
+
+    let result = amm.try_exec_multisig_emergency_wd(&a);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::NoPendingProposal)),
+        "executing without a pending proposal must return NoPendingProposal"
+    );
 }
 
 #[test]
@@ -152,11 +177,19 @@ fn scenario_multisig_quorum_triggers_emergency_withdrawal() {
     let pool_b_before = TokenClient::new(&s.env, &s.token_b).balance(&s.amm_addr);
     let recipient_a_before = TokenClient::new(&s.env, &s.token_a).balance(&recipient);
     let recipient_b_before = TokenClient::new(&s.env, &s.token_b).balance(&recipient);
+    let shares_before = amm.get_info().total_shares;
 
     // Collect quorum (2 approvals) before executing.
     amm.propose_emergency_withdraw(&a, &recipient);
     amm.propose_emergency_withdraw(&b, &recipient);
     amm.exec_multisig_emergency_wd(&b);
+
+    assert!(amm.is_drained(), "pool should enter terminal Drained state");
+    assert_eq!(
+        amm.get_info().total_shares,
+        shares_before,
+        "total_shares must remain intact after multisig drain"
+    );
 
     // Pool reserves should have been drained to the recipient.
     assert_eq!(

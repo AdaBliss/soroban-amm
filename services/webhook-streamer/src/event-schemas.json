@@ -267,6 +267,9 @@
     },
     "governance": {
       "events": {
+        "initialized": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "amm_pool", "lp_token", "voting_period_secs", "timelock_secs", "quorum_bps", "min_proposer_stake_bps"] }
+        ],
         "admin_nominated": [
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["current_admin", "new_admin"] }
         ],
@@ -275,6 +278,15 @@
         ],
         "upgraded": [
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["new_wasm_hash"] }
+        ],
+        "quorum_decay_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_rate_bps_per_day", "new_rate_bps_per_day"] }
+        ],
+        "min_stake_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_min_proposer_stake_bps", "new_min_proposer_stake_bps"] }
+        ],
+        "timelock_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_timelock_secs", "new_timelock_secs"] }
         ],
         "proposed": [
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["id", "proposer", "kind", "vote_end", "snapshot_ledger"] }
@@ -298,7 +310,7 @@
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["from"] }
         ],
         "veto_multisig_set": [
-          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["multisig"] }
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_multisig", "new_multisig"] }
         ],
         "vetoed": [
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["proposal_id", "multisig", "now", "discussion_end"] }

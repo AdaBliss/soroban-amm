@@ -675,9 +675,13 @@ count. Events marked unversioned carry their payload without the
 
 | Event | Topics | Payload fields | Envelope |
 |---|---|---|---|
+| `initialized` | 1 | `admin`, `amm_pool`, `lp_token`, `voting_period_secs`, `timelock_secs`, `quorum_bps`, `min_proposer_stake_bps` | v1 |
 | `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
 | `admin_changed` | 1 | `new_admin` | v1 |
 | `upgraded` | 1 | `new_wasm_hash` | v1 |
+| `quorum_decay_set` | 1 | `old_rate_bps_per_day`, `new_rate_bps_per_day` | v1 |
+| `min_stake_set` | 1 | `old_min_proposer_stake_bps`, `new_min_proposer_stake_bps` | v1 |
+| `timelock_set` | 1 | `old_timelock_secs`, `new_timelock_secs` | v1 |
 | `proposed` | 1 | `id`, `proposer`, `kind`, `vote_end`, `snapshot_ledger` | v1 |
 | `voted` | 1 | `proposal_id`, `voter`, `choice`, `voting_power` | v1 |
 | `executed` | 1 | `proposal_id`, `kind` | v1 |
@@ -685,7 +689,7 @@ count. Events marked unversioned carry their payload without the
 | `vote_unlocked` | 2 | `proposal_id`, `locked` | v1 |
 | `delegated` | 1 | `from`, `to` | v1 |
 | `undelegated` | 1 | `from` | v1 |
-| `veto_multisig_set` | 1 | `multisig` | v1 |
+| `veto_multisig_set` | 1 | `old_multisig`, `new_multisig` | v1 |
 | `vetoed` | 1 | `proposal_id`, `multisig`, `now`, `discussion_end` | v1 |
 
 ### `incentive_campaigns`

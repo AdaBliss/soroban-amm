@@ -90,7 +90,7 @@ deploy_governance() {
   fi
 
   CURRENT_STEP="verify governance"
-  if ! verify_governance "$GOVERNANCE_CONTRACT_ID" "$AMM_POOL_CONTRACT_ID" "$LP_TOKEN_CONTRACT_ID"; then
+  if ! verify_governance "$GOVERNANCE_CONTRACT_ID" "$AMM_POOL_CONTRACT_ID" "$LP_TOKEN_CONTRACT_ID" "$ADMIN_ADDRESS"; then
     warn "governance verification warning"
   else
     log "verified governance points at correct pool/lp"

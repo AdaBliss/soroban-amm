@@ -102,6 +102,12 @@ pub enum AmmError {
     /// A function that reads pool configuration (tokens, LP token, admin,
     /// fee settings) was called before `initialize`.
     NotInitialized = 21,
+    /// The pool has undergone an emergency withdrawal and is permanently drained.
+    PoolDrained = 22,
+    /// Multisig emergency withdrawal proposal has insufficient approvals to meet quorum.
+    QuorumNotMet = 23,
+    /// No emergency withdrawal proposal exists to execute.
+    NoPendingProposal = 24,
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
@@ -122,6 +128,8 @@ pub enum DataKey {
     // Emergency withdrawal storage
     EmergencyWithdrawTimestamp,
     EmergencyWithdrawRecipient,
+    /// Terminal drained state after emergency withdrawal.
+    Drained,
 
     // Admin & fees
     Admin,
@@ -503,7 +511,13 @@ impl AmmPool {
         Self::extend_ttl(&env);
         let admin: Address = Self::read_admin(&env)?;
         admin.require_auth();
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::CircuitBreakerTriggeredAt, &0_u64);
         Ok(())
     }
 
@@ -537,6 +551,14 @@ impl AmmPool {
             .unwrap_or(false)
     }
 
+    /// Return `true` if the pool has undergone an emergency withdrawal.
+    pub fn is_drained(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Drained)
+            .unwrap_or(false)
+    }
+
     /// Emergency withdraw of all pool reserves to a designated address.
     /// Admin-only, callable via a timed governance proposal.
     pub fn emergency_withdraw(env: Env, to: Address) -> Result<(), AmmError> {
@@ -545,6 +567,10 @@ impl AmmPool {
         let _guard = ReentrancyGuard::acquire(&env)?;
         let admin: Address = Self::read_admin(&env)?;
         admin.require_auth();
+
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
 
         // If a k-of-n multisig guard is configured, the single-admin path must
         // not be allowed to drain reserves. Callers must use the multisig flow
@@ -567,46 +593,46 @@ impl AmmPool {
             .instance()
             .set(&DataKey::EmergencyWithdrawRecipient, &to);
 
-        // Get token addresses and reserves
+        // Get token addresses, reserves, and accrued protocol fees
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
         let reserve_a = Self::get_reserve_a(env.clone());
         let reserve_b = Self::get_reserve_b(env.clone());
+        let (accrued_a, accrued_b) = Self::get_accrued_fees(env.clone());
+        let drain_a = reserve_a.saturating_add(accrued_a);
+        let drain_b = reserve_b.saturating_add(accrued_b);
 
-        // Transfer reserves to recipient
-        if reserve_a > 0 {
+        // Transfer reserves and accrued protocol fees to recipient
+        if drain_a > 0 {
             SepTokenClient::new(&env, &token_a).transfer(
                 &env.current_contract_address(),
                 &to,
-                &reserve_a,
+                &drain_a,
             );
         }
-        if reserve_b > 0 {
+        if drain_b > 0 {
             SepTokenClient::new(&env, &token_b).transfer(
                 &env.current_contract_address(),
                 &to,
-                &reserve_b,
+                &drain_b,
             );
         }
 
-        // Zero out reserves and total shares so the pool is in a clean empty
-        // state. Leaving TotalShares non-zero while reserves are 0 would cause
-        // add_liquidity to divide by zero (reserve_a == 0 in the proportional
-        // shares formula), permanently bricking deposits. Resetting
-        // MinLiquidityLocked allows the first re-deposit to re-establish the
-        // minimum-liquidity lock correctly. (Fixes #569)
+        // Zero out reserves and accrued protocol fees. The pool enters a terminal
+        // Drained state (#1095) so existing LP tokens cannot drain subsequent deposits.
+        // TotalShares and MinLiquidityLocked are left intact to record historical LP shares.
         env.storage().instance().set(&DataKey::ReserveA, &0_i128);
         env.storage().instance().set(&DataKey::ReserveB, &0_i128);
-        env.storage().instance().set(&DataKey::TotalShares, &0_i128);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinLiquidityLocked, &false);
+        env.storage().instance().set(&DataKey::AccruedFeeA, &0_i128);
+        env.storage().instance().set(&DataKey::AccruedFeeB, &0_i128);
+        env.storage().instance().set(&DataKey::Drained, &true);
+        env.storage().instance().set(&DataKey::Paused, &true);
 
         // Emit event for audit trail
         soroban_amm_sdk::emit_versioned_event!(
             env,
             (Symbol::new(&env, "emergency_withdraw"), admin.clone()),
-            (to, reserve_a, reserve_b)
+            (to, drain_a, drain_b)
         );
 
         Ok(())
@@ -753,6 +779,9 @@ impl AmmPool {
     /// Attempt automatic recovery after the circuit breaker cooldown.
     pub fn try_circuit_breaker_recovery(env: Env) -> Result<bool, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         let triggered_at: u64 = env
             .storage()
             .instance()
@@ -793,13 +822,37 @@ impl AmmPool {
         Ok(true)
     }
 
-    /// Internal: capture the spot price at the start of a new ledger sequence.
-    fn check_circuit_breaker(env: &Env) -> Result<(), AmmError> {
+    /// Keeper entrypoint to trip the circuit breaker if the current spot price
+    /// has deviated from the block baseline by at least threshold_bps.
+    pub fn trip_circuit_breaker(env: Env) -> Result<bool, AmmError> {
+        Self::extend_ttl(&env);
+        if Self::is_paused(env.clone()) {
+            return Ok(false);
+        }
+        let reserve_a = Self::get_reserve_a(env.clone());
+        let reserve_b = Self::get_reserve_b(env.clone());
+        if reserve_a <= 0 || reserve_b <= 0 {
+            return Ok(false);
+        }
+        Self::check_circuit_breaker(&env, reserve_a, reserve_b)
+    }
+
+    /// Internal: check whether the trade moving reserves to (post_reserve_a, post_reserve_b)
+    /// trips the circuit breaker against the intra-block baseline price.
+    ///
+    /// If tripped, persists the pause and triggered_at timestamp, emits the circuit_break event,
+    /// and returns Ok(true) so callers can trip-and-succeed (return Ok(0)) without executing the trade.
+    /// Returns Ok(false) if the price movement is within the threshold.
+    fn check_circuit_breaker(
+        env: &Env,
+        post_reserve_a: i128,
+        post_reserve_b: i128,
+    ) -> Result<bool, AmmError> {
         let reserve_a = Self::get_reserve_a(env.clone());
         let reserve_b = Self::get_reserve_b(env.clone());
 
-        if reserve_a <= 0 || reserve_b <= 0 {
-            return Ok(());
+        if reserve_a <= 0 || reserve_b <= 0 || post_reserve_a <= 0 || post_reserve_b <= 0 {
+            return Ok(false);
         }
 
         let threshold_bps: i128 = env
@@ -816,34 +869,42 @@ impl AmmPool {
             .get(&DataKey::CircuitBreakerLastSeqno)
             .unwrap_or(0);
 
-        let current_price = reserve_b * 1_000_000 / reserve_a;
+        // High precision price: (reserve_b << 64) / reserve_a
+        let current_price = ((reserve_b as u128) << 64) / (reserve_a as u128);
 
-        if last_seqno != current_seqno {
+        let baseline_price: u128 = if last_seqno != current_seqno {
             env.storage()
                 .instance()
-                .set(&DataKey::CircuitBreakerLastPrice, &current_price);
+                .set(&DataKey::CircuitBreakerLastPrice, &(current_price as i128));
 
             env.storage()
                 .instance()
                 .set(&DataKey::CircuitBreakerLastSeqno, &current_seqno);
 
-            return Ok(());
-        }
-
-        let baseline_price: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::CircuitBreakerLastPrice)
-            .unwrap_or(current_price);
-
-        if baseline_price <= 0 {
-            return Ok(());
-        }
-
-        let deviation_bps = if current_price >= baseline_price {
-            (current_price - baseline_price) * 10_000 / baseline_price
+            current_price
         } else {
-            (baseline_price - current_price) * 10_000 / baseline_price
+            let stored: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::CircuitBreakerLastPrice)
+                .unwrap_or(0);
+            if stored > 0 {
+                stored as u128
+            } else {
+                0
+            }
+        };
+
+        if baseline_price == 0 {
+            return Ok(false);
+        }
+
+        let post_price = ((post_reserve_b as u128) << 64) / (post_reserve_a as u128);
+
+        let deviation_bps = if post_price >= baseline_price {
+            ((post_price - baseline_price) * 10_000 / baseline_price) as i128
+        } else {
+            ((baseline_price - post_price) * 10_000 / baseline_price) as i128
         };
 
         if deviation_bps >= threshold_bps {
@@ -858,13 +919,18 @@ impl AmmPool {
             soroban_amm_sdk::emit_versioned_event!(
                 env,
                 (Symbol::new(env, "circuit_break"),),
-                (baseline_price, current_price, deviation_bps, threshold_bps)
+                (
+                    baseline_price as i128,
+                    post_price as i128,
+                    deviation_bps,
+                    threshold_bps
+                )
             );
 
-            return Err(AmmError::CircuitBreaker);
+            return Ok(true);
         }
 
-        Ok(())
+        Ok(false)
     }
 
     /// Update the protocol fee configuration. Admin-only.
@@ -1158,12 +1224,15 @@ impl AmmPool {
         if executed {
             return Err(AmmError::AlreadyExecuted);
         }
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         let recipient: Option<Address> = env
             .storage()
             .instance()
             .get(&DataKey::MultisigProposalRecipient)
             .unwrap_or(None);
-        let to = recipient.ok_or(AmmError::NoPendingAdmin)?;
+        let to = recipient.ok_or(AmmError::NoPendingProposal)?;
         let expires_at: u64 = env
             .storage()
             .instance()
@@ -1178,38 +1247,35 @@ impl AmmPool {
             .get(&DataKey::MultisigProposalApprovals)
             .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
         if approvals.len() < quorum {
-            return Err(AmmError::InsufficientShares);
+            return Err(AmmError::QuorumNotMet);
         }
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
         let reserve_a = Self::get_reserve_a(env.clone());
         let reserve_b = Self::get_reserve_b(env.clone());
-        if reserve_a > 0 {
+        let (accrued_a, accrued_b) = Self::get_accrued_fees(env.clone());
+        let drain_a = reserve_a.saturating_add(accrued_a);
+        let drain_b = reserve_b.saturating_add(accrued_b);
+        if drain_a > 0 {
             SepTokenClient::new(&env, &token_a).transfer(
                 &env.current_contract_address(),
                 &to,
-                &reserve_a,
+                &drain_a,
             );
         }
-        if reserve_b > 0 {
+        if drain_b > 0 {
             SepTokenClient::new(&env, &token_b).transfer(
                 &env.current_contract_address(),
                 &to,
-                &reserve_b,
+                &drain_b,
             );
         }
         env.storage().instance().set(&DataKey::ReserveA, &0_i128);
         env.storage().instance().set(&DataKey::ReserveB, &0_i128);
-        // Zero TotalShares and reset MinLiquidityLocked so the pool is in a
-        // clean empty state after the drain. Leaving TotalShares non-zero
-        // while reserves are 0 causes add_liquidity to divide by zero in the
-        // proportional-shares formula, permanently bricking deposits.
-        // Resetting MinLiquidityLocked allows the first re-deposit to
-        // re-establish the minimum-liquidity lock correctly. (Fixes #569)
-        env.storage().instance().set(&DataKey::TotalShares, &0_i128);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinLiquidityLocked, &false);
+        env.storage().instance().set(&DataKey::AccruedFeeA, &0_i128);
+        env.storage().instance().set(&DataKey::AccruedFeeB, &0_i128);
+        env.storage().instance().set(&DataKey::Drained, &true);
+        env.storage().instance().set(&DataKey::Paused, &true);
         // Mark executed so re-execution returns AlreadyExecuted.
         env.storage()
             .instance()
@@ -1229,7 +1295,7 @@ impl AmmPool {
         soroban_amm_sdk::emit_versioned_event!(
             env,
             (Symbol::new(&env, "ms_ew"), signer),
-            (to, reserve_a, reserve_b)
+            (to, drain_a, drain_b)
         );
         Ok(())
     }
@@ -1582,6 +1648,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<i128, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -1715,6 +1784,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<(i128, i128), AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -1817,6 +1889,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<i128, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -1835,7 +1910,6 @@ impl AmmPool {
 
         // Checkpoint TWAP before updating reserves.
         let (reserve_a, reserve_b) = Self::checkpoint_oracles(&env);
-        Self::check_circuit_breaker(&env)?;
 
         let owned = Self::shares_of(env.clone(), provider.clone())?;
         if owned < shares {
@@ -1856,10 +1930,6 @@ impl AmmPool {
         let withdraw_a = shares * reserve_a / total_shares;
         let withdraw_b = shares * reserve_b / total_shares;
 
-        // Burn LP tokens.
-        let lp_client = LpTokenClient::new(&env, &lp_token);
-        lp_client.burn(&provider, &shares);
-
         // Determine which token we keep and which we swap away.
         let (_token_keep, token_swap, amount_keep, amount_swap) = if token_out == token_a {
             (token_a.clone(), token_b.clone(), withdraw_a, withdraw_b)
@@ -1870,16 +1940,6 @@ impl AmmPool {
         // Update reserves: deduct the withdrawn amounts.
         let new_reserve_a = reserve_a - withdraw_a;
         let new_reserve_b = reserve_b - withdraw_b;
-
-        env.storage()
-            .instance()
-            .set(&DataKey::ReserveA, &new_reserve_a);
-        env.storage()
-            .instance()
-            .set(&DataKey::ReserveB, &new_reserve_b);
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalShares, &(total_shares - shares));
 
         // Internal swap: swap the "other" token for more of token_out.
         let fee_bps: i128 = Self::read_fee_bps(&env)?;
@@ -1899,15 +1959,6 @@ impl AmmPool {
             // We're swapping token_a for more token_b.
             amount_swap_with_fee * new_reserve_b / (new_reserve_a * 10_000 + amount_swap_with_fee)
         };
-
-        Self::check_oracle_deviation(&env, &token_swap, &token_out, amount_swap, swap_output)?;
-
-        // Total output is the amount we kept from withdrawal plus the swap output.
-        let total_out = amount_keep + swap_output;
-
-        if total_out < min_out {
-            return Err(AmmError::SlippageExceeded);
-        }
 
         // Update reserves after internal swap.
         let protocol_fee_bps: i128 = env
@@ -1947,6 +1998,27 @@ impl AmmPool {
             // We paid out swap_output of token_b
             new_reserve_b - swap_output
         };
+
+        Self::check_oracle_deviation(&env, &token_swap, &token_out, amount_swap, swap_output)?;
+
+        // Total output is the amount we kept from withdrawal plus the swap output.
+        let total_out = amount_keep + swap_output;
+
+        if total_out < min_out {
+            return Err(AmmError::SlippageExceeded);
+        }
+
+        if Self::check_circuit_breaker(&env, final_reserve_a, final_reserve_b)? {
+            return Ok(0);
+        }
+
+        // Burn LP tokens.
+        let lp_client = LpTokenClient::new(&env, &lp_token);
+        lp_client.burn(&provider, &shares);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalShares, &(total_shares - shares));
 
         env.storage()
             .instance()
@@ -2036,6 +2108,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<i128, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -2053,10 +2128,6 @@ impl AmmPool {
         }
 
         let (reserve_a, reserve_b) = Self::checkpoint_oracles(&env);
-
-        // Circuit breaker: check intra-block price deviation BEFORE the swap
-        // changes the reserves so the baseline is the pre-trade price.
-        Self::check_circuit_breaker(&env)?;
 
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
@@ -2079,23 +2150,6 @@ impl AmmPool {
         // constant-product: out = (amount_in_with_fee * reserve_out) / (reserve_in * 10_000 + amount_in_with_fee)
         let amount_out =
             amount_in_with_fee * reserve_out / (reserve_in * 10_000 + amount_in_with_fee);
-
-        if amount_out < min_out {
-            return Err(AmmError::SlippageExceeded);
-        }
-        if amount_out >= reserve_out {
-            return Err(AmmError::InsufficientLiquidity);
-        }
-
-        Self::check_oracle_deviation(&env, &token_in, &token_out, amount_in, amount_out)?;
-
-        // Transfer in.
-        let client_in = SepTokenClient::new(&env, &token_in);
-        client_in.transfer(&trader, &env.current_contract_address(), &amount_in);
-
-        // Transfer out.
-        let client_out = SepTokenClient::new(&env, &token_out);
-        client_out.transfer(&env.current_contract_address(), &trader, &amount_out);
 
         // Separate protocol fee from LP reserves.
         let protocol_fee_bps: i128 = env
@@ -2120,6 +2174,40 @@ impl AmmPool {
             0
         };
         let net_protocol_fee = protocol_fee - lp_rebate;
+
+        let (post_reserve_a, post_reserve_b) = if token_in == token_a {
+            (
+                reserve_in + amount_in - net_protocol_fee,
+                reserve_out - amount_out,
+            )
+        } else {
+            (
+                reserve_out - amount_out,
+                reserve_in + amount_in - net_protocol_fee,
+            )
+        };
+
+        if amount_out < min_out {
+            return Err(AmmError::SlippageExceeded);
+        }
+        if amount_out >= reserve_out {
+            return Err(AmmError::InsufficientLiquidity);
+        }
+
+        Self::check_oracle_deviation(&env, &token_in, &token_out, amount_in, amount_out)?;
+
+        if Self::check_circuit_breaker(&env, post_reserve_a, post_reserve_b)? {
+            return Ok(0);
+        }
+
+        // Transfer in.
+        let client_in = SepTokenClient::new(&env, &token_in);
+        client_in.transfer(&trader, &env.current_contract_address(), &amount_in);
+
+        // Transfer out.
+        let client_out = SepTokenClient::new(&env, &token_out);
+        client_out.transfer(&env.current_contract_address(), &trader, &amount_out);
+
         // Update reserves (net protocol fee held outside LP reserves; rebate stays in reserves).
         if token_in == token_a {
             env.storage().instance().set(
@@ -2198,6 +2286,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<i128, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -2216,9 +2307,6 @@ impl AmmPool {
 
         let (reserve_a, reserve_b) = Self::checkpoint_oracles(&env);
 
-        // Circuit breaker check before state mutation.
-        Self::check_circuit_breaker(&env)?;
-
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
 
@@ -2231,23 +2319,6 @@ impl AmmPool {
         };
 
         let amount_in = Self::get_amount_in(env.clone(), token_out.clone(), amount_out)?;
-        if amount_in > max_in {
-            return Err(AmmError::SlippageExceeded);
-        }
-
-        Self::check_oracle_deviation(&env, &token_in, &token_out, amount_in, amount_out)?;
-
-        // Transfer tokens.
-        SepTokenClient::new(&env, &token_in).transfer(
-            &trader,
-            &env.current_contract_address(),
-            &amount_in,
-        );
-        SepTokenClient::new(&env, &token_out).transfer(
-            &env.current_contract_address(),
-            &trader,
-            &amount_out,
-        );
 
         // Separate protocol fee from LP reserves.
         let protocol_fee_bps: i128 = env
@@ -2272,6 +2343,40 @@ impl AmmPool {
             0
         };
         let net_protocol_fee = protocol_fee - lp_rebate;
+
+        let (post_reserve_a, post_reserve_b) = if token_in == token_a {
+            (
+                reserve_a + amount_in - net_protocol_fee,
+                reserve_b - amount_out,
+            )
+        } else {
+            (
+                reserve_a - amount_out,
+                reserve_b + amount_in - net_protocol_fee,
+            )
+        };
+
+        if amount_in > max_in {
+            return Err(AmmError::SlippageExceeded);
+        }
+
+        Self::check_oracle_deviation(&env, &token_in, &token_out, amount_in, amount_out)?;
+
+        if Self::check_circuit_breaker(&env, post_reserve_a, post_reserve_b)? {
+            return Ok(0);
+        }
+
+        // Transfer tokens.
+        SepTokenClient::new(&env, &token_in).transfer(
+            &trader,
+            &env.current_contract_address(),
+            &amount_in,
+        );
+        SepTokenClient::new(&env, &token_out).transfer(
+            &env.current_contract_address(),
+            &trader,
+            &amount_out,
+        );
 
         // Update reserves (net protocol fee held outside LP reserves; rebate stays in reserves).
         if token_in == token_a {
@@ -2329,6 +2434,9 @@ impl AmmPool {
     /// Returns `(fee_a_withdrawn, fee_b_withdrawn)`.
     pub fn withdraw_protocol_fees(env: Env) -> Result<(i128, i128), AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         // Acquire the reentrancy lock before any external transfer below.
         let _guard = ReentrancyGuard::acquire(&env)?;
         let fee_recipient: Address = env
@@ -2392,6 +2500,9 @@ impl AmmPool {
         data: Bytes,
     ) -> Result<(i128, i128), AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if Self::is_paused(env.clone()) {
             return Err(AmmError::Paused);
         }
@@ -2408,7 +2519,9 @@ impl AmmPool {
         let _guard = ReentrancyGuard::acquire(&env)?;
 
         // Circuit breaker check before borrowing funds.
-        Self::check_circuit_breaker(&env)?;
+        if Self::check_circuit_breaker(&env, reserve_a, reserve_b)? {
+            return Ok((0, 0));
+        }
 
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
@@ -2766,6 +2879,9 @@ impl AmmPool {
         referrer: Option<Address>,
     ) -> Result<(i128, i128), AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }
@@ -2783,7 +2899,6 @@ impl AmmPool {
         }
 
         Self::checkpoint_oracles(&env);
-        Self::check_circuit_breaker(&env)?;
 
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
@@ -2806,6 +2921,45 @@ impl AmmPool {
 
         if reserve_in <= 0 || reserve_out <= 0 {
             return Err(AmmError::EmptyPool);
+        }
+
+        let fee_bps_pre: i128 = Self::read_fee_bps(&env)?;
+        let est_in_with_fee = amount_in * (10_000 - fee_bps_pre);
+        let est_out = est_in_with_fee * reserve_out / (reserve_in * 10_000 + est_in_with_fee);
+        let protocol_fee_bps_pre: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolFeeBps)
+            .unwrap_or(0);
+        let est_protocol_fee = if protocol_fee_bps_pre > 0 {
+            amount_in * protocol_fee_bps_pre / 10_000
+        } else {
+            0
+        };
+        let lp_rebate_bps_pre: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::LpRebateBps)
+            .unwrap_or(0);
+        let est_lp_rebate = if est_protocol_fee > 0 && lp_rebate_bps_pre > 0 {
+            est_protocol_fee * lp_rebate_bps_pre / 10_000
+        } else {
+            0
+        };
+        let est_net_protocol_fee = est_protocol_fee - est_lp_rebate;
+        let (est_post_a, est_post_b) = if token_in == token_a {
+            (
+                reserve_in + amount_in - est_net_protocol_fee,
+                reserve_out - est_out,
+            )
+        } else {
+            (
+                reserve_out - est_out,
+                reserve_in + amount_in - est_net_protocol_fee,
+            )
+        };
+        if Self::check_circuit_breaker(&env, est_post_a, est_post_b)? {
+            return Ok((0, 0));
         }
 
         let pool = env.current_contract_address();
@@ -2938,6 +3092,9 @@ impl AmmPool {
         deadline: u64,
     ) -> Result<i128, AmmError> {
         Self::extend_ttl(&env);
+        if Self::is_drained(env.clone()) {
+            return Err(AmmError::PoolDrained);
+        }
         if deadline < env.ledger().timestamp() {
             return Err(AmmError::DeadlineExceeded);
         }

@@ -1,6 +1,6 @@
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events, Ledger},
     token::{StellarAssetClient, TokenClient as StellarTokenClient},
     Env,
 };
@@ -1891,9 +1891,9 @@ fn test_remove_liquidity_one_sided() {
 
     // LP1 seeds the pool so LP2's internal swap has residual reserves to trade against.
     let lp1 = Address::generate(env);
-    ta_sac.mint(&lp1, &2_000_000_i128);
-    tb_sac.mint(&lp1, &2_000_000_i128);
-    AddLiquidity::new(&amm, &lp1, 2_000_000, 2_000_000).execute();
+    ta_sac.mint(&lp1, &5_000_000_i128);
+    tb_sac.mint(&lp1, &5_000_000_i128);
+    AddLiquidity::new(&amm, &lp1, 5_000_000, 5_000_000).execute();
 
     let provider = Address::generate(env);
     ta_sac.mint(&provider, &1_000_000_i128);
@@ -1932,9 +1932,9 @@ fn test_remove_liquidity_one_sided_slippage_fails() {
     let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
 
     let lp1 = Address::generate(env);
-    ta_sac.mint(&lp1, &2_000_000_i128);
-    tb_sac.mint(&lp1, &2_000_000_i128);
-    AddLiquidity::new(&amm, &lp1, 2_000_000, 2_000_000).execute();
+    ta_sac.mint(&lp1, &5_000_000_i128);
+    tb_sac.mint(&lp1, &5_000_000_i128);
+    AddLiquidity::new(&amm, &lp1, 5_000_000, 5_000_000).execute();
 
     let provider = Address::generate(env);
     ta_sac.mint(&provider, &1_000_000_i128);
@@ -1951,7 +1951,10 @@ fn test_remove_liquidity_one_sided_slippage_fails() {
 fn test_remove_liquidity_one_sided_circuit_breaker() {
     let ts = setup_pool(30);
     let env = &ts.env;
-    env.ledger().with_mut(|li| li.sequence_number = 100);
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100;
+        li.timestamp = 1_234;
+    });
     let amm = AmmPoolClient::new(env, &ts.amm_addr);
 
     // Set circuit breaker threshold to 100 bps (1%) and cooldown to 600 seconds.
@@ -1960,20 +1963,47 @@ fn test_remove_liquidity_one_sided_circuit_breaker() {
     let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
     let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
 
+    let lp1 = Address::generate(env);
+    ta_sac.mint(&lp1, &10_000_000_i128);
+    tb_sac.mint(&lp1, &10_000_000_i128);
+    AddLiquidity::new(&amm, &lp1, 10_000_000, 10_000_000).execute();
+
     let provider = Address::generate(env);
-    ta_sac.mint(&provider, &10_000_000_i128);
-    tb_sac.mint(&provider, &10_000_000_i128);
-    let shares = AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+    ta_sac.mint(&provider, &5_000_000_i128);
+    tb_sac.mint(&provider, &5_000_000_i128);
+    let shares = AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
 
-    // Cause a price movement in the same ledger sequence using swap.
-    let trader = Address::generate(env);
-    ta_sac.mint(&trader, &5_000_000_i128);
-    Swap::new(&amm, &trader, &ts.ta_addr, 5_000_000).execute();
+    // Attempting a large remove_liquidity_one_sided breaches the 1% threshold,
+    // trips the circuit breaker (returning Ok(0) without burning shares), and
+    // durably persists the pause and trigger timestamp (#1094).
+    let out = amm.remove_liquidity_one_sided(&provider, &shares, &ts.ta_addr, &1_i128, &u64::MAX);
+    assert_eq!(
+        out, 0,
+        "tripped one-sided removal must return 0 without executing"
+    );
+    assert_eq!(
+        amm.shares_of(&provider),
+        shares,
+        "LP shares must not be burned on trip"
+    );
+    assert!(
+        amm.is_paused(),
+        "pool must be durably paused after circuit breaker trip"
+    );
+    let cfg = amm.get_circuit_breaker_config();
+    assert!(
+        cfg.tripped,
+        "circuit breaker config must report tripped == true"
+    );
+    assert_eq!(
+        cfg.triggered_at, 1_234,
+        "triggered_at must match trip timestamp"
+    );
 
-    // Now attempting a large remove_liquidity_one_sided in the same ledger sequence will trip circuit breaker.
+    // Subsequent call must fail with Paused.
     let res =
         amm.try_remove_liquidity_one_sided(&provider, &shares, &ts.ta_addr, &1_i128, &u64::MAX);
-    assert!(res.is_err());
+    assert_eq!(res, Err(Ok(AmmError::Paused)));
 }
 
 #[test]
@@ -2918,6 +2948,854 @@ fn test_pre_init_calls_return_not_initialized() {
         client.try_shares_of(&user),
         Err(Ok(AmmError::NotInitialized))
     );
+}
+
+// ── Issue #1095: Post-drain lifecycle tests ──────────────────────────────────
+
+#[test]
+fn test_post_drain_redeposit_and_old_lp_redemption_blocked_emergency_withdraw() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let ta_client = StellarTokenClient::new(env, &ts.ta_addr);
+    let tb_client = StellarTokenClient::new(env, &ts.tb_addr);
+
+    let old_provider = Address::generate(env);
+    ta_sac.mint(&old_provider, &1_000_000_000_i128);
+    tb_sac.mint(&old_provider, &1_000_000_000_i128);
+    let old_shares = AddLiquidity::new(&amm, &old_provider, 1_000_000_000, 1_000_000_000).execute();
+    assert_eq!(old_shares, 999_999_000);
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+    assert!(amm.is_drained());
+    assert_eq!(ta_client.balance(&rescue), 1_000_000_000);
+    assert_eq!(tb_client.balance(&rescue), 1_000_000_000);
+
+    // Unrelated depositor attempts to deposit 100_000 / 100_000 into the drained pool.
+    let new_depositor = Address::generate(env);
+    ta_sac.mint(&new_depositor, &100_000_i128);
+    tb_sac.mint(&new_depositor, &100_000_i128);
+    let dep_res = amm.try_add_liquidity(
+        &new_depositor,
+        &100_000_i128,
+        &100_000_i128,
+        &0_i128,
+        &u64::MAX,
+    );
+    assert_eq!(dep_res, Err(Ok(AmmError::PoolDrained)));
+    assert_eq!(ta_client.balance(&new_depositor), 100_000);
+    assert_eq!(tb_client.balance(&new_depositor), 100_000);
+
+    // Old LP holder cannot redeem anything after drain.
+    let old_ta_before = ta_client.balance(&old_provider);
+    let old_tb_before = tb_client.balance(&old_provider);
+    let rem_res =
+        amm.try_remove_liquidity(&old_provider, &100_000_i128, &0_i128, &0_i128, &u64::MAX);
+    assert_eq!(rem_res, Err(Ok(AmmError::PoolDrained)));
+    assert_eq!(ta_client.balance(&old_provider), old_ta_before);
+    assert_eq!(tb_client.balance(&old_provider), old_tb_before);
+}
+
+#[test]
+fn test_post_drain_redeposit_and_old_lp_redemption_blocked_multisig() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let ta_client = StellarTokenClient::new(env, &ts.ta_addr);
+    let tb_client = StellarTokenClient::new(env, &ts.tb_addr);
+
+    let signer1 = Address::generate(env);
+    let signer2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(signer1.clone());
+    signers.push_back(signer2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let old_provider = Address::generate(env);
+    ta_sac.mint(&old_provider, &1_000_000_000_i128);
+    tb_sac.mint(&old_provider, &1_000_000_000_i128);
+    let old_shares = AddLiquidity::new(&amm, &old_provider, 1_000_000_000, 1_000_000_000).execute();
+    assert_eq!(old_shares, 999_999_000);
+
+    let rescue = Address::generate(env);
+    amm.propose_emergency_withdraw(&signer1, &rescue);
+    amm.propose_emergency_withdraw(&signer2, &rescue);
+    amm.exec_multisig_emergency_wd(&signer2);
+    assert!(amm.is_drained());
+
+    let new_depositor = Address::generate(env);
+    ta_sac.mint(&new_depositor, &100_000_i128);
+    tb_sac.mint(&new_depositor, &100_000_i128);
+    let dep_res = amm.try_add_liquidity(
+        &new_depositor,
+        &100_000_i128,
+        &100_000_i128,
+        &0_i128,
+        &u64::MAX,
+    );
+    assert_eq!(dep_res, Err(Ok(AmmError::PoolDrained)));
+    assert_eq!(ta_client.balance(&new_depositor), 100_000);
+    assert_eq!(tb_client.balance(&new_depositor), 100_000);
+
+    let rem_res =
+        amm.try_remove_liquidity(&old_provider, &100_000_i128, &0_i128, &0_i128, &u64::MAX);
+    assert_eq!(rem_res, Err(Ok(AmmError::PoolDrained)));
+    assert_eq!(ta_client.balance(&old_provider), 0);
+    assert_eq!(tb_client.balance(&old_provider), 0);
+}
+
+#[test]
+fn test_post_drain_minimum_liquidity_shares_cannot_redeem() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    // Pool holds MINIMUM_LIQUIDITY = 1_000 LP shares.
+    assert_eq!(amm.shares_of(&ts.amm_addr), 1_000);
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+
+    // Even if someone tries to redeem the pool's locked 1_000 shares, it fails with PoolDrained.
+    let res = amm.try_remove_liquidity(&ts.amm_addr, &1_000_i128, &0_i128, &0_i128, &u64::MAX);
+    assert_eq!(res, Err(Ok(AmmError::PoolDrained)));
+    let res_1s = amm.try_remove_liquidity_one_sided(
+        &ts.amm_addr,
+        &1_000_i128,
+        &ts.ta_addr,
+        &0_i128,
+        &u64::MAX,
+    );
+    assert_eq!(res_1s, Err(Ok(AmmError::PoolDrained)));
+}
+
+#[test]
+fn test_drained_view_and_total_shares_preserved() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    assert!(!amm.is_drained());
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &5_000_000_i128);
+    tb_sac.mint(&provider, &5_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
+
+    let shares_before = amm.get_info().total_shares;
+    assert_eq!(shares_before, 5_000_000);
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+
+    assert!(amm.is_drained());
+    assert!(amm.is_paused());
+    let info_after = amm.get_info();
+    assert_eq!(info_after.reserve_a, 0);
+    assert_eq!(info_after.reserve_b, 0);
+    assert_eq!(info_after.total_shares, shares_before);
+}
+
+#[test]
+fn test_drained_state_blocks_all_liquidity_and_swap_entrypoints() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+
+    assert_eq!(
+        amm.try_add_liquidity(&provider, &1_000, &1_000, &0, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_add_liquidity_fot(&provider, &1_000, &1_000, &0, &0, &0, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_remove_liquidity(&provider, &1_000, &0, &0, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_remove_liquidity_one_sided(&provider, &1_000, &ts.ta_addr, &0, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_swap(&provider, &ts.ta_addr, &1_000, &0, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_swap_exact_out(&provider, &ts.tb_addr, &100, &1_000, &u64::MAX),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_swap_fot(&provider, &ts.ta_addr, &1_000, &0, &0, &u64::MAX, &None),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_flash_loan(&provider, &100, &0, &soroban_sdk::Bytes::new(env)),
+        Err(Ok(AmmError::PoolDrained))
+    );
+}
+
+#[test]
+fn test_drained_state_blocks_unpause_and_recovery_and_second_drain() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &5_000_000_i128);
+    tb_sac.mint(&provider, &5_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+
+    assert_eq!(amm.try_unpause(), Err(Ok(AmmError::PoolDrained)));
+    assert_eq!(
+        amm.try_try_circuit_breaker_recovery(),
+        Err(Ok(AmmError::PoolDrained))
+    );
+    assert_eq!(
+        amm.try_emergency_withdraw(&rescue),
+        Err(Ok(AmmError::PoolDrained))
+    );
+}
+
+#[test]
+fn test_multisig_emergency_wd_below_quorum_returns_quorum_not_met() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let s3 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    signers.push_back(s3.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let rescue = Address::generate(env);
+    amm.propose_emergency_withdraw(&s1, &rescue);
+
+    let res = amm.try_exec_multisig_emergency_wd(&s1);
+    assert_eq!(res, Err(Ok(AmmError::QuorumNotMet)));
+}
+
+#[test]
+fn test_multisig_emergency_wd_missing_proposal_returns_no_pending_proposal() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let res = amm.try_exec_multisig_emergency_wd(&s1);
+    assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
+}
+
+#[test]
+fn test_emergency_withdraw_clears_accrued_protocol_fees_and_blocks_fee_withdrawal() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let ta_client = StellarTokenClient::new(env, &ts.ta_addr);
+
+    let fee_recipient = Address::generate(env);
+    amm.set_protocol_fee(&ts.admin, &fee_recipient, &10_i128);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &100_000_i128);
+    Swap::new(&amm, &trader, &ts.ta_addr, 100_000).execute();
+
+    let (acc_a, acc_b) = amm.get_accrued_fees();
+    assert!(acc_a > 0);
+    assert_eq!(acc_b, 0);
+
+    let rescue = Address::generate(env);
+    amm.emergency_withdraw(&rescue);
+
+    // Accrued fees are cleared and the rescue address receives the full contract token balance.
+    assert_eq!(amm.get_accrued_fees(), (0, 0));
+    assert_eq!(ta_client.balance(&ts.amm_addr), 0);
+    assert_eq!(
+        amm.try_withdraw_protocol_fees(),
+        Err(Ok(AmmError::PoolDrained))
+    );
+}
+
+#[test]
+fn test_multisig_emergency_wd_clears_accrued_protocol_fees_and_blocks_fee_withdrawal() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let ta_client = StellarTokenClient::new(env, &ts.ta_addr);
+
+    let fee_recipient = Address::generate(env);
+    amm.set_protocol_fee(&ts.admin, &fee_recipient, &10_i128);
+
+    let s1 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    amm.set_multisig(&ts.admin, &signers, &1_u32);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &100_000_i128);
+    Swap::new(&amm, &trader, &ts.ta_addr, 100_000).execute();
+    assert!(amm.get_accrued_fees().0 > 0);
+
+    let rescue = Address::generate(env);
+    amm.propose_emergency_withdraw(&s1, &rescue);
+    amm.exec_multisig_emergency_wd(&s1);
+
+    assert_eq!(amm.get_accrued_fees(), (0, 0));
+    assert_eq!(ta_client.balance(&ts.amm_addr), 0);
+    assert_eq!(
+        amm.try_withdraw_protocol_fees(),
+        Err(Ok(AmmError::PoolDrained))
+    );
+}
+
+// ── Issue #1094: Durable circuit breaker tests ───────────────────────────────
+
+#[test]
+fn test_circuit_breaker_swap_breach_persists_pause_timestamp_and_event() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 50;
+        li.timestamp = 5_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let ta_client = StellarTokenClient::new(env, &ts.ta_addr);
+    let tb_client = StellarTokenClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &5_000_000_i128);
+
+    // 5M swap on 10M/10M pool breaches 100 bps (1%) threshold immediately.
+    let out = Swap::new(&amm, &trader, &ts.ta_addr, 5_000_000).execute();
+    assert_eq!(out, 0, "breaching swap must return Ok(0) without executing");
+    assert_eq!(
+        ta_client.balance(&trader),
+        5_000_000,
+        "trader input must not be spent"
+    );
+    assert_eq!(
+        tb_client.balance(&trader),
+        0,
+        "trader must receive 0 output"
+    );
+
+    // Verify durable state!
+    assert!(amm.is_paused(), "is_paused() must be true after breach");
+    let cfg = amm.get_circuit_breaker_config();
+    assert_eq!(cfg.triggered_at, 5_000);
+    assert!(cfg.tripped);
+
+    // Verify circuit_break event was emitted and not rolled back.
+    let events = env.events().all();
+    let has_cb_event = events.iter().any(|(_, topics, _)| {
+        if topics.is_empty() {
+            return false;
+        }
+        let sym: Result<soroban_sdk::Symbol, _> =
+            soroban_sdk::TryFromVal::try_from_val(env, &topics.get(0).unwrap());
+        matches!(sym, Ok(s) if s == soroban_sdk::Symbol::new(env, "circuit_break"))
+    });
+    assert!(
+        has_cb_event,
+        "circuit_break event must persist in transaction events"
+    );
+}
+
+#[test]
+fn test_circuit_breaker_second_swap_in_same_ledger_trips_cumulatively() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 77;
+        li.timestamp = 2_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    // Threshold 500 bps (5%).
+    amm.set_circuit_breaker_config(&500_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &1_000_000_i128);
+
+    // First swap: 150_000 (~3% price impact < 5% threshold) -> succeeds.
+    let out1 = Swap::new(&amm, &trader, &ts.ta_addr, 150_000).execute();
+    assert!(out1 > 0);
+    assert!(!amm.is_paused());
+
+    // Second swap in same ledger: another 200_000 pushes cumulative deviation > 5% -> trips!
+    let out2 = Swap::new(&amm, &trader, &ts.ta_addr, 200_000).execute();
+    assert_eq!(out2, 0);
+    assert!(amm.is_paused());
+    assert!(amm.get_circuit_breaker_config().tripped);
+    assert_eq!(amm.get_circuit_breaker_config().triggered_at, 2_000);
+}
+
+#[test]
+fn test_circuit_breaker_while_tripped_all_mutating_entrypoints_return_paused() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 88;
+        li.timestamp = 3_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &20_000_000_i128);
+    tb_sac.mint(&provider, &20_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    // Trip the circuit breaker.
+    let out = Swap::new(&amm, &provider, &ts.ta_addr, 5_000_000).execute();
+    assert_eq!(out, 0);
+    assert!(amm.is_paused());
+
+    assert_eq!(
+        amm.try_swap(&provider, &ts.ta_addr, &1_000, &0, &u64::MAX),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_swap_exact_out(&provider, &ts.tb_addr, &100, &10_000, &u64::MAX),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_swap_fot(&provider, &ts.ta_addr, &1_000, &0, &0, &u64::MAX, &None),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_add_liquidity(&provider, &1_000, &1_000, &0, &u64::MAX),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_remove_liquidity(&provider, &1_000, &0, &0, &u64::MAX),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_remove_liquidity_one_sided(&provider, &1_000, &ts.ta_addr, &0, &u64::MAX),
+        Err(Ok(AmmError::Paused))
+    );
+    assert_eq!(
+        amm.try_flash_loan(&provider, &100, &0, &soroban_sdk::Bytes::new(env)),
+        Err(Ok(AmmError::Paused))
+    );
+}
+
+#[test]
+fn test_circuit_breaker_recovery_before_at_and_after_cooldown() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 90;
+        li.timestamp = 1_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    // Trip at timestamp = 1_000.
+    let out = Swap::new(&amm, &provider, &ts.ta_addr, 5_000_000).execute();
+    assert_eq!(out, 0);
+    assert!(amm.is_paused());
+
+    // 1 second before cooldown expires (1_599 < 1_000 + 600): returns false.
+    env.ledger().with_mut(|li| li.timestamp = 1_599);
+    assert!(!amm.try_circuit_breaker_recovery());
+    assert!(amm.is_paused());
+    assert!(amm.get_circuit_breaker_config().tripped);
+
+    // Exactly at boundary (1_600 == 1_000 + 600): returns true, clears pause and triggered_at.
+    env.ledger().with_mut(|li| li.timestamp = 1_600);
+    assert!(amm.try_circuit_breaker_recovery());
+    assert!(!amm.is_paused());
+    let cfg = amm.get_circuit_breaker_config();
+    assert!(!cfg.tripped);
+    assert_eq!(cfg.triggered_at, 0);
+
+    // Second call returns false.
+    assert!(!amm.try_circuit_breaker_recovery());
+}
+
+#[test]
+fn test_circuit_breaker_admin_unpause_clears_tripped_and_triggered_at() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 91;
+        li.timestamp = 4_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let out = Swap::new(&amm, &provider, &ts.ta_addr, 5_000_000).execute();
+    assert_eq!(out, 0);
+    assert!(amm.get_circuit_breaker_config().tripped);
+
+    amm.unpause();
+    assert!(!amm.is_paused());
+    let cfg = amm.get_circuit_breaker_config();
+    assert!(!cfg.tripped);
+    assert_eq!(cfg.triggered_at, 0);
+}
+
+#[test]
+fn test_circuit_breaker_low_price_pool_10e13_to_10e6_trips() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 92;
+        li.timestamp = 7_777;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    // 5% threshold.
+    amm.set_circuit_breaker_config(&500_i128, &600_u64);
+
+    // Reserves: 10^13 : 10^6 (price = 10^-7 < 10^-6, which truncated to 0 under 1e6 scaling).
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000_000_000, 1_000_000).execute();
+
+    // Large swap of 2 * 10^12 token_a (~30% price move > 5% threshold) must trip!
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &2_000_000_000_000_i128);
+    let out = Swap::new(&amm, &trader, &ts.ta_addr, 2_000_000_000_000).execute();
+    assert_eq!(
+        out, 0,
+        "low-price pool must not truncate baseline to 0 and must trip"
+    );
+    assert!(amm.is_paused());
+    let cfg = amm.get_circuit_breaker_config();
+    assert!(cfg.tripped);
+    assert_eq!(cfg.triggered_at, 7_777);
+}
+
+#[test]
+fn test_circuit_breaker_boundary_threshold_minus_one_succeeds_exact_threshold_trips() {
+    // 0-fee pool for clean exact boundary calculation:
+    // Reserves: 100_000_000 : 100_000_000.
+    // Set threshold_bps = 100 (1.00%).
+    let ts1 = setup_pool(0);
+    let env1 = &ts1.env;
+    env1.ledger().with_mut(|li| {
+        li.sequence_number = 93;
+        li.timestamp = 8_000;
+    });
+    let amm1 = AmmPoolClient::new(env1, &ts1.amm_addr);
+    let ta_sac1 = StellarAssetClient::new(env1, &ts1.ta_addr);
+    let tb_sac1 = StellarAssetClient::new(env1, &ts1.tb_addr);
+    amm1.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let lp1 = Address::generate(env1);
+    ta_sac1.mint(&lp1, &100_000_000_i128);
+    tb_sac1.mint(&lp1, &100_000_000_i128);
+    AddLiquidity::new(&amm1, &lp1, 100_000_000, 100_000_000).execute();
+
+    // Swap 500_000 on 100_000_000 pool:
+    // post_reserve_a = 100_500_000, amount_out = 497_512, post_reserve_b = 99_502_488.
+    // post_price / baseline = 99_502_488 / 100_500_000 = 0.9900745 -> deviation = 99 bps (threshold_bps - 1).
+    let trader1 = Address::generate(env1);
+    ta_sac1.mint(&trader1, &500_000_i128);
+    let out_below = Swap::new(&amm1, &trader1, &ts1.ta_addr, 500_000).execute();
+    assert!(
+        out_below > 0,
+        "deviation of threshold_bps - 1 (99 bps) must succeed"
+    );
+    assert!(!amm1.is_paused());
+
+    // Now on a fresh identical pool, swap 503_800:
+    // post_reserve_a = 100_503_800, amount_out = 501_274, post_reserve_b = 99_498_726.
+    // post_price / baseline = 99_498_726 / 100_503_800 = 0.9899996 -> deviation = 100 bps (== threshold_bps).
+    let ts2 = setup_pool(0);
+    let env2 = &ts2.env;
+    env2.ledger().with_mut(|li| {
+        li.sequence_number = 93;
+        li.timestamp = 8_000;
+    });
+    let amm2 = AmmPoolClient::new(env2, &ts2.amm_addr);
+    let ta_sac2 = StellarAssetClient::new(env2, &ts2.ta_addr);
+    let tb_sac2 = StellarAssetClient::new(env2, &ts2.tb_addr);
+    amm2.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let lp2 = Address::generate(env2);
+    ta_sac2.mint(&lp2, &100_000_000_i128);
+    tb_sac2.mint(&lp2, &100_000_000_i128);
+    AddLiquidity::new(&amm2, &lp2, 100_000_000, 100_000_000).execute();
+
+    let trader2 = Address::generate(env2);
+    ta_sac2.mint(&trader2, &503_800_i128);
+    let out_at = Swap::new(&amm2, &trader2, &ts2.ta_addr, 503_800).execute();
+    assert_eq!(
+        out_at, 0,
+        "deviation of exactly threshold_bps (100 bps) must trip"
+    );
+    assert!(amm2.is_paused());
+    assert!(amm2.get_circuit_breaker_config().tripped);
+}
+
+#[test]
+fn test_circuit_breaker_swap_exact_out_breach_persists_pause() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 94;
+        li.timestamp = 9_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &10_000_000_i128);
+    let spent = amm.swap_exact_out(
+        &trader,
+        &ts.tb_addr,
+        &2_000_000_i128,
+        &10_000_000_i128,
+        &u64::MAX,
+    );
+    assert_eq!(spent, 0);
+    assert!(amm.is_paused());
+    assert!(amm.get_circuit_breaker_config().tripped);
+    assert_eq!(amm.get_circuit_breaker_config().triggered_at, 9_000);
+}
+
+#[test]
+fn test_circuit_breaker_swap_fot_breach_persists_pause() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 95;
+        li.timestamp = 9_100;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &5_000_000_i128);
+    let (out, received) = amm.swap_fot(
+        &trader,
+        &ts.ta_addr,
+        &5_000_000_i128,
+        &0_i128,
+        &0_i128,
+        &u64::MAX,
+        &None,
+    );
+    assert_eq!((out, received), (0, 0));
+    assert!(amm.is_paused());
+    assert!(amm.get_circuit_breaker_config().tripped);
+    assert_eq!(amm.get_circuit_breaker_config().triggered_at, 9_100);
+}
+
+#[test]
+fn test_circuit_breaker_baseline_resets_across_new_ledger_sequence() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 100;
+        li.timestamp = 1_000;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    // 500 bps (5%) threshold.
+    amm.set_circuit_breaker_config(&500_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &1_000_000_i128);
+
+    // Ledger 100: ~4% move -> succeeds.
+    let out1 = Swap::new(&amm, &trader, &ts.ta_addr, 200_000).execute();
+    assert!(out1 > 0);
+    assert!(!amm.is_paused());
+
+    // Advance to ledger 101: baseline resets to the new reserves, so another ~4% move succeeds.
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 101;
+        li.timestamp = 1_005;
+    });
+    let out2 = Swap::new(&amm, &trader, &ts.ta_addr, 200_000).execute();
+    assert!(out2 > 0);
+    assert!(!amm.is_paused());
+}
+
+#[test]
+fn test_circuit_breaker_permissionless_keeper_trip() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 102;
+        li.timestamp = 2_222;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    // Start with 1000 bps (10%) threshold.
+    amm.set_circuit_breaker_config(&1_000_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    // No deviation yet -> keeper returns false.
+    assert!(!amm.trip_circuit_breaker());
+
+    // Swap moves price by ~4% (< 10% threshold).
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &200_000_i128);
+    let out = Swap::new(&amm, &trader, &ts.ta_addr, 200_000).execute();
+    assert!(out > 0);
+
+    // Admin tightens threshold to 100 bps (1%) in same ledger; keeper trips the breaker.
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+    assert!(amm.trip_circuit_breaker());
+    assert!(amm.is_paused());
+    assert!(amm.get_circuit_breaker_config().tripped);
+    assert_eq!(amm.get_circuit_breaker_config().triggered_at, 2_222);
+
+    // Calling keeper again while already paused returns false.
+    assert!(!amm.trip_circuit_breaker());
+}
+
+#[test]
+fn test_circuit_breaker_slippage_failure_does_not_trip_pool() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 103;
+        li.timestamp = 3_333;
+    });
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    amm.set_circuit_breaker_config(&100_i128, &600_u64);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &5_000_000_i128);
+    let res = amm.try_swap(&trader, &ts.ta_addr, &5_000_000_i128, &i128::MAX, &u64::MAX);
+    assert_eq!(res, Err(Ok(AmmError::SlippageExceeded)));
+    assert!(!amm.is_paused());
 }
 
 // ── Issue #1093 Tests: remove_liquidity_one_sided reserve integrity ─────────

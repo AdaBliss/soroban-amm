@@ -53,6 +53,13 @@ const INSTANCE_TTL_THRESHOLD: u32 = POSITION_TTL_THRESHOLD;
 // Extend the instance entry's life to this many ledgers (~180 days at 5 s/ledger).
 const INSTANCE_BUMP_TO: u32 = POSITION_BUMP_TO;
 
+/// Default capacity of the persistent oracle observation ring buffer (#1101).
+/// At 1 swap per 5-second ledger this retains ~42 minutes of continuous per-ledger
+/// observations; at lower trade frequencies it spans hours or days.
+pub const DEFAULT_ORACLE_CARDINALITY: u32 = 512;
+/// Maximum capacity of the oracle observation ring buffer (#1101).
+pub const MAX_ORACLE_CARDINALITY: u32 = 2048;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ClError {
@@ -92,6 +99,12 @@ pub enum ClError {
     /// not fit in a `u128`. Reported instead of acting on a truncated value
     /// (#963).
     MathOverflow = 25,
+    /// `observe(seconds_ago)` requested a timestamp earlier than the oldest
+    /// retained observation in the oracle ring buffer (#1101).
+    ObservationTooOld = 26,
+    /// `set_oracle_cardinality` was called with zero, a value smaller than the
+    /// current cardinality, or a value above `MAX_ORACLE_CARDINALITY` (#1101).
+    InvalidOracleCardinality = 27,
 }
 
 /// Status of a range order (issue #295).
@@ -134,8 +147,8 @@ pub enum DataKey {
     PositionList(Address), // Vec<(i32, i32)> of open tick ranges per provider
     TickCumulative,        // i64 — accumulated tick * elapsed_seconds
     LastOracleTimestamp,   // u64 — last oracle update timestamp
-    OraclePoint(u64),      // timestamp → i64 tick_cumulative snapshot
-    OracleTimestamps,      // Vec<u64> — sorted oracle snapshot times for interpolation
+    OraclePoint(u64),      // legacy: timestamp → i64 tick_cumulative snapshot
+    OracleTimestamps,      // legacy: Vec<u64> — sorted oracle snapshot times for interpolation
     SqrtPriceX96,
     Tick(i32),
     TickBitmap(i32),
@@ -159,6 +172,30 @@ pub enum DataKey {
     /// Lets the legacy address-keyed entry points detect a tokenized position
     /// and defer control to the current NFT owner.
     PositionNftToken(Address, i32, i32),
+    /// Persistent ring-buffer slot `0..cardinality` holding an [`OracleObservation`] (#1101).
+    OracleObservation(u32),
+    /// Instance-storage metadata ([`OracleHeader`]) for the oracle ring buffer (#1101).
+    OracleHeader,
+}
+
+/// A single oracle observation stored in the persistent ring buffer (#1101).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct OracleObservation {
+    pub timestamp: u64,
+    pub cumulative: i64,
+}
+
+/// Instance-storage header tracking the circular buffer of oracle observations (#1101).
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct OracleHeader {
+    /// Index (`0..cardinality`) of the most recently written observation when `count > 0`.
+    pub index: u32,
+    /// Maximum number of observations retained in the ring buffer.
+    pub cardinality: u32,
+    /// Number of valid observations currently populated (`0..=cardinality`).
+    pub count: u32,
 }
 
 #[contracttype]
@@ -2195,13 +2232,15 @@ impl ConcentratedLiquidity {
                 .get(&DataKey::TickCumulative)
                 .unwrap_or(0);
             let new_cum = cum + (current_tick_oracle as i64) * elapsed;
+            Self::record_oracle_point(&env, now, new_cum);
             env.storage()
                 .instance()
                 .set(&DataKey::TickCumulative, &new_cum);
             env.storage()
                 .instance()
                 .set(&DataKey::LastOracleTimestamp, &now);
-            Self::record_oracle_point(&env, now, new_cum);
+        } else if !env.storage().instance().has(&DataKey::OracleHeader) {
+            Self::migrate_legacy_oracle_if_needed(&env);
         }
 
         let fee_bps: i128 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
@@ -2231,6 +2270,12 @@ impl ConcentratedLiquidity {
         let sqrt_price_before = sqrt_price_x96;
 
         while amount_remaining > 0 {
+            if sqrt_price_limit_x96 != 0
+                && ((zero_for_one && sqrt_price_x96 <= sqrt_price_limit_x96)
+                    || (!zero_for_one && sqrt_price_x96 >= sqrt_price_limit_x96))
+            {
+                break;
+            }
             let next_tick_opt = Self::next_initialized_tick(&env, current_tick, zero_for_one);
             // No initialized ticks in this direction and no liquidity — nothing to trade.
             // amount_remaining is left untouched so this untraded portion is excluded
@@ -3000,15 +3045,15 @@ impl ConcentratedLiquidity {
                 .get(&DataKey::TickCumulative)
                 .unwrap_or(0);
             let new_cum = cum + (current_tick_oracle as i64) * elapsed;
+            Self::record_oracle_point(&env, now, new_cum);
             env.storage()
                 .instance()
                 .set(&DataKey::TickCumulative, &new_cum);
             env.storage()
                 .instance()
                 .set(&DataKey::LastOracleTimestamp, &now);
-            env.storage()
-                .instance()
-                .set(&DataKey::OraclePoint(now), &new_cum);
+        } else if !env.storage().instance().has(&DataKey::OracleHeader) {
+            Self::migrate_legacy_oracle_if_needed(&env);
         }
 
         let fee_bps: i128 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
@@ -3333,11 +3378,102 @@ impl ConcentratedLiquidity {
         (cum, ts)
     }
 
-    /// Returns tick_cumulative at `seconds_ago` seconds in the past.
-    /// Uses exact oracle snapshots when available; otherwise linearly interpolates
-    /// between the nearest bracketing snapshots (issue #512).
-    /// `seconds_ago == 0` returns the current cumulative value (extrapolated to now).
-    pub fn observe(env: Env, seconds_ago: u64) -> i64 {
+    /// Returns the current oracle ring-buffer capacity (`cardinality`, #1101).
+    pub fn get_oracle_cardinality(env: Env) -> u32 {
+        Self::extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, OracleHeader>(&DataKey::OracleHeader)
+            .map(|h| h.cardinality)
+            .unwrap_or(DEFAULT_ORACLE_CARDINALITY)
+    }
+
+    /// Returns the current oracle ring-buffer header (`index`, `cardinality`, `count`, #1101).
+    pub fn get_oracle_header(env: Env) -> OracleHeader {
+        Self::extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, OracleHeader>(&DataKey::OracleHeader)
+            .unwrap_or(OracleHeader {
+                index: 0,
+                cardinality: DEFAULT_ORACLE_CARDINALITY,
+                count: 0,
+            })
+    }
+
+    /// Admin: grow the oracle observation ring-buffer capacity (`cardinality`, #1101).
+    ///
+    /// `new_cardinality` must be `>= current cardinality` and `<= MAX_ORACLE_CARDINALITY`.
+    /// Shrinking or zero cardinality is rejected with [`ClError::InvalidOracleCardinality`].
+    pub fn set_oracle_cardinality(
+        env: Env,
+        admin: Address,
+        new_cardinality: u32,
+    ) -> Result<(), ClError> {
+        Self::extend_instance_ttl(&env);
+        let stored = Self::read_admin(&env)?;
+        if admin != stored {
+            return Err(ClError::Unauthorized);
+        }
+        admin.require_auth();
+
+        let mut header = Self::migrate_legacy_oracle_if_needed(&env);
+        if new_cardinality == 0
+            || new_cardinality < header.cardinality
+            || new_cardinality > MAX_ORACLE_CARDINALITY
+        {
+            return Err(ClError::InvalidOracleCardinality);
+        }
+
+        if new_cardinality > header.cardinality {
+            // If the ring buffer had wrapped around under the old cardinality,
+            // normalize the existing `count` observations into contiguous slots
+            // `0..count` in chronological order so the invariant (`count < cardinality`
+            // implies observations live at `0..count` with `index == count - 1`) holds.
+            if header.count == header.cardinality
+                && header.count > 0
+                && header.index != header.count - 1
+            {
+                let mut ordered: Vec<OracleObservation> = Vec::new(&env);
+                for k in 0..header.count {
+                    let slot = (header.index + 1 + k) % header.cardinality;
+                    let obs: OracleObservation = env
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::OracleObservation(slot))
+                        .unwrap_or(OracleObservation {
+                            timestamp: 0,
+                            cumulative: 0,
+                        });
+                    ordered.push_back(obs);
+                }
+                for k in 0..header.count {
+                    let key = DataKey::OracleObservation(k);
+                    let obs = ordered.get(k).unwrap();
+                    env.storage().persistent().set(&key, &obs);
+                    Self::bump_position(&env, &key);
+                }
+                header.index = header.count - 1;
+            }
+            header.cardinality = new_cardinality;
+            env.storage()
+                .instance()
+                .set(&DataKey::OracleHeader, &header);
+        }
+
+        Ok(())
+    }
+
+    /// Returns tick_cumulative at `seconds_ago` seconds in the past (#512, #1101).
+    ///
+    /// Uses binary search over the bounded persistent observation ring buffer (`O(log N)`),
+    /// returning exact snapshots when available and linearly interpolating between
+    /// bracketing observations. `seconds_ago == 0` returns the current cumulative
+    /// value extrapolated to `now`.
+    ///
+    /// Returns [`ClError::ObservationTooOld`] when the requested timestamp precedes
+    /// the oldest retained observation in the ring buffer.
+    pub fn observe(env: Env, seconds_ago: u64) -> Result<i64, ClError> {
         Self::extend_instance_ttl(&env);
         let cum: i64 = env
             .storage()
@@ -3350,48 +3486,247 @@ impl ConcentratedLiquidity {
             .get(&DataKey::LastOracleTimestamp)
             .unwrap_or(0);
         let now = env.ledger().timestamp();
+        if seconds_ago > now {
+            return Err(ClError::ObservationTooOld);
+        }
         let current_tick: i32 = env
             .storage()
             .instance()
             .get(&DataKey::CurrentTick)
             .unwrap_or(0);
-        let target_ts = now.saturating_sub(seconds_ago);
+        let target_ts = now - seconds_ago;
         if target_ts >= last_ts {
             // Extrapolate forward from last stored point
             let elapsed = (target_ts - last_ts) as i64;
-            cum + (current_tick as i64) * elapsed
+            Ok(cum + (current_tick as i64) * elapsed)
         } else {
             Self::oracle_cumulative_at(&env, target_ts, cum, last_ts)
         }
     }
 
-    fn record_oracle_point(env: &Env, timestamp: u64, cumulative: i64) {
-        env.storage()
-            .instance()
-            .set(&DataKey::OraclePoint(timestamp), &cumulative);
-        let mut timestamps: Vec<u64> = env
+    /// Migrates pre-#1101 `OracleTimestamps` / `OraclePoint(t)` entries from instance
+    /// storage into the persistent ring buffer (`OracleObservation(slot)` + `OracleHeader`)
+    /// on the first oracle write after upgrade.
+    fn migrate_legacy_oracle_if_needed(env: &Env) -> OracleHeader {
+        if let Some(header) = env
             .storage()
             .instance()
-            .get(&DataKey::OracleTimestamps)
-            .unwrap_or_else(|| Vec::new(env));
-        let append =
-            timestamps.is_empty() || timestamps.get(timestamps.len() - 1).unwrap_or(0) < timestamp;
-        if append {
-            timestamps.push_back(timestamp);
-            env.storage()
-                .instance()
-                .set(&DataKey::OracleTimestamps, &timestamps);
+            .get::<_, OracleHeader>(&DataKey::OracleHeader)
+        {
+            return header;
         }
+        let cardinality = DEFAULT_ORACLE_CARDINALITY;
+        let mut count = 0_u32;
+        let mut last_migrated_ts = 0_u64;
+        if let Some(timestamps) = env
+            .storage()
+            .instance()
+            .get::<_, Vec<u64>>(&DataKey::OracleTimestamps)
+        {
+            let total = timestamps.len();
+            let start = total.saturating_sub(cardinality);
+            for i in 0..start {
+                if let Some(t) = timestamps.get(i) {
+                    env.storage().instance().remove(&DataKey::OraclePoint(t));
+                }
+            }
+            for i in start..total {
+                if let Some(t) = timestamps.get(i) {
+                    let c: i64 = env
+                        .storage()
+                        .instance()
+                        .get(&DataKey::OraclePoint(t))
+                        .unwrap_or(0);
+                    env.storage().instance().remove(&DataKey::OraclePoint(t));
+                    let obs_key = DataKey::OracleObservation(count);
+                    env.storage().persistent().set(
+                        &obs_key,
+                        &OracleObservation {
+                            timestamp: t,
+                            cumulative: c,
+                        },
+                    );
+                    Self::bump_position(env, &obs_key);
+                    last_migrated_ts = t;
+                    count += 1;
+                }
+            }
+            env.storage().instance().remove(&DataKey::OracleTimestamps);
+
+            // Also capture any trailing exact-out point at `LastOracleTimestamp` that
+            // legacy `swap_exact_out` wrote without appending to `OracleTimestamps`.
+            let last_ts: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::LastOracleTimestamp)
+                .unwrap_or(0);
+            if last_ts > last_migrated_ts {
+                if let Some(c) = env
+                    .storage()
+                    .instance()
+                    .get::<_, i64>(&DataKey::OraclePoint(last_ts))
+                {
+                    env.storage()
+                        .instance()
+                        .remove(&DataKey::OraclePoint(last_ts));
+                    let slot = if count < cardinality { count } else { 0 };
+                    let obs_key = DataKey::OracleObservation(slot);
+                    env.storage().persistent().set(
+                        &obs_key,
+                        &OracleObservation {
+                            timestamp: last_ts,
+                            cumulative: c,
+                        },
+                    );
+                    Self::bump_position(env, &obs_key);
+                    if count < cardinality {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        let header = OracleHeader {
+            index: count.saturating_sub(1),
+            cardinality,
+            count,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleHeader, &header);
+        header
     }
 
-    /// Tick cumulative at `target_ts` using exact snapshots or linear interpolation.
-    fn oracle_cumulative_at(env: &Env, target_ts: u64, live_cum: i64, last_ts: u64) -> i64 {
+    fn record_oracle_point(env: &Env, timestamp: u64, cumulative: i64) {
+        let mut header = Self::migrate_legacy_oracle_if_needed(env);
+        let obs = OracleObservation {
+            timestamp,
+            cumulative,
+        };
+        if header.count == 0 {
+            let key = DataKey::OracleObservation(0);
+            env.storage().persistent().set(&key, &obs);
+            Self::bump_position(env, &key);
+            header.index = 0;
+            header.count = 1;
+            env.storage()
+                .instance()
+                .set(&DataKey::OracleHeader, &header);
+            return;
+        }
+
+        let current_key = DataKey::OracleObservation(header.index);
+        if let Some(last_obs) = env
+            .storage()
+            .persistent()
+            .get::<_, OracleObservation>(&current_key)
+        {
+            if last_obs.timestamp == timestamp {
+                env.storage().persistent().set(&current_key, &obs);
+                Self::bump_position(env, &current_key);
+                return;
+            }
+        }
+
+        let next_slot = if header.count < header.cardinality {
+            header.count
+        } else {
+            (header.index + 1) % header.cardinality
+        };
+        let next_key = DataKey::OracleObservation(next_slot);
+        env.storage().persistent().set(&next_key, &obs);
+        Self::bump_position(env, &next_key);
+        header.index = next_slot;
+        if header.count < header.cardinality {
+            header.count += 1;
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleHeader, &header);
+    }
+
+    /// Tick cumulative at `target_ts` using binary search over the ring buffer
+    /// (with fallback to legacy `OracleTimestamps` for un-migrated pools) and
+    /// linear interpolation between bracketing observations (#512, #1101).
+    fn oracle_cumulative_at(
+        env: &Env,
+        target_ts: u64,
+        live_cum: i64,
+        last_ts: u64,
+    ) -> Result<i64, ClError> {
+        if let Some(header) = env
+            .storage()
+            .instance()
+            .get::<_, OracleHeader>(&DataKey::OracleHeader)
+        {
+            if header.count == 0 {
+                return Err(ClError::ObservationTooOld);
+            }
+            let slot_at = |k: u32| -> u32 {
+                if header.count < header.cardinality {
+                    k
+                } else {
+                    (header.index + 1 + k) % header.cardinality
+                }
+            };
+            let read_obs = |k: u32| -> OracleObservation {
+                let slot = slot_at(k);
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::OracleObservation(slot))
+                    .unwrap_or(OracleObservation {
+                        timestamp: 0,
+                        cumulative: 0,
+                    })
+            };
+
+            let oldest = read_obs(0);
+            if target_ts < oldest.timestamp {
+                return Err(ClError::ObservationTooOld);
+            }
+            if target_ts == oldest.timestamp {
+                return Ok(oldest.cumulative);
+            }
+
+            let mut lo: u32 = 0;
+            let mut hi: u32 = header.count - 1;
+            let mut obs_lo = oldest;
+            while lo < hi {
+                let mid = lo + (hi - lo).div_ceil(2);
+                let obs_mid = read_obs(mid);
+                if obs_mid.timestamp <= target_ts {
+                    lo = mid;
+                    obs_lo = obs_mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+
+            if obs_lo.timestamp == target_ts {
+                return Ok(obs_lo.cumulative);
+            }
+            let (t_hi, c_hi) = if lo + 1 < header.count {
+                let obs_hi = read_obs(lo + 1);
+                (obs_hi.timestamp, obs_hi.cumulative)
+            } else {
+                (last_ts, live_cum)
+            };
+            if t_hi <= obs_lo.timestamp {
+                return Ok(obs_lo.cumulative);
+            }
+            let dt = (t_hi - obs_lo.timestamp) as i128;
+            let elapsed = (target_ts - obs_lo.timestamp) as i128;
+            return Ok(
+                obs_lo.cumulative + (((c_hi - obs_lo.cumulative) as i128 * elapsed) / dt) as i64
+            );
+        }
+
+        // Legacy fallback when `OracleHeader` has not yet been created after upgrade.
         if let Some(cum) = env
             .storage()
             .instance()
             .get(&DataKey::OraclePoint(target_ts))
         {
-            return cum;
+            return Ok(cum);
         }
         let timestamps: Vec<u64> = match env.storage().instance().get(&DataKey::OracleTimestamps) {
             Some(ts) => ts,
@@ -3400,59 +3735,53 @@ impl ConcentratedLiquidity {
                     .storage()
                     .instance()
                     .get(&DataKey::OraclePoint(target_ts))
-                    .unwrap_or(0);
+                    .ok_or(ClError::ObservationTooOld);
             }
         };
         if timestamps.is_empty() {
-            return 0;
+            return Err(ClError::ObservationTooOld);
         }
         let first = timestamps.get(0).unwrap();
         if target_ts < first {
-            return 0;
+            return Err(ClError::ObservationTooOld);
         }
-        let n = timestamps.len();
-        let mut lo_idx: Option<u32> = None;
-        let mut hi_idx: Option<u32> = None;
-        for i in 0..n {
-            let t = timestamps.get(i).unwrap();
+        let mut lo: u32 = 0;
+        let mut hi: u32 = timestamps.len() - 1;
+        while lo < hi {
+            let mid = lo + (hi - lo).div_ceil(2);
+            let t = timestamps.get(mid).unwrap();
             if t <= target_ts {
-                lo_idx = Some(i);
-            } else if hi_idx.is_none() {
-                hi_idx = Some(i);
-                break;
+                lo = mid;
+            } else {
+                hi = mid - 1;
             }
         }
-        let lo = match lo_idx {
-            Some(i) => i,
-            None => return 0,
-        };
         let t_lo = timestamps.get(lo).unwrap();
         let c_lo: i64 = env
             .storage()
             .instance()
             .get(&DataKey::OraclePoint(t_lo))
             .unwrap_or(0);
-        let (t_hi, c_hi) = match hi_idx {
-            Some(hi) => {
-                let t = timestamps.get(hi).unwrap();
-                let c = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::OraclePoint(t))
-                    .unwrap_or(0);
-                (t, c)
-            }
-            None => (last_ts, live_cum),
-        };
         if target_ts == t_lo {
-            return c_lo;
+            return Ok(c_lo);
         }
-        if t_hi == t_lo {
-            return c_lo;
+        let (t_hi, c_hi) = if lo + 1 < timestamps.len() {
+            let t = timestamps.get(lo + 1).unwrap();
+            let c = env
+                .storage()
+                .instance()
+                .get(&DataKey::OraclePoint(t))
+                .unwrap_or(0);
+            (t, c)
+        } else {
+            (last_ts, live_cum)
+        };
+        if t_hi <= t_lo {
+            return Ok(c_lo);
         }
         let dt = (t_hi - t_lo) as i128;
         let elapsed = (target_ts - t_lo) as i128;
-        c_lo + (((c_hi - c_lo) as i128 * elapsed) / dt) as i64
+        Ok(c_lo + (((c_hi - c_lo) as i128 * elapsed) / dt) as i64)
     }
 
     /// Returns all open position tick-range pairs for `provider`.
@@ -9551,7 +9880,7 @@ mod test_range_order_fill_status {
     // it was placed on, and only report `Filled` once the price has crossed
     // through the range in that order's original fill direction.
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::Env;
 
@@ -9885,6 +10214,665 @@ mod test_range_order_fill_status {
             &u64::MAX,
         );
         assert_eq!(result, Err(Ok(ClError::RangeOrderExists)));
+    }
+
+    // ── Issue #1101: Bounded oracle ring buffer & O(log N) observe ────────────
+
+    #[test]
+    fn oracle_ring_buffer_5000_swaps_keeps_instance_storage_bounded_and_caps_observations() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let cl_addr = env.register_contract(None, ConcentratedLiquidity);
+        let client = ConcentratedLiquidityClient::new(&env, &cl_addr);
+        client.initialize(&admin, &token_a, &token_b, &30_i128, &0_i32, &1_i32);
+
+        let provider = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&provider, &10_000_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&provider, &10_000_000_000_i128);
+        client.mint_position(
+            &provider,
+            &-1000_i32,
+            &1000_i32,
+            &1_000_000_000_i128,
+            &1_000_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+
+        let trader = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&trader, &10_000_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&trader, &10_000_000_000_i128);
+
+        // First swap transfers tokens and accrues fees; remaining swaps up to 5,000
+        // use the current sqrt_price_limit_x96 so each swap exercises the full
+        // entrypoint, oracle accumulator, and ring-buffer write in distinct ledgers
+        // without 10,000 cross-contract SAC host calls in debug builds.
+        env.ledger().set_timestamp(1_005);
+        client.swap(&trader, &true, &1_000_i128, &0_u128, &0_i128, &u64::MAX);
+        let limit = client.get_pool_state().sqrt_price;
+        for i in 2..5_000_u64 {
+            env.ledger().set_timestamp(1_000 + i * 5);
+            client.swap(&trader, &true, &1_000_i128, &limit, &0_i128, &u64::MAX);
+        }
+        env.ledger().set_timestamp(1_000 + 5_000 * 5);
+        client.swap(&trader, &false, &1_000_i128, &0_u128, &0_i128, &u64::MAX);
+
+        let header = client.get_oracle_header();
+        assert_eq!(header.cardinality, DEFAULT_ORACLE_CARDINALITY);
+        assert_eq!(header.count, DEFAULT_ORACLE_CARDINALITY);
+
+        // Verify instance storage holds no legacy OracleTimestamps or OraclePoint entries,
+        // and persistent storage holds at most DEFAULT_ORACLE_CARDINALITY observation slots.
+        env.as_contract(&cl_addr, || {
+            assert!(!env.storage().instance().has(&DataKey::OracleTimestamps));
+            assert!(!env
+                .storage()
+                .instance()
+                .has(&DataKey::OraclePoint(1_000 + 5)));
+            assert!(env
+                .storage()
+                .persistent()
+                .has(&DataKey::OracleObservation(DEFAULT_ORACLE_CARDINALITY - 1)));
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::OracleObservation(DEFAULT_ORACLE_CARDINALITY)));
+        });
+
+        // Pool operations (collect_fees, burn_position, observe) continue to succeed after 5,000 swaps.
+        let fees = client.collect_fees(&provider, &-1000_i32, &1000_i32);
+        assert!(fees.0 >= 0 && fees.1 >= 0);
+        let pos = client.get_position(&provider, &-1000_i32, &1000_i32);
+        client.burn_position(&provider, &-1000_i32, &1000_i32, &(pos.liquidity / 2));
+        let obs_now = client.observe(&0_u64);
+        assert_eq!(obs_now, client.get_tick_cumulative().0);
+    }
+
+    #[test]
+    fn oracle_observe_returns_exact_values_at_retained_sample_timestamps() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, _token_a, _token_b, client) = setup_pool(&env, 10);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let cl_addr = client.address.clone();
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &_token_a).mint(&buyer, &1_000_000_i128);
+
+        let mut samples: Vec<(u64, i64)> = Vec::new(&env);
+        samples.push_back((1_000, 0));
+
+        for step in 1..=6_u64 {
+            let ts = 1_000 + step * 100;
+            env.ledger().set_timestamp(ts);
+            set_current_tick(&env, &cl_addr, (step as i32) * 10);
+            client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+            let (cum, recorded_ts) = client.get_tick_cumulative();
+            assert_eq!(recorded_ts, ts);
+            samples.push_back((ts, cum));
+        }
+
+        env.ledger().set_timestamp(2_000);
+        for i in 0..samples.len() {
+            let (ts, expected_cum) = samples.get(i).unwrap();
+            let seconds_ago = 2_000 - ts;
+            assert_eq!(client.observe(&seconds_ago), expected_cum);
+        }
+    }
+
+    #[test]
+    fn oracle_observe_linearly_interpolates_unit_accurately_between_samples() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 20);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let cl_addr = client.address.clone();
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &1_000_000_i128);
+
+        // t=1000: cum=0, tick=20
+        // t=1100: cum = 0 + 20*100 = 2000; then set tick = -10
+        env.ledger().set_timestamp(1_100);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+        set_current_tick(&env, &cl_addr, -10);
+
+        // t=1200: cum = 2000 + (-10)*100 = 1000; then set tick = 50
+        env.ledger().set_timestamp(1_200);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+        set_current_tick(&env, &cl_addr, 50);
+
+        // t=1300: cum = 1000 + 50*100 = 6000
+        env.ledger().set_timestamp(1_300);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+
+        env.ledger().set_timestamp(1_350);
+        // Target 1025 (seconds_ago = 325): 0 + (2000 - 0) * 25 / 100 = 500
+        assert_eq!(client.observe(&325_u64), 500);
+        // Target 1050 (seconds_ago = 300): 1000
+        assert_eq!(client.observe(&300_u64), 1_000);
+        // Target 1150 (seconds_ago = 200): 2000 + (1000 - 2000) * 50 / 100 = 1500
+        assert_eq!(client.observe(&200_u64), 1_500);
+        // Target 1240 (seconds_ago = 110): 1000 + (6000 - 1000) * 40 / 100 = 3000
+        assert_eq!(client.observe(&110_u64), 3_000);
+    }
+
+    #[test]
+    fn oracle_observe_returns_observation_too_old_before_oldest_retained_entry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, token_b, client) = setup_pool(&env, 5);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let trader = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&trader, &100_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&trader, &100_000_000_i128);
+
+        // Query before init timestamp (t=999 at now=1000 -> seconds_ago=1) must fail.
+        assert_eq!(
+            client.try_observe(&1_u64),
+            Err(Ok(ClError::ObservationTooOld))
+        );
+        // Query with seconds_ago > now must also return ObservationTooOld.
+        assert_eq!(
+            client.try_observe(&5_000_u64),
+            Err(Ok(ClError::ObservationTooOld))
+        );
+
+        // Perform DEFAULT_ORACLE_CARDINALITY + 10 swaps so the first 11 observations
+        // (init at t=1000 plus swaps 1..=10 at t=1010..=1100) are overwritten.
+        let total_swaps = DEFAULT_ORACLE_CARDINALITY + 10;
+        let limit = client.get_pool_state().sqrt_price;
+        for i in 1..=total_swaps {
+            env.ledger().set_timestamp(1_000 + (i as u64) * 10);
+            client.swap(&trader, &true, &100_i128, &limit, &0_i128, &u64::MAX);
+        }
+
+        let now = 1_000 + (total_swaps as u64) * 10;
+        // Oldest retained observation is at i = 11 -> timestamp = 1_000 + 110 = 1_110.
+        let oldest_retained_ts = 1_110_u64;
+        assert!(client.try_observe(&(now - oldest_retained_ts)).is_ok());
+        assert_eq!(
+            client.try_observe(&(now - oldest_retained_ts + 1)),
+            Err(Ok(ClError::ObservationTooOld))
+        );
+    }
+
+    #[test]
+    fn oracle_observe_zero_extrapolates_from_last_oracle_timestamp_to_now() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 12);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &100_000_i128);
+
+        env.ledger().set_timestamp(1_050);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+
+        let (cum_at_swap, last_ts) = client.get_tick_cumulative();
+        assert_eq!(last_ts, 1_050);
+        assert_eq!(client.observe(&0_u64), cum_at_swap);
+
+        let tick_after = client.current_tick();
+        env.ledger().set_timestamp(1_125);
+        let expected = cum_at_swap + (tick_after as i64) * 75;
+        assert_eq!(client.observe(&0_u64), expected);
+    }
+
+    #[test]
+    fn oracle_get_tick_cumulative_unchanged_for_consumers() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(2_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 15);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        assert_eq!(client.get_tick_cumulative(), (0, 2_000));
+
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &100_000_i128);
+
+        env.ledger().set_timestamp(2_040);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+        assert_eq!(client.get_tick_cumulative(), (15 * 40, 2_040));
+    }
+
+    #[test]
+    fn oracle_swap_exact_out_records_observation_in_ring_buffer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 10);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &1_000_000_i128);
+
+        env.ledger().set_timestamp(1_100);
+        client.swap_exact_out(&buyer, &true, &50_i128, &0_u128, &100_000_i128, &u64::MAX);
+        let (cum_1100, ts_1100) = client.get_tick_cumulative();
+        assert_eq!(ts_1100, 1_100);
+        assert_eq!(cum_1100, 1_000);
+        assert_eq!(client.get_oracle_header().count, 2);
+
+        env.ledger().set_timestamp(1_200);
+        client.swap_exact_out(&buyer, &true, &50_i128, &0_u128, &100_000_i128, &u64::MAX);
+        let (cum_1200, _) = client.get_tick_cumulative();
+        assert_eq!(client.get_oracle_header().count, 3);
+
+        // Interpolate at t=1050 (between init at 1000 and exact-out swap at 1100)
+        // and at t=1150 (between the two exact-out swaps).
+        env.ledger().set_timestamp(1_250);
+        assert_eq!(client.observe(&200_u64), 500);
+        assert_eq!(
+            client.observe(&100_u64),
+            cum_1100 + (cum_1200 - cum_1100) / 2
+        );
+    }
+
+    #[test]
+    fn oracle_observe_on_full_ring_has_bounded_instruction_cost() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, token_b, client) = setup_pool(&env, 0);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let trader = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&trader, &100_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&trader, &100_000_000_i128);
+
+        let limit = client.get_pool_state().sqrt_price;
+        for i in 1..=600_u64 {
+            env.ledger().set_timestamp(1_000 + i * 10);
+            client.swap(&trader, &true, &100_i128, &limit, &0_i128, &u64::MAX);
+        }
+
+        env.budget().reset_default();
+        let _ = client.observe(&2_505_u64);
+        let cpu = env.budget().cpu_instruction_cost();
+        // Binary search over 512 entries reads at most ~10 persistent slots; CPU must stay
+        // far below Soroban's 100M per-transaction limit.
+        assert!(
+            cpu < 5_000_000,
+            "observe on full ring used too many CPU instructions: {cpu}"
+        );
+    }
+
+    #[test]
+    fn oracle_legacy_state_upgrade_migrates_and_preserves_window() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 10);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let cl_addr = client.address.clone();
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &1_000_000_i128);
+
+        // Simulate a pre-#1101 pool by removing OracleHeader/OracleObservation and
+        // writing legacy OracleTimestamps + OraclePoint(t) into instance storage.
+        env.as_contract(&cl_addr, || {
+            env.storage().instance().remove(&DataKey::OracleHeader);
+            env.storage()
+                .persistent()
+                .remove(&DataKey::OracleObservation(0));
+
+            let mut legacy_ts: Vec<u64> = Vec::new(&env);
+            legacy_ts.push_back(1_000);
+            legacy_ts.push_back(1_100);
+            legacy_ts.push_back(1_200);
+            env.storage()
+                .instance()
+                .set(&DataKey::OracleTimestamps, &legacy_ts);
+            env.storage()
+                .instance()
+                .set(&DataKey::OraclePoint(1_000), &0_i64);
+            env.storage()
+                .instance()
+                .set(&DataKey::OraclePoint(1_100), &1_000_i64);
+            env.storage()
+                .instance()
+                .set(&DataKey::OraclePoint(1_200), &3_000_i64);
+            env.storage()
+                .instance()
+                .set(&DataKey::LastOracleTimestamp, &1_200_u64);
+            env.storage()
+                .instance()
+                .set(&DataKey::TickCumulative, &3_000_i64);
+        });
+
+        // Before any post-upgrade swap, observe falls back to legacy storage accurately.
+        env.ledger().set_timestamp(1_250);
+        assert_eq!(client.observe(&200_u64), 500); // t=1050
+        assert_eq!(client.observe(&100_u64), 2_000); // t=1150
+        assert_eq!(
+            client.try_observe(&300_u64),
+            Err(Ok(ClError::ObservationTooOld))
+        );
+
+        // Now run a post-upgrade swap at t=1300; it must migrate legacy entries into
+        // the persistent ring buffer and clean up instance storage.
+        env.ledger().set_timestamp(1_300);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+
+        env.as_contract(&cl_addr, || {
+            assert!(env.storage().instance().has(&DataKey::OracleHeader));
+            assert!(!env.storage().instance().has(&DataKey::OracleTimestamps));
+            assert!(!env.storage().instance().has(&DataKey::OraclePoint(1_000)));
+            assert!(!env.storage().instance().has(&DataKey::OraclePoint(1_100)));
+            assert!(!env.storage().instance().has(&DataKey::OraclePoint(1_200)));
+        });
+
+        let header = client.get_oracle_header();
+        assert_eq!(header.count, 4);
+        // Pre-upgrade window timestamps still resolve accurately from the migrated ring buffer.
+        assert_eq!(client.observe(&250_u64), 500); // t=1050
+        assert_eq!(client.observe(&150_u64), 2_000); // t=1150
+    }
+
+    #[test]
+    fn oracle_set_cardinality_expands_ring_and_preserves_wrapped_observations() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let admin = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let cl_addr = env.register_contract(None, ConcentratedLiquidity);
+        let client = ConcentratedLiquidityClient::new(&env, &cl_addr);
+        client.initialize(&admin, &token_a, &token_b, &30_i128, &10_i32, &1_i32);
+
+        let provider = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&provider, &100_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&provider, &100_000_000_i128);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+
+        let trader = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&trader, &100_000_000_i128);
+        StellarAssetClient::new(&env, &token_b).mint(&trader, &100_000_000_i128);
+
+        // Wrap the ring buffer by performing DEFAULT_ORACLE_CARDINALITY + 25 swaps.
+        let initial_swaps = DEFAULT_ORACLE_CARDINALITY + 25;
+        let limit = client.get_pool_state().sqrt_price;
+        for i in 1..=initial_swaps {
+            env.ledger().set_timestamp(1_000 + (i as u64) * 10);
+            client.swap(&trader, &true, &100_i128, &limit, &0_i128, &u64::MAX);
+        }
+
+        let before_expand_oldest = client.observe(&((DEFAULT_ORACLE_CARDINALITY as u64 - 1) * 10));
+        let before_expand_mid = client.observe(&2_500_u64);
+        let before_expand_recent = client.observe(&50_u64);
+
+        client.set_oracle_cardinality(&admin, &1024_u32);
+        assert_eq!(client.get_oracle_cardinality(), 1024);
+        let header = client.get_oracle_header();
+        assert_eq!(header.cardinality, 1024);
+        assert_eq!(header.count, DEFAULT_ORACLE_CARDINALITY);
+        assert_eq!(header.index, DEFAULT_ORACLE_CARDINALITY - 1);
+
+        // Observations must match identically right after expansion.
+        assert_eq!(
+            client.observe(&((DEFAULT_ORACLE_CARDINALITY as u64 - 1) * 10)),
+            before_expand_oldest
+        );
+        assert_eq!(client.observe(&2_500_u64), before_expand_mid);
+        assert_eq!(client.observe(&50_u64), before_expand_recent);
+
+        // Additional swaps now grow `count` past 512 without evicting `before_expand_oldest`.
+        for j in 1..=20_u64 {
+            env.ledger()
+                .set_timestamp(1_000 + (initial_swaps as u64 + j) * 10);
+            client.swap(&trader, &true, &100_i128, &limit, &0_i128, &u64::MAX);
+        }
+        assert_eq!(
+            client.get_oracle_header().count,
+            DEFAULT_ORACLE_CARDINALITY + 20
+        );
+        assert_eq!(
+            client.observe(&((DEFAULT_ORACLE_CARDINALITY as u64 - 1 + 20) * 10)),
+            before_expand_oldest
+        );
+    }
+
+    #[test]
+    fn oracle_set_cardinality_rejects_unauthorized_zero_shrink_and_above_max() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+
+        let admin = Address::generate(&env);
+        let outsider = Address::generate(&env);
+        let token_a = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_b = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let cl_addr = env.register_contract(None, ConcentratedLiquidity);
+        let client = ConcentratedLiquidityClient::new(&env, &cl_addr);
+        client.initialize(&admin, &token_a, &token_b, &30_i128, &0_i32, &1_i32);
+
+        assert_eq!(
+            client.try_set_oracle_cardinality(&outsider, &1024_u32),
+            Err(Ok(ClError::Unauthorized))
+        );
+        assert_eq!(
+            client.try_set_oracle_cardinality(&admin, &0_u32),
+            Err(Ok(ClError::InvalidOracleCardinality))
+        );
+        assert_eq!(
+            client.try_set_oracle_cardinality(&admin, &(DEFAULT_ORACLE_CARDINALITY - 1)),
+            Err(Ok(ClError::InvalidOracleCardinality))
+        );
+        assert_eq!(
+            client.try_set_oracle_cardinality(&admin, &(MAX_ORACLE_CARDINALITY + 1)),
+            Err(Ok(ClError::InvalidOracleCardinality))
+        );
+        assert!(client
+            .try_set_oracle_cardinality(&admin, &MAX_ORACLE_CARDINALITY)
+            .is_ok());
+    }
+
+    #[test]
+    fn oracle_same_timestamp_swaps_overwrite_in_place_without_advancing_ring() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 5);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &1_000_000_i128);
+
+        assert_eq!(client.get_oracle_header().count, 1);
+
+        // Two swaps in the same ledger timestamp (1100) should only add 1 new slot.
+        env.ledger().set_timestamp(1_100);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+        assert_eq!(client.get_oracle_header().count, 2);
+        assert_eq!(client.get_oracle_header().index, 1);
+    }
+
+    #[test]
+    fn oracle_legacy_exact_out_trailing_point_is_migrated() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+
+        let (provider, token_a, _token_b, client) = setup_pool(&env, 10);
+        client.mint_position(
+            &provider,
+            &-500_i32,
+            &500_i32,
+            &10_000_000_i128,
+            &10_000_000_i128,
+            &0_i128,
+            &0_i128,
+            &u64::MAX,
+        );
+        let cl_addr = client.address.clone();
+        let buyer = Address::generate(&env);
+        StellarAssetClient::new(&env, &token_a).mint(&buyer, &1_000_000_i128);
+
+        // Simulate legacy state where swap_exact_out wrote OraclePoint(1100) without
+        // adding 1100 to OracleTimestamps.
+        env.as_contract(&cl_addr, || {
+            env.storage().instance().remove(&DataKey::OracleHeader);
+            env.storage()
+                .persistent()
+                .remove(&DataKey::OracleObservation(0));
+
+            let mut legacy_ts: Vec<u64> = Vec::new(&env);
+            legacy_ts.push_back(1_000);
+            env.storage()
+                .instance()
+                .set(&DataKey::OracleTimestamps, &legacy_ts);
+            env.storage()
+                .instance()
+                .set(&DataKey::OraclePoint(1_000), &0_i64);
+            env.storage()
+                .instance()
+                .set(&DataKey::OraclePoint(1_100), &1_000_i64);
+            env.storage()
+                .instance()
+                .set(&DataKey::LastOracleTimestamp, &1_100_u64);
+            env.storage()
+                .instance()
+                .set(&DataKey::TickCumulative, &1_000_i64);
+        });
+
+        env.ledger().set_timestamp(1_200);
+        client.swap(&buyer, &true, &100_i128, &0_u128, &0_i128, &u64::MAX);
+
+        assert_eq!(client.get_oracle_header().count, 3);
+        assert_eq!(client.observe(&100_u64), 1_000);
+        assert_eq!(client.observe(&150_u64), 500);
     }
 
     // ── Issue #1098: Fee growth scale Q64 (1 << 64) ──────────────────────────
