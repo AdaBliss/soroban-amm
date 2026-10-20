@@ -17,9 +17,9 @@ const MAX_TICK: i32 = 887272;
 const Q96: u128 = 1_u128 << 96;
 
 /// Minimum sqrt price in Q64.96, corresponding to [`MIN_TICK`].
-const MIN_SQRT_PRICE: u128 = 4_295_128_739;
+pub(crate) const MIN_SQRT_PRICE: u128 = 4_295_128_739;
 /// Maximum sqrt price in Q64.96 that fits in a u128 (around tick 443636).
-const MAX_SQRT_PRICE: u128 = 340_275_971_719_517_849_884_931_781_110_561_029_923;
+pub(crate) const MAX_SQRT_PRICE: u128 = 340_275_971_719_517_849_884_931_781_110_561_029_923;
 
 /// Convert a tick to its corresponding sqrt_price in Q64.96 format.
 ///
@@ -46,7 +46,7 @@ pub fn tick_to_sqrt_price_x96(tick: i32) -> Result<i128> {
 /// Binary decomposition of `log(sqrt(1.0001))` in Q128 fixed-point, the same
 /// algorithm the contract runs (Uniswap V3's `getSqrtRatioAtTick`, adapted to
 /// a 128-bit word). The caller has already range-checked `tick`.
-fn tick_to_sqrt_price_x96_u128(tick: i32) -> u128 {
+pub(crate) fn tick_to_sqrt_price_x96_u128(tick: i32) -> u128 {
     // Positive ticks are derived from the (exact) negative side rather than
     // inverting the Q128 ratio in u128, which would lose precision growing
     // with tick magnitude. Uses sqrt_price(t) * sqrt_price(-t) = 2^192.

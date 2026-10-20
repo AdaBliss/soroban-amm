@@ -802,6 +802,114 @@ fn test_simulate_swap_price_impact_bps() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #1097: swap_exact_out fee consistency & k monotonicity
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Acceptance criterion 4:
+/// For fees 0, 1, 30, 100, 5_000, 9_999 and amounts spanning 1, 1_000, 99% of reserve:
+/// swap_exact_out never charges less than the get_amount_out-consistent price
+/// (fee never negative for LPs: k does not decrease).
+#[test]
+fn test_swap_exact_out_never_undercharges_and_k_never_decreases() {
+    let fee_tiers = [0_i128, 1_i128, 30_i128, 100_i128, 5_000_i128, 9_999_i128];
+    let reserve: i128 = 1_000_000;
+    // Amounts spanning 1, 1_000, and 99% of reserve (990_000)
+    let test_amounts = [1_i128, 1_000_i128, (reserve * 99) / 100];
+
+    for &fee_bps in fee_tiers.iter() {
+        for &amount_out in test_amounts.iter() {
+            let ts = setup_pool(fee_bps);
+            let env = &ts.env;
+            let amm = AmmPoolClient::new(env, &ts.amm_addr);
+            let ta_sac = soroban_sdk::token::StellarAssetClient::new(env, &ts.ta_addr);
+            let tb_sac = soroban_sdk::token::StellarAssetClient::new(env, &ts.tb_addr);
+
+            let provider = Address::generate(env);
+            ta_sac.mint(&provider, &reserve);
+            tb_sac.mint(&provider, &reserve);
+            AddLiquidity::new(&amm, &provider, reserve, reserve).execute();
+
+            let initial_k = reserve * reserve;
+
+            // 1. Query required input via get_amount_in
+            let amount_in = amm.get_amount_in(&ts.tb_addr, &amount_out);
+            assert!(
+                amount_in >= 1,
+                "amount_in must be >= 1 (fee_bps={}, amount_out={})",
+                fee_bps,
+                amount_out
+            );
+
+            // 2. Consistent price check: if trader deposited amount_in, get_amount_out must yield >= amount_out
+            let consistent_out = amm.get_amount_out(&ts.ta_addr, &amount_in);
+            assert!(
+                consistent_out >= amount_out,
+                "swap_exact_out must never charge less than get_amount_out-consistent price: \
+                 got consistent_out={}, wanted amount_out={} for fee_bps={}",
+                consistent_out,
+                amount_out,
+                fee_bps
+            );
+
+            // 3. Execute swap_exact_out and verify k does not decrease
+            let trader = Address::generate(env);
+            ta_sac.mint(&trader, &amount_in);
+
+            let charged_in =
+                amm.swap_exact_out(&trader, &ts.tb_addr, &amount_out, &amount_in, &u64::MAX);
+            assert_eq!(charged_in, amount_in);
+
+            let info = amm.get_info();
+            let k_after = info.reserve_a * info.reserve_b;
+            assert!(
+                k_after >= initial_k,
+                "k must not decrease: initial_k={}, k_after={}, fee_bps={}, amount_out={}",
+                initial_k,
+                k_after,
+                fee_bps,
+                amount_out
+            );
+        }
+    }
+}
+
+proptest! {
+    /// Property: For any valid fee in [0, 9_999] and amount_out in [1, 99% of reserve],
+    /// required amount_in >= 1, consistent get_amount_out >= amount_out, and k_after >= k_before.
+    #[test]
+    fn prop_swap_exact_out_fee_and_k_invariants(
+        fee_bps in prop_oneof![
+            Just(0_i128),
+            Just(1_i128),
+            Just(30_i128),
+            Just(100_i128),
+            Just(5_000_i128),
+            Just(9_999_i128),
+            0_i128..10_000_i128,
+        ],
+        reserve_in in 100_000_i128..=10_000_000_i128,
+        reserve_out in 100_000_i128..=10_000_000_i128,
+        pct in 1_i128..=99_i128,
+    ) {
+        let amount_out = (reserve_out * pct) / 100;
+        if amount_out > 0 && amount_out < reserve_out {
+            let numerator = reserve_in * amount_out * 10_000;
+            let denominator = (reserve_out - amount_out) * (10_000 - fee_bps);
+            let amount_in = (numerator / denominator) + 1;
+            prop_assert!(amount_in >= 1);
+
+            let amount_in_with_fee = amount_in * (10_000 - fee_bps);
+            let consistent_out = amount_in_with_fee * reserve_out / (reserve_in * 10_000 + amount_in_with_fee);
+            prop_assert!(consistent_out >= amount_out);
+
+            let k_before = reserve_in * reserve_out;
+            let k_after = (reserve_in + amount_in) * (reserve_out - amount_out);
+            prop_assert!(k_after >= k_before);
+        }
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(20))]
     #[test]

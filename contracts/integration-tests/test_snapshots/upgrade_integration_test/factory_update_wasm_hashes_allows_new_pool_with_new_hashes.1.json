@@ -362,6 +362,51 @@
             "key": {
               "vec": [
                 {
+                  "symbol": "AmmPoolRegistered"
+                },
+                {
+                  "address": "CDDMUEDPF7Z22WY7BL24MYJZWHJK7OPKG5UN4MDPDIRROZZUBU6H3OPS"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "AmmPoolRegistered"
+                    },
+                    {
+                      "address": "CDDMUEDPF7Z22WY7BL24MYJZWHJK7OPKG5UN4MDPDIRROZZUBU6H3OPS"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "bool": true
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          2419200
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+            "key": {
+              "vec": [
+                {
                   "symbol": "GovernanceFor"
                 },
                 {
@@ -1595,6 +1640,43 @@
                 },
                 {
                   "bytes": "935e0088054291bb14a30e844e0692feae69f133274f0b4335be7f2704ea9ea6"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    },
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "0000000000000000000000000000000000000000000000000000000000000002",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "initialized"
+              }
+            ],
+            "data": {
+              "vec": [
+                {
+                  "u32": 1
+                },
+                {
+                  "vec": [
+                    {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    },
+                    {
+                      "bytes": "0a97198b796db9ac305429f51018782977dcad1ffcf960b9fd7578fcdb7609a7"
+                    },
+                    {
+                      "bytes": "935e0088054291bb14a30e844e0692feae69f133274f0b4335be7f2704ea9ea6"
+                    }
+                  ]
                 }
               ]
             }

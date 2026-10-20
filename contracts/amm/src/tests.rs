@@ -1342,9 +1342,8 @@ fn test_fee_bps_zero_succeeds() {
 
 #[test]
 fn test_fee_bps_max_succeeds() {
-    // fee_bps=10_000 is the inclusive upper bound; pool initializes successfully.
-    // With 100% fee, amount_in_with_fee = 0, so amount_out = 0.
-    let ts = setup_pool(10_000);
+    // fee_bps=9_999 is the valid upper bound (< 10_000); pool initializes successfully.
+    let ts = setup_pool(9_999);
     let env = &ts.env;
     let amm = AmmPoolClient::new(env, &ts.amm_addr);
     let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
@@ -1359,14 +1358,14 @@ fn test_fee_bps_max_succeeds() {
     ta_sac.mint(&trader, &100_000_i128);
     let result = Swap::new(&amm, &trader, &ts.ta_addr, 100_000).try_execute();
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().unwrap(), 0);
+    assert!(result.unwrap().unwrap() > 0);
 }
 
 #[test]
 fn test_get_amount_in_max_fee_does_not_panic() {
-    // With fee_bps=10_000 the `(10_000 - fee_bps)` divisor is zero. The quote
-    // must return 0 instead of trapping on a division by zero.
-    let ts = setup_pool(10_000);
+    // With fee_bps=10_000 in storage (e.g. legacy pool before migration),
+    // get_amount_in returns AmmError::InvalidFeeBps instead of trapping or returning 0.
+    let ts = setup_pool(30);
     let env = &ts.env;
     let amm = AmmPoolClient::new(env, &ts.amm_addr);
     let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
@@ -1377,8 +1376,13 @@ fn test_get_amount_in_max_fee_does_not_panic() {
     tb_sac.mint(&provider, &1_000_000_i128);
     AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
 
-    let quoted_in = amm.get_amount_in(&ts.tb_addr, &1_000);
-    assert_eq!(quoted_in, 0);
+    // Set legacy 10_000 fee directly in storage
+    env.as_contract(&ts.amm_addr, || {
+        env.storage().instance().set(&DataKey::FeeBps, &10_000_i128);
+    });
+
+    let result = amm.try_get_amount_in(&ts.tb_addr, &1_000);
+    assert_eq!(result, Err(Ok(AmmError::InvalidFeeBps)));
 }
 
 // ── Edge cases: minimum share precision ───────────────────────────────────────
@@ -1817,10 +1821,10 @@ fn test_swap_exact_out_success_unchanged() {
     );
 }
 
-/// Test 7: get_amount_in with high fee (fee_bps >= 10_000) returns Ok(0).
+/// Test 7: get_amount_in with high fee (fee_bps >= 10_000) returns Err(AmmError::InvalidFeeBps).
 #[test]
-fn test_get_amount_in_high_fee_returns_ok_zero() {
-    let ts = setup_pool(10_000); // fee_bps = 10_000
+fn test_get_amount_in_high_fee_returns_typed_error() {
+    let ts = setup_pool(30);
     let env = &ts.env;
     let amm = AmmPoolClient::new(env, &ts.amm_addr);
     let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
@@ -1831,17 +1835,22 @@ fn test_get_amount_in_high_fee_returns_ok_zero() {
     tb_sac.mint(&provider, &1_000_000_i128);
     AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
 
-    // With fee_bps = 10_000, get_amount_in must return Ok(0), not panic
-    let result = amm.try_get_amount_in(&ts.tb_addr, &500_i128);
-    assert!(result.is_ok(), "get_amount_in with high fee must not panic");
+    // Set legacy 10_000 fee directly in storage
+    env.as_contract(&ts.amm_addr, || {
+        env.storage().instance().set(&DataKey::FeeBps, &10_000_i128);
+    });
 
-    if let Ok(Ok(amount_in)) = result {
-        assert_eq!(amount_in, 0, "high fee should return 0");
-    }
+    // With fee_bps = 10_000, get_amount_in must return Err(AmmError::InvalidFeeBps), not Ok(0)
+    let result = amm.try_get_amount_in(&ts.tb_addr, &500_i128);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::InvalidFeeBps)),
+        "high fee should return InvalidFeeBps"
+    );
 }
 
 /// Test 8: Property test - get_amount_in never panics for valid inputs.
-/// For any amount_out in [1, reserve_out - 1] and fee_bps in [0, 10_000],
+/// For any amount_out in [1, reserve_out - 1] and fee_bps in [0, 9_999],
 /// get_amount_in returns a typed Err or Ok, never a host trap.
 #[test]
 fn test_get_amount_in_property_no_panic() {
@@ -2947,6 +2956,286 @@ fn test_pre_init_calls_return_not_initialized() {
     assert_eq!(
         client.try_shares_of(&user),
         Err(Ok(AmmError::NotInitialized))
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #1097: 100% fee get_amount_in / swap_exact_out drain protection tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Acceptance criterion 1: Test reproducing the free drain fails safely.
+/// On a pool with fee_bps = 10_000 (legacy pool), an attacker with 0 tokens calling
+/// swap_exact_out receives a typed error and no tokens move.
+#[test]
+fn test_1097_free_drain_reproduction_fails_safely() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    // Simulate a pool that reached 100% fee before this fix
+    env.as_contract(&ts.amm_addr, || {
+        env.storage().instance().set(&DataKey::FeeBps, &10_000_i128);
+    });
+
+    let attacker = Address::generate(env);
+    let token_a = StellarTokenClient::new(env, &ts.ta_addr);
+    let token_b = StellarTokenClient::new(env, &ts.tb_addr);
+
+    // Attacker holds 0 token_a and 0 token_b
+    assert_eq!(token_b.balance(&attacker), 0);
+    assert_eq!(token_a.balance(&attacker), 0);
+
+    // Attacker tries to drain 999_000 token_b for free
+    let result =
+        amm.try_swap_exact_out(&attacker, &ts.tb_addr, &999_000_i128, &i128::MAX, &u64::MAX);
+
+    // Must return AmmError::InvalidFeeBps
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::InvalidFeeBps)),
+        "swap_exact_out on 100%-fee pool must fail with InvalidFeeBps"
+    );
+
+    // No tokens move: attacker still has 0, pool still has full reserves
+    assert_eq!(token_b.balance(&attacker), 0);
+    assert_eq!(token_a.balance(&attacker), 0);
+    let info = amm.get_info();
+    assert_eq!(info.reserve_a, 1_000_000);
+    assert_eq!(info.reserve_b, 1_000_000);
+}
+
+/// Acceptance criterion 2: initialize and update_fee reject 10_000 and accept 9_999.
+#[test]
+fn test_1097_initialize_and_update_fee_reject_10_000_and_accept_9_999() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &7u32,
+    );
+
+    let (ta, _) = create_sac(&env, &admin);
+    let (tb, _) = create_sac(&env, &admin);
+    let client = AmmPoolClient::new(&env, &amm_addr);
+
+    // initialize rejects fee_bps = 10_000 with exact AmmError::InvalidFeeBps
+    let init_10k_result = client.try_initialize(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &10_000_i128,
+        &admin,
+        &0_i128,
+    );
+    assert_eq!(init_10k_result, Err(Ok(AmmError::InvalidFeeBps)));
+
+    // initialize accepts fee_bps = 9_999
+    let init_9999_result = client.try_initialize(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &9_999_i128,
+        &admin,
+        &0_i128,
+    );
+    assert!(init_9999_result.is_ok());
+
+    // update_fee rejects 10_000 with exact AmmError::InvalidFeeBps
+    let upd_10k_result = client.try_update_fee(&10_000_i128);
+    assert_eq!(upd_10k_result, Err(Ok(AmmError::InvalidFeeBps)));
+
+    // update_fee accepts 9_999
+    let upd_9999_result = client.try_update_fee(&9_999_i128);
+    assert!(upd_9999_result.is_ok());
+    assert_eq!(client.get_fee_info(), 9_999_i128);
+}
+
+/// Acceptance criterion 3: get_amount_in returns typed error for 100%-fee pool
+/// and for zero or negative amount_out.
+#[test]
+fn test_1097_get_amount_in_returns_typed_error_for_100_percent_fee() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    // Legacy pool with 10_000 fee
+    env.as_contract(&ts.amm_addr, || {
+        env.storage().instance().set(&DataKey::FeeBps, &10_000_i128);
+    });
+
+    let result = amm.try_get_amount_in(&ts.tb_addr, &1_000_i128);
+    assert_eq!(result, Err(Ok(AmmError::InvalidFeeBps)));
+}
+
+#[test]
+fn test_1097_get_amount_in_returns_typed_error_for_zero_or_negative_amount_out() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    // amount_out == 0
+    assert_eq!(
+        amm.try_get_amount_in(&ts.tb_addr, &0_i128),
+        Err(Ok(AmmError::ZeroAmount))
+    );
+    // amount_out < 0
+    assert_eq!(
+        amm.try_get_amount_in(&ts.tb_addr, &-10_i128),
+        Err(Ok(AmmError::ZeroAmount))
+    );
+}
+
+/// Acceptance criterion 5: swap_exact_out always transfers amount_in >= 1.
+#[test]
+fn test_1097_swap_exact_out_always_transfers_at_least_one() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &10_000_000_i128);
+    tb_sac.mint(&provider, &10_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 10_000_000, 10_000_000).execute();
+
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &10_000_i128);
+
+    // Ask for tiny output (amount_out = 1)
+    let amount_in = SwapExactOut::new(&amm, &trader, &ts.tb_addr, 1, 10_000).execute();
+    assert!(
+        amount_in >= 1,
+        "swap_exact_out must transfer amount_in >= 1"
+    );
+    let token_a = StellarTokenClient::new(env, &ts.ta_addr);
+    let token_b = StellarTokenClient::new(env, &ts.tb_addr);
+    assert_eq!(token_b.balance(&trader), 1);
+    assert_eq!(token_a.balance(&trader), 10_000 - amount_in);
+}
+
+/// Verify flash loan fee accepts 10_000 (100%) and rejects > 10_000.
+#[test]
+fn test_1097_flash_loan_fee_10_000_is_accepted_and_safe() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &7u32,
+    );
+
+    let (ta, _) = create_sac(&env, &admin);
+    let (tb, _) = create_sac(&env, &admin);
+    let client = AmmPoolClient::new(&env, &amm_addr);
+
+    // initialize_with_flash_loan_fee accepts flash_loan_fee_bps = 10_000
+    let init_result = client.try_initialize_with_flash_loan_fee(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &30_i128,
+        &admin,
+        &0_i128,
+        &10_000_i128,
+    );
+    assert!(init_result.is_ok());
+
+    // update_flash_loan_fee accepts 10_000
+    assert!(client.try_update_flash_loan_fee(&10_000_i128).is_ok());
+
+    // update_flash_loan_fee rejects 10_001
+    assert_eq!(
+        client.try_update_flash_loan_fee(&10_001_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+}
+
+/// get_amount_out returns InvalidFeeBps when pool has fee_bps >= 10_000.
+#[test]
+fn test_1097_get_amount_out_rejects_100_percent_fee() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    env.as_contract(&ts.amm_addr, || {
+        env.storage().instance().set(&DataKey::FeeBps, &10_000_i128);
+    });
+
+    assert_eq!(
+        amm.try_get_amount_out(&ts.ta_addr, &1_000_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    assert_eq!(
+        amm.try_simulate_swap(&ts.ta_addr, &1_000_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+}
+
+/// swap_exact_out rejects zero or negative amount_out.
+#[test]
+fn test_1097_swap_exact_out_rejects_zero_or_negative_amount_out() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    let trader = Address::generate(env);
+    assert_eq!(
+        amm.try_swap_exact_out(&trader, &ts.tb_addr, &0_i128, &i128::MAX, &u64::MAX),
+        Err(Ok(AmmError::ZeroAmount))
+    );
+    assert_eq!(
+        amm.try_swap_exact_out(&trader, &ts.tb_addr, &-10_i128, &i128::MAX, &u64::MAX),
+        Err(Ok(AmmError::ZeroAmount))
     );
 }
 

@@ -2042,15 +2042,7 @@ impl ConcentratedLiquidity {
             .instance()
             .get(&DataKey::TickSpacing)
             .unwrap_or(1);
-        let sqrt_price = env
-            .storage()
-            .instance()
-            .get(&DataKey::SqrtPriceX96)
-            .unwrap_or_else(|| {
-                let price = Self::tick_to_price(current_tick);
-                let sqrt_p = Self::sqrt(price);
-                (sqrt_p as u128) * (1u128 << 96) / 1000u128
-            });
+        let sqrt_price = Self::current_sqrt_price(&env, current_tick);
         PoolState {
             sqrt_price,
             current_tick,
@@ -2110,43 +2102,30 @@ impl ConcentratedLiquidity {
         Self::next_initialized_tick(&env, tick, true)
     }
 
-    // ── Issue #219: sqrtPrice math library ────────────────────────────────────
+    // ── Issue #219 / #1099: sqrtPrice math library ────────────────────────────
 
     /// Converts a tick to `sqrtPriceX96 = sqrt(1.0001^tick) * 2^96`.
     ///
-    /// Uses binary exponentiation (O(log |tick|)) with pre-sqrt scale-up for
-    /// improved precision. Accurate within 1 basis point for |tick| ≤ 443_636.
-    /// Extreme ticks saturate gracefully without panicking.
+    /// Delegates to [`math::tick_to_sqrt_price_x96`] (Q128 binary decomposition,
+    /// accurate to within 1 ULP). Out-of-range ticks are clamped to
+    /// `[MIN_TICK, MAX_TICK]`. Because `u128` caps `sqrtPriceX96` at
+    /// [`math::MAX_SQRT_PRICE`], ticks in `[MIN_TICK, 443_636]` produce strictly
+    /// distinct sqrt prices while ticks above `443_636` saturate at
+    /// `MAX_SQRT_PRICE`.
     pub fn tick_to_sqrt_price_x96(tick: i32) -> u128 {
-        let tick = tick.clamp(MIN_TICK, MAX_TICK);
-        let price = Self::tick_to_price_bexp(tick);
-        // Scale up by 10^6 before taking the integer sqrt so that
-        // sqrt(price * 10^6) ≈ sqrt(price) * 1000, giving three extra digits of
-        // precision. Divide by 10^6 in the final step to normalize.
-        let price_scaled = price.saturating_mul(1_000_000_i128).max(1);
-        let sqrt_p = Self::sqrt(price_scaled);
-        (sqrt_p as u128).saturating_mul(1u128 << 96) / 1_000_000_u128
+        math::tick_to_sqrt_price_x96(tick.clamp(MIN_TICK, MAX_TICK))
     }
 
     /// Returns the largest tick `t` such that `tick_to_sqrt_price_x96(t) <= sqrt_price_x96`.
     ///
-    /// Uses binary search over the full valid tick range [-887_272, 887_272].
+    /// Delegates to [`math::sqrt_price_x96_to_tick`] after clamping the input to
+    /// `[math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE]`. Across the non-saturated
+    /// domain `[MIN_TICK, 443_636]` this is the exact floor inverse of
+    /// [`Self::tick_to_sqrt_price_x96`].
     pub fn sqrt_price_x96_to_tick(sqrt_price_x96: u128) -> i32 {
-        if sqrt_price_x96 == 0 {
-            return MIN_TICK;
-        }
-        let mut low = MIN_TICK;
-        let mut high = MAX_TICK;
-        while low < high {
-            // Bias mid toward high to avoid infinite loop when low+1==high.
-            let mid = low + (high - low + 1) / 2;
-            if Self::tick_to_sqrt_price_x96(mid) <= sqrt_price_x96 {
-                low = mid;
-            } else {
-                high = mid - 1;
-            }
-        }
-        low
+        math::sqrt_price_x96_to_tick(
+            sqrt_price_x96.clamp(math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE),
+        )
     }
 
     // ── Issue #220: tick state-machine query helpers ──────────────────────────
@@ -2256,15 +2235,7 @@ impl ConcentratedLiquidity {
             .instance()
             .get(&DataKey::ActiveLiquidity)
             .unwrap_or(0);
-        let mut sqrt_price_x96 = env
-            .storage()
-            .instance()
-            .get(&DataKey::SqrtPriceX96)
-            .unwrap_or_else(|| {
-                let price = Self::tick_to_price(current_tick);
-                let sqrt_p = Self::sqrt(price);
-                (sqrt_p as u128) * (1u128 << 96) / 1000u128
-            });
+        let mut sqrt_price_x96 = Self::current_sqrt_price(&env, current_tick);
         // Snapshot the price before the tick walk so we can tell whether the
         // swap actually moved it (issue #352).
         let sqrt_price_before = sqrt_price_x96;
@@ -3333,7 +3304,7 @@ impl ConcentratedLiquidity {
         );
 
         let fee_amount = amount_in_actual - amount_in_after_fee;
-        let spot_price_before = Self::spot_price_for_direction(tick_before, zero_for_one);
+        let spot_price_before = Self::spot_price_for_direction(sqrt_price_before, zero_for_one);
         let effective_price = if amount_in_actual > 0 {
             amount_out * PRICE_SCALE / amount_in_actual
         } else {
@@ -3856,10 +3827,12 @@ impl ConcentratedLiquidity {
         (inside_a, inside_b)
     }
 
-    /// Computes `PRICE_SCALE * 1.0001^tick` via binary exponentiation (O(log|tick|)
-    /// multiplications), supporting the full [MIN_TICK, MAX_TICK] range. Delegates
-    /// to `tick_to_price_bexp`, which uses saturating arithmetic to prevent panics
-    /// at extreme ticks.
+    /// Display-only view returning `PRICE_SCALE * 1.0001^tick` via binary
+    /// exponentiation (`PRICE_SCALE = 1_000_000`).
+    ///
+    /// Note: this 6-decimal representation is lossy at low negative ticks and
+    /// saturating at high positive ticks, so it must never be used for trade or
+    /// position math (use [`Self::tick_to_sqrt_price_x96`] instead).
     pub fn tick_to_price(tick: i32) -> i128 {
         Self::tick_to_price_bexp(tick)
     }
@@ -3888,22 +3861,6 @@ impl ConcentratedLiquidity {
             }
         } else {
             price
-        }
-    }
-
-    fn sqrt(y: i128) -> i128 {
-        if y > 3 {
-            let mut z = y;
-            let mut x = y / 2 + 1;
-            while x < z {
-                z = x;
-                x = (y / x + x) / 2;
-            }
-            z
-        } else if y != 0 {
-            1
-        } else {
-            0
         }
     }
 
@@ -4194,23 +4151,22 @@ impl ConcentratedLiquidity {
     }
 
     fn current_sqrt_price_x96(env: &Env, current_tick: i32) -> u128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::SqrtPriceX96)
-            .unwrap_or_else(|| {
-                let price = Self::tick_to_price(current_tick);
-                let sqrt_p = Self::sqrt(price);
-                (sqrt_p as u128) * (1u128 << 96) / 1000u128
-            })
+        Self::current_sqrt_price(env, current_tick)
     }
 
-    fn spot_price_for_direction(current_tick: i32, zero_for_one: bool) -> i128 {
-        let price = Self::tick_to_price(current_tick).max(1);
-        if zero_for_one {
-            price
-        } else {
-            PRICE_SCALE * PRICE_SCALE / price
+    fn spot_price_for_direction(sqrt_price_x96: u128, zero_for_one: bool) -> i128 {
+        if sqrt_price_x96 == 0 {
+            return 0;
         }
+        let directional_sqrt = if zero_for_one {
+            sqrt_price_x96
+        } else {
+            math::mul_div(math::Q96, math::Q96, sqrt_price_x96).unwrap_or(u128::MAX)
+        };
+        let p_x96 =
+            math::mul_div(directional_sqrt, directional_sqrt, math::Q96).unwrap_or(u128::MAX);
+        let scaled = math::mul_div(p_x96, PRICE_SCALE as u128, math::Q96).unwrap_or(u128::MAX);
+        Self::u128_to_i128_saturating(Some(scaled)).max(1)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5854,15 +5810,13 @@ mod tests {
     // silently: it credited 1_035_593 and 860_209 liquidity for the token-A
     // and token-B legs below instead of the exact values asserted here.
     //
-    // Expected values are exact-precision floors computed from the prices the
-    // contract actually uses for these ticks (its own
-    // `tick_to_sqrt_price_x96`, which caps at u128::MAX / 10^6 by tick
-    // 200_000):
+    // Expected values are exact-precision floors computed from the prices in
+    // `math::tick_to_sqrt_price_x96` (`PINNED[1]` in `math.rs`):
     //
-    //   sa = 11_695_531_891_538_153_207_631_330_097_785
-    //   sb = 340_282_366_920_938_463_463_374_607_431_768
-    //   liq0 = floor(X * sa * sb / (2^96 * (sb - sa))) = 152_872_609_698_397
-    //   liq1 = floor(X * 2^96 / (sb - sa))             = 241_117_884
+    //   sa = 11_755_562_826_496_067_164_730_007_758_967
+    //   sb = 1_744_244_129_640_337_381_386_292_646_062_446
+    //   liq0 = floor(X * sa * sb / (2^96 * (sb - sa))) = 149_382_848_285_501
+    //   liq1 = floor(X * 2^96 / (sb - sa))             = 45_730_842
 
     const WIDE_LO: i32 = 100_000;
     const WIDE_HI: i32 = 200_000;
@@ -5939,18 +5893,18 @@ mod tests {
     #[test]
     fn wide_range_below_price_mint_burn_round_trips_token_a() {
         // Price below the range: token A only. The inner floor of
-        // `get_liquidity_for_amount0` can drop up to sa / 2^96 + 1 = 148 units
-        // of liquidity, each worth ~0.0065 of token A, so the round trip loses
+        // `get_liquidity_for_amount0` can drop up to sa / 2^96 + 1 = 149 units
+        // of liquidity, each worth ~0.0067 of token A, so the round trip loses
         // at most 2 units; 3 leaves one unit of headroom.
-        assert_wide_single_leg_round_trip(0, true, 152_872_609_698_397, 148, 3);
+        assert_wide_single_leg_round_trip(0, true, 149_382_848_285_501, 149, 3);
     }
 
     #[test]
     fn wide_range_above_price_mint_burn_round_trips_token_b() {
         // Price above the range: token B only. Liquidity is the exact floor.
-        // One liquidity unit is worth (sb - sa) / 2^96 ~= 4_147.3 of token B,
+        // One liquidity unit is worth (sb - sa) / 2^96 ~= 21_867.08 of token B,
         // which bounds the round-trip loss (plus one unit for the final floor).
-        assert_wide_single_leg_round_trip(250_000, false, 241_117_884, 0, 4_149);
+        assert_wide_single_leg_round_trip(250_000, false, 45_730_842, 0, 21_869);
     }
 
     #[test]
@@ -5973,10 +5927,10 @@ mod tests {
         assert!(ma > 0 && mb > 0, "in-range mint takes both tokens");
         assert!(ma <= WIDE_DEPOSIT && mb <= WIDE_DEPOSIT);
         // Liquidity is limited by one token; that one is used almost in full.
-        // A liquidity unit is worth at most (sb - sa) / 2^96 ~= 4_147.3 of
-        // token B and under 1 of token A anywhere in this range.
+        // At tick 150_000, a liquidity unit is worth (sp - sa) / 2^96 ~= 1_655.77
+        // of token B and under 1 of token A.
         let limiting_loss = (WIDE_DEPOSIT - ma).min(WIDE_DEPOSIT - mb);
-        assert!(limiting_loss <= 4_149, "limiting leg lost {limiting_loss}");
+        assert!(limiting_loss <= 1_657, "limiting leg lost {limiting_loss}");
 
         let pos = te.client.get_position(&te.provider, &WIDE_LO, &WIDE_HI);
         let (ba, bb) = te
@@ -6007,8 +5961,8 @@ mod tests {
             &u64::MAX,
         );
         assert_eq!(quote, res);
-        assert!(res.liquidity <= 152_872_609_698_397);
-        assert!(res.liquidity >= 152_872_609_698_397 - 148);
+        assert!(res.liquidity <= 149_382_848_285_501);
+        assert!(res.liquidity >= 149_382_848_285_501 - 149);
 
         let (ba, bb) = te
             .client
@@ -10941,5 +10895,489 @@ mod test_range_order_fill_status {
         assert!(collected_a > 0, "provider must collect fee A");
         assert_eq!(collected_b, 0, "no fee B accrued on zero_for_one swap");
         assert!((2990..=3010).contains(&collected_a));
+    }
+}
+
+#[cfg(test)]
+mod test_issue_1099_tick_sqrt_price_precision {
+    extern crate std;
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::Ledger as _;
+    use soroban_sdk::token::StellarAssetClient;
+    use std::vec::Vec;
+
+    const MAX_DISTINCT_TICK: i32 = 443_636;
+
+    fn sweep_ticks() -> Vec<i32> {
+        let mut ticks = Vec::new();
+        let mut t = MIN_TICK;
+        while t < MAX_DISTINCT_TICK {
+            ticks.push(t);
+            t += 1_000;
+        }
+        for center in [-69_100_i32, -46_000, -23_000, -11_500, 0, 46_000] {
+            for offset in -50..=50 {
+                let candidate = center + offset;
+                if (MIN_TICK..MAX_DISTINCT_TICK).contains(&candidate) {
+                    ticks.push(candidate);
+                }
+            }
+        }
+        ticks.sort_unstable();
+        ticks.dedup();
+        ticks
+    }
+
+    fn setup_low_price_pool(
+        env: &Env,
+        fee_bps: i128,
+        initial_tick: i32,
+        tick_spacing: i32,
+    ) -> (
+        Address,
+        Address,
+        Address,
+        Address,
+        ConcentratedLiquidityClient<'_>,
+    ) {
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(1_000);
+        let admin = Address::generate(env);
+        let provider = Address::generate(env);
+        let sac_a = env.register_stellar_asset_contract_v2(admin.clone());
+        let sac_b = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_a = sac_a.address();
+        let token_b = sac_b.address();
+
+        let funding = 1_000_000_000_000_000_000_i128;
+        StellarAssetClient::new(env, &token_a).mint(&provider, &funding);
+        StellarAssetClient::new(env, &token_b).mint(&provider, &funding);
+
+        let cl_addr = env.register_contract(None, ConcentratedLiquidity);
+        let client = ConcentratedLiquidityClient::new(env, &cl_addr);
+        client.initialize(
+            &admin,
+            &token_a,
+            &token_b,
+            &fee_bps,
+            &initial_tick,
+            &tick_spacing,
+        );
+        (cl_addr, provider, token_a, token_b, client)
+    }
+
+    #[test]
+    fn tick_to_sqrt_price_x96_strictly_monotonic_across_sweep_and_dense_windows() {
+        for t in sweep_ticks() {
+            let lo = ConcentratedLiquidity::tick_to_sqrt_price_x96(t);
+            let hi = ConcentratedLiquidity::tick_to_sqrt_price_x96(t + 1);
+            assert!(
+                lo < hi,
+                "tick {t} and {} collided or inverted: {lo} vs {hi}",
+                t + 1
+            );
+        }
+    }
+
+    #[test]
+    fn tick_to_sqrt_price_x96_matches_math_rs_and_roundtrips_floor_inverse() {
+        for t in sweep_ticks() {
+            let sp = ConcentratedLiquidity::tick_to_sqrt_price_x96(t);
+            let expected = math::tick_to_sqrt_price_x96(t);
+            assert_eq!(sp, expected, "contract vs math.rs mismatch at tick {t}");
+            assert_eq!(
+                ConcentratedLiquidity::sqrt_price_x96_to_tick(sp),
+                t,
+                "exact tick boundary roundtrip failed at tick {t}"
+            );
+
+            let sp_next = ConcentratedLiquidity::tick_to_sqrt_price_x96(t + 1);
+            if sp_next > sp + 1 {
+                let mid = sp + (sp_next - sp) / 2;
+                assert_eq!(
+                    ConcentratedLiquidity::sqrt_price_x96_to_tick(mid),
+                    t,
+                    "interior midpoint between {t} and {} did not floor to {t}",
+                    t + 1
+                );
+                assert_eq!(
+                    ConcentratedLiquidity::sqrt_price_x96_to_tick(sp_next - 1),
+                    t,
+                    "just below next tick boundary did not floor to {t}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn low_price_adjacent_ticks_around_minus_69100_do_not_collide() {
+        let p_69100 = ConcentratedLiquidity::tick_to_sqrt_price_x96(-69_100);
+        let p_69099 = ConcentratedLiquidity::tick_to_sqrt_price_x96(-69_099);
+        assert!(p_69100 < p_69099);
+        assert_eq!(p_69100, math::tick_to_sqrt_price_x96(-69_100));
+        assert_eq!(p_69099, math::tick_to_sqrt_price_x96(-69_099));
+
+        let (step_in, step_out) =
+            ConcentratedLiquidity::compute_step(1_000_000_000_000, p_69099, p_69100, true);
+        assert!(step_in > 0, "crossing 1 tick at -69_100 must require input");
+        assert!(
+            step_out > 0,
+            "crossing 1 tick at -69_100 must produce output"
+        );
+    }
+
+    #[test]
+    fn low_price_position_mint_and_full_burn_conserves_deposit_within_one_stroop() {
+        let env = Env::default();
+        let (_cl_addr, provider, _token_a, _token_b, client) =
+            setup_low_price_pool(&env, 30, -69_100, 1);
+
+        let desired_a = 1_000_000_000_000_i128;
+        let desired_b = 1_000_000_000_i128;
+        let (deposited_a, deposited_b) = client.mint_position(
+            &provider, &-69_200, &-69_000, &desired_a, &desired_b, &1, &1, &10_000,
+        );
+        assert!(deposited_a > 0 && deposited_b > 0);
+
+        let pos = client.get_position(&provider, &-69_200, &-69_000);
+        assert!(pos.liquidity > 0);
+
+        let (burned_a, burned_b) =
+            client.burn_position(&provider, &-69_200, &-69_000, &pos.liquidity);
+        assert!(
+            burned_a <= deposited_a && deposited_a - burned_a <= 1,
+            "token A burn {burned_a} vs deposit {deposited_a}"
+        );
+        assert!(
+            burned_b <= deposited_b && deposited_b - burned_b <= 1,
+            "token B burn {burned_b} vs deposit {deposited_b}"
+        );
+    }
+
+    #[test]
+    fn low_price_position_below_and_above_range_round_trips_within_one_stroop() {
+        let env = Env::default();
+        // Pool below range [-69_200, -69_000]: position is 100% token A.
+        let (_cl_a, provider_a, _ta, _tb, client_a) = setup_low_price_pool(&env, 30, -69_300, 1);
+        let (dep_a, dep_b) = client_a.mint_position(
+            &provider_a,
+            &-69_200,
+            &-69_000,
+            &1_000_000_000_000,
+            &0,
+            &1,
+            &0,
+            &10_000,
+        );
+        assert!(dep_a > 0 && dep_b == 0);
+        let liq_a = client_a
+            .get_position(&provider_a, &-69_200, &-69_000)
+            .liquidity;
+        let (ret_a, ret_b) = client_a.burn_position(&provider_a, &-69_200, &-69_000, &liq_a);
+        assert_eq!(ret_b, 0);
+        assert!(ret_a <= dep_a && dep_a - ret_a <= 1);
+
+        // Pool above range [-69_200, -69_000]: position is 100% token B.
+        let (_cl_b, provider_b, _ta2, _tb2, client_b) = setup_low_price_pool(&env, 30, -68_900, 1);
+        let (dep_a2, dep_b2) = client_b.mint_position(
+            &provider_b,
+            &-69_200,
+            &-69_000,
+            &0,
+            &1_000_000_000,
+            &0,
+            &1,
+            &10_000,
+        );
+        assert!(dep_a2 == 0 && dep_b2 > 0);
+        let liq_b = client_b
+            .get_position(&provider_b, &-69_200, &-69_000)
+            .liquidity;
+        let (ret_a2, ret_b2) = client_b.burn_position(&provider_b, &-69_200, &-69_000, &liq_b);
+        assert_eq!(ret_a2, 0);
+        assert!(ret_b2 <= dep_b2 && dep_b2 - ret_b2 <= 1);
+    }
+
+    #[test]
+    fn swap_across_50_consecutive_low_price_ticks_conserves_tokens_and_never_crosses_for_zero() {
+        let env = Env::default();
+        let start_tick = -69_050_i32;
+        let (cl_addr, provider, token_a, token_b, client) =
+            setup_low_price_pool(&env, 30, start_tick, 1);
+
+        // Create 50 consecutive initialized ticks [-69_100 .. -69_051] below start_tick.
+        for i in 0..50 {
+            let lower = -69_100 + i;
+            let upper = lower + 1;
+            // Verify each 1-tick band has strictly distinct sqrt prices and non-zero step cost.
+            let sa = ConcentratedLiquidity::tick_to_sqrt_price_x96(lower);
+            let sb = ConcentratedLiquidity::tick_to_sqrt_price_x96(upper);
+            assert!(sa < sb, "tick band [{lower}, {upper}] collapsed");
+            let (step_in, step_out) =
+                ConcentratedLiquidity::compute_step(1_000_000_000_000, sb, sa, true);
+            assert!(
+                step_in > 0 && step_out > 0,
+                "zero-cost step at [{lower}, {upper}]"
+            );
+
+            client.mint_position(
+                &provider,
+                &lower,
+                &upper,
+                &0,
+                &1_000_000_000,
+                &0,
+                &0,
+                &10_000,
+            );
+        }
+        // Also cover the active tick so the swap starts with positive liquidity.
+        client.mint_position(
+            &provider,
+            &-69_051,
+            &-69_049,
+            &100_000_000_000,
+            &1_000_000_000,
+            &0,
+            &0,
+            &10_000,
+        );
+
+        let tc_a = soroban_sdk::token::Client::new(&env, &token_a);
+        let tc_b = soroban_sdk::token::Client::new(&env, &token_b);
+        let pool_a_before = tc_a.balance(&cl_addr);
+        let pool_b_before = tc_b.balance(&cl_addr);
+        let trader_a_before = tc_a.balance(&provider);
+        let trader_b_before = tc_b.balance(&provider);
+
+        let limit = ConcentratedLiquidity::tick_to_sqrt_price_x96(-69_100);
+        let amount_in = 10_000_000_000_000_i128;
+        let quote = client.estimate_price_impact(&true, &amount_in, &limit);
+        let out = client.swap(&provider, &true, &amount_in, &limit, &1, &10_000);
+
+        let state = client.get_pool_state();
+        assert_eq!(state.sqrt_price, quote.sqrt_price_after);
+        assert_eq!(state.current_tick, quote.tick_after);
+        assert_eq!(out, quote.amount_out);
+        assert_eq!(
+            quote.amount_in,
+            quote.amount_in_after_fee + quote.fee_amount
+        );
+
+        let trader_a_spent = trader_a_before - tc_a.balance(&provider);
+        let trader_b_received = tc_b.balance(&provider) - trader_b_before;
+        let pool_a_gained = tc_a.balance(&cl_addr) - pool_a_before;
+        let pool_b_paid = pool_b_before - tc_b.balance(&cl_addr);
+
+        assert_eq!(trader_a_spent, quote.amount_in);
+        assert_eq!(pool_a_gained, trader_a_spent);
+        assert_eq!(trader_b_received, out);
+        assert_eq!(pool_b_paid, out);
+    }
+
+    #[test]
+    fn swap_upward_across_50_consecutive_low_price_ticks_conserves_tokens() {
+        let env = Env::default();
+        let start_tick = -69_100_i32;
+        let (cl_addr, provider, token_a, token_b, client) =
+            setup_low_price_pool(&env, 30, start_tick, 1);
+
+        for i in 0..50 {
+            let lower = -69_100 + i;
+            let upper = lower + 1;
+            client.mint_position(
+                &provider,
+                &lower,
+                &upper,
+                &100_000_000_000_000,
+                &100_000_000,
+                &0,
+                &0,
+                &10_000,
+            );
+        }
+
+        let tc_a = soroban_sdk::token::Client::new(&env, &token_a);
+        let tc_b = soroban_sdk::token::Client::new(&env, &token_b);
+        let pool_a_before = tc_a.balance(&cl_addr);
+        let pool_b_before = tc_b.balance(&cl_addr);
+
+        let limit = ConcentratedLiquidity::tick_to_sqrt_price_x96(-69_050);
+        let amount_in = 10_000_000_000_i128;
+        let quote = client.estimate_price_impact(&false, &amount_in, &limit);
+        let out = client.swap(&provider, &false, &amount_in, &limit, &1, &10_000);
+
+        let state = client.get_pool_state();
+        assert_eq!(state.sqrt_price, quote.sqrt_price_after);
+        assert_eq!(state.current_tick, quote.tick_after);
+        assert_eq!(out, quote.amount_out);
+        assert_eq!(tc_b.balance(&cl_addr) - pool_b_before, quote.amount_in);
+        assert_eq!(pool_a_before - tc_a.balance(&cl_addr), out);
+    }
+
+    #[test]
+    fn pool_initialized_at_minus_69100_starts_at_exact_math_sqrt_price() {
+        let env = Env::default();
+        let (_cl_addr, provider, _token_a, _token_b, client) =
+            setup_low_price_pool(&env, 30, -69_100, 10);
+
+        let expected = math::tick_to_sqrt_price_x96(-69_100);
+        let state = client.get_pool_state();
+        assert_eq!(state.sqrt_price, expected);
+        assert_eq!(state.current_tick, -69_100);
+
+        client.mint_position(
+            &provider,
+            &-69_200,
+            &-69_000,
+            &1_000_000_000_000,
+            &1_000_000_000,
+            &0,
+            &0,
+            &10_000,
+        );
+
+        let quote = client.estimate_price_impact(&true, &1_000_000, &0);
+        assert_eq!(quote.sqrt_price_before, expected);
+    }
+
+    #[test]
+    fn legacy_pool_without_stored_sqrt_price_falls_back_to_exact_math_price() {
+        let env = Env::default();
+        let (cl_addr, provider, _token_a, _token_b, client) =
+            setup_low_price_pool(&env, 30, -69_100, 10);
+
+        client.mint_position(
+            &provider,
+            &-69_200,
+            &-69_000,
+            &1_000_000_000_000,
+            &1_000_000_000,
+            &0,
+            &0,
+            &10_000,
+        );
+
+        // Simulate a legacy pool initialized before SqrtPriceX96 was written at init.
+        env.as_contract(&cl_addr, || {
+            env.storage().instance().remove(&DataKey::SqrtPriceX96);
+        });
+
+        let expected = math::tick_to_sqrt_price_x96(-69_100);
+        assert_eq!(client.get_pool_state().sqrt_price, expected);
+
+        let quote = client.estimate_price_impact(&true, &1_000_000, &0);
+        assert_eq!(quote.sqrt_price_before, expected);
+
+        let out = client.swap(&provider, &true, &1_000_000, &0, &1, &10_000);
+        assert_eq!(out, quote.amount_out);
+        assert_eq!(client.get_pool_state().sqrt_price, quote.sqrt_price_after);
+    }
+
+    #[test]
+    fn estimate_price_impact_spot_price_at_low_ticks_uses_q96_math() {
+        let env = Env::default();
+        let (_cl_addr, provider, _token_a, _token_b, client) =
+            setup_low_price_pool(&env, 30, -69_100, 10);
+
+        client.mint_position(
+            &provider,
+            &-69_200,
+            &-69_000,
+            &1_000_000_000_000,
+            &1_000_000_000,
+            &0,
+            &0,
+            &10_000,
+        );
+
+        let q_a_to_b = client.estimate_price_impact(&true, &1_000_000, &0);
+        let q_b_to_a = client.estimate_price_impact(&false, &1_000, &0);
+        assert!(q_a_to_b.spot_price_before > 0);
+        assert!(q_b_to_a.spot_price_before > 0);
+        // At tick -69_100, price of A in B is ~0.000998 (~998 in 1e6 scale),
+        // and price of B in A is ~1001.9 (~1_001_901_048 in 1e6 scale).
+        assert_eq!(q_a_to_b.spot_price_before, 998);
+        assert!(
+            (q_b_to_a.spot_price_before - 1_001_901_048).abs() <= 5,
+            "unexpected inverse spot price: {}",
+            q_b_to_a.spot_price_before
+        );
+    }
+
+    #[test]
+    fn tick_to_sqrt_price_x96_clamps_out_of_range_ticks_and_saturates_above_443636() {
+        assert_eq!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MIN_TICK - 10_000),
+            math::MIN_SQRT_PRICE
+        );
+        assert_eq!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MIN_TICK),
+            math::MIN_SQRT_PRICE
+        );
+        assert!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MAX_DISTINCT_TICK - 1)
+                < ConcentratedLiquidity::tick_to_sqrt_price_x96(MAX_DISTINCT_TICK)
+        );
+        assert_eq!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MAX_DISTINCT_TICK + 1),
+            math::MAX_SQRT_PRICE
+        );
+        assert_eq!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MAX_TICK),
+            math::MAX_SQRT_PRICE
+        );
+        assert_eq!(
+            ConcentratedLiquidity::tick_to_sqrt_price_x96(MAX_TICK + 10_000),
+            math::MAX_SQRT_PRICE
+        );
+    }
+
+    #[test]
+    fn sqrt_price_x96_to_tick_clamps_below_min_and_above_max_sqrt_price() {
+        assert_eq!(ConcentratedLiquidity::sqrt_price_x96_to_tick(0), MIN_TICK);
+        assert_eq!(
+            ConcentratedLiquidity::sqrt_price_x96_to_tick(math::MIN_SQRT_PRICE - 1),
+            MIN_TICK
+        );
+        assert_eq!(
+            ConcentratedLiquidity::sqrt_price_x96_to_tick(math::MIN_SQRT_PRICE),
+            MIN_TICK
+        );
+        assert_eq!(
+            ConcentratedLiquidity::sqrt_price_x96_to_tick(math::MAX_SQRT_PRICE),
+            MAX_TICK
+        );
+        assert_eq!(
+            ConcentratedLiquidity::sqrt_price_x96_to_tick(u128::MAX),
+            MAX_TICK
+        );
+    }
+
+    #[test]
+    fn low_price_exact_out_swap_matches_exact_in_and_conserves_tokens() {
+        let env = Env::default();
+        let (_cl_addr, provider, _token_a, _token_b, client) =
+            setup_low_price_pool(&env, 30, -69_100, 10);
+
+        client.mint_position(
+            &provider,
+            &-69_200,
+            &-69_000,
+            &1_000_000_000_000,
+            &1_000_000_000,
+            &0,
+            &0,
+            &u64::MAX,
+        );
+
+        let target_out = 50_000_i128;
+        let quoted_in = client.quote_exact_out(&true, &target_out, &0);
+        let paid_in =
+            client.swap_exact_out(&provider, &true, &target_out, &0, &quoted_in, &u64::MAX);
+        assert_eq!(paid_in, quoted_in);
+        assert!(paid_in > 0);
     }
 }

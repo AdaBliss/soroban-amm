@@ -262,6 +262,15 @@
         ],
         "creation_fee_paid": [
           { "version": 1, "topics": 1, "shape": "tuple", "fields": ["caller", "fee_amount"] }
+        ],
+        "initialized": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["admin", "amm_wasm_hash", "token_wasm_hash"] }
+        ],
+        "cl_wasm_updated": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_wasm_hash", "new_wasm_hash"] }
+        ],
+        "rate_limit_set": [
+          { "version": 1, "topics": 1, "shape": "tuple", "fields": ["old_limit", "new_limit"] }
         ]
       }
     },

@@ -230,7 +230,8 @@ impl ClPoolState {
             return Err(SimulationError::TickOutOfRange { tick });
         }
         self.ensure_repriceable()?;
-        self.sqrt_price_x96 = swap_math::tick_to_sqrt_price_x96(tick) as i128;
+        let sp = swap_math::tick_to_sqrt_price_x96(tick);
+        self.sqrt_price_x96 = i128::try_from(sp).map_err(|_| SimulationError::PriceOverflow)?;
         self.current_tick = tick;
         Ok(())
     }
@@ -510,8 +511,12 @@ mod tests {
         assert!(p.initialize(-1).is_err());
         let min = swap_math::tick_to_sqrt_price_x96(MIN_TICK) as i128;
         assert!(p.initialize(min - 1).is_err());
-        let max = swap_math::tick_to_sqrt_price_x96(MAX_TICK) as i128;
-        assert!(p.initialize(max + 1).is_err());
+        assert!(p.initialize_at_tick(MIN_TICK - 1).is_err());
+        assert!(p.initialize_at_tick(MAX_TICK + 1).is_err());
+        assert!(matches!(
+            p.initialize_at_tick(MAX_TICK),
+            Err(SimulationError::PriceOverflow)
+        ));
     }
 
     #[test]

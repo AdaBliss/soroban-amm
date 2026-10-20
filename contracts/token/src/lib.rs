@@ -139,6 +139,57 @@ impl LpToken {
             .extend_ttl(Self::MIN_TTL, Self::BUMP_TO);
     }
 
+    /// Extend the persistent storage TTL of a specific key if it exists.
+    ///
+    /// Checking `has` prevents trapping if the key is missing.
+    fn bump_persistent(env: &Env, key: &DataKey) {
+        if env.storage().persistent().has(key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(key, Self::MIN_TTL, Self::BUMP_TO);
+        }
+    }
+
+    /// Permissionless entrypoint to refresh all persistent storage entries
+    /// associated with an account (Balance, Locked, LockHolders, every LockEntry,
+    /// and Checkpoints).
+    pub fn bump_account(env: Env, id: Address) {
+        Self::extend_ttl(&env);
+        Self::bump_persistent(&env, &DataKey::Balance(id.clone()));
+        Self::bump_persistent(&env, &DataKey::Locked(id.clone()));
+
+        let holders_key = DataKey::LockHolders(id.clone());
+        if env.storage().persistent().has(&holders_key) {
+            let holders: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&holders_key)
+                .unwrap_or_else(|| Vec::new(&env));
+            for i in 0..holders.len() {
+                let locker = holders.get(i).unwrap();
+                Self::bump_persistent(&env, &DataKey::LockEntry(id.clone(), locker));
+            }
+            Self::bump_persistent(&env, &holders_key);
+        }
+
+        // Legacy single-Vec checkpoints (pre-paging tokens).
+        Self::bump_persistent(&env, &DataKey::Checkpoints(id.clone()));
+
+        // Paged checkpoints: tracker, every live page, and the truncation flag.
+        let tracker_key = DataKey::CheckpointTracker(id.clone());
+        let tracker_opt: Option<CheckpointTracker> = env.storage().persistent().get(&tracker_key);
+        if let Some(tracker) = tracker_opt {
+            Self::bump_persistent(&env, &tracker_key);
+            if tracker.total_count > 0 {
+                let last_page = (tracker.total_count - 1) / Self::PAGE_SIZE;
+                for page in tracker.start_page..=last_page {
+                    Self::bump_persistent(&env, &DataKey::CheckpointPage(id.clone(), page));
+                }
+            }
+            Self::bump_persistent(&env, &DataKey::CheckpointsTruncated(id.clone()));
+        }
+    }
+
     /// Initialize the token with metadata and an admin that can mint/burn.
     ///
     /// `admin` is the only address authorized to call `mint` and `burn`.
@@ -195,10 +246,9 @@ impl LpToken {
     /// Returns the token balance of `id`. Returns `0` if the account has no balance.
     pub fn balance(env: Env, id: Address) -> i128 {
         Self::extend_ttl(&env);
-        env.storage()
-            .persistent()
-            .get(&DataKey::Balance(id))
-            .unwrap_or(0)
+        let key = DataKey::Balance(id);
+        Self::bump_persistent(&env, &key);
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     /// Returns the account balance at or before `ledger`.
@@ -210,6 +260,7 @@ impl LpToken {
     /// that would corrupt governance snapshots.
     pub fn balance_at(env: Env, id: Address, ledger: u32) -> Result<i128, TokenError> {
         Self::extend_ttl(&env);
+        Self::bump_persistent(&env, &DataKey::Balance(id.clone()));
         let tracker_key = DataKey::CheckpointTracker(id.clone());
         let tracker_opt: Option<CheckpointTracker> = env.storage().persistent().get(&tracker_key);
 
@@ -345,21 +396,24 @@ impl LpToken {
     pub fn allowance(env: Env, from: Address, spender: Address) -> AllowanceValue {
         Self::extend_ttl(&env);
         let key = DataKey::Allowance(from, spender);
-        let val: AllowanceValue = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(AllowanceValue {
-                amount: 0,
-                live_until_ledger: 0,
-            });
-        if val.amount > 0 && env.ledger().sequence() > val.live_until_ledger {
-            AllowanceValue {
-                amount: 0,
-                live_until_ledger: 0,
+        let val: Option<AllowanceValue> = env.storage().persistent().get(&key);
+        match val {
+            Some(v) => {
+                if v.amount > 0 && env.ledger().sequence() > v.live_until_ledger {
+                    env.storage().persistent().remove(&key);
+                    AllowanceValue {
+                        amount: 0,
+                        live_until_ledger: 0,
+                    }
+                } else {
+                    Self::bump_persistent(&env, &key);
+                    v
+                }
             }
-        } else {
-            val
+            None => AllowanceValue {
+                amount: 0,
+                live_until_ledger: 0,
+            },
         }
     }
 
@@ -395,17 +449,24 @@ impl LpToken {
             return Err(TokenError::InvalidAmount);
         }
         spender.require_auth();
+        let key = DataKey::Allowance(from.clone(), spender.clone());
         let allowance = Self::allowance(env.clone(), from.clone(), spender.clone());
         if allowance.amount < amount {
             return Err(TokenError::InsufficientAllowance);
         }
-        env.storage().persistent().set(
-            &DataKey::Allowance(from.clone(), spender),
-            &AllowanceValue {
-                amount: allowance.amount - amount,
-                live_until_ledger: allowance.live_until_ledger,
-            },
-        );
+        let remaining = allowance.amount - amount;
+        if remaining > 0 {
+            env.storage().persistent().set(
+                &key,
+                &AllowanceValue {
+                    amount: remaining,
+                    live_until_ledger: allowance.live_until_ledger,
+                },
+            );
+            Self::bump_persistent(&env, &key);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
         Self::_transfer(&env, &from, &to, amount)
     }
 
@@ -426,16 +487,22 @@ impl LpToken {
         if amount < 0 {
             return Err(TokenError::InvalidAmount);
         }
-        if amount > 0 && live_until_ledger < env.ledger().sequence() {
-            return Err(TokenError::InvalidExpiry);
+        let key = DataKey::Allowance(from, spender);
+        if amount > 0 {
+            if live_until_ledger < env.ledger().sequence() {
+                return Err(TokenError::InvalidExpiry);
+            }
+            env.storage().persistent().set(
+                &key,
+                &AllowanceValue {
+                    amount,
+                    live_until_ledger,
+                },
+            );
+            Self::bump_persistent(&env, &key);
+        } else {
+            env.storage().persistent().remove(&key);
         }
-        env.storage().persistent().set(
-            &DataKey::Allowance(from, spender),
-            &AllowanceValue {
-                amount,
-                live_until_ledger,
-            },
-        );
         Ok(())
     }
 
@@ -456,9 +523,9 @@ impl LpToken {
             .instance()
             .set(&DataKey::TotalSupply, &(supply + amount));
         let bal = Self::balance(env.clone(), to.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(bal + amount));
+        let bal_key = DataKey::Balance(to.clone());
+        env.storage().persistent().set(&bal_key, &(bal + amount));
+        Self::bump_persistent(&env, &bal_key);
         Self::write_checkpoint(&env, &to);
         Ok(())
     }
@@ -480,9 +547,9 @@ impl LpToken {
         if bal - locked < amount {
             return Err(TokenError::InsufficientBalance);
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(bal - amount));
+        let bal_key = DataKey::Balance(from.clone());
+        env.storage().persistent().set(&bal_key, &(bal - amount));
+        Self::bump_persistent(&env, &bal_key);
         let supply: i128 = Self::total_supply(env.clone());
         env.storage()
             .instance()
@@ -586,10 +653,9 @@ impl LpToken {
     /// Returns currently locked balance for `id`.
     pub fn locked_balance(env: Env, id: Address) -> i128 {
         Self::extend_ttl(&env);
-        env.storage()
-            .persistent()
-            .get(&DataKey::Locked(id))
-            .unwrap_or(0)
+        let key = DataKey::Locked(id);
+        Self::bump_persistent(&env, &key);
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     /// Governance-locker only: lock a holder's transferable balance.
@@ -619,13 +685,16 @@ impl LpToken {
         env.storage()
             .persistent()
             .set(&entry_key, &(entry + amount));
+        Self::bump_persistent(&env, &entry_key);
         if entry == 0 {
             Self::add_lock_holder(&env, &holder, &locker);
         }
 
+        let locked_key = DataKey::Locked(holder);
         env.storage()
             .persistent()
-            .set(&DataKey::Locked(holder), &(locked + amount));
+            .set(&locked_key, &(locked + amount));
+        Self::bump_persistent(&env, &locked_key);
         Ok(())
     }
 
@@ -658,14 +727,24 @@ impl LpToken {
             return Err(TokenError::InsufficientLocked);
         }
 
-        env.storage()
-            .persistent()
-            .set(&entry_key, &(entry - amount));
-        env.storage()
-            .persistent()
-            .set(&DataKey::Locked(holder.clone()), &(locked - amount));
+        let rem_entry = entry - amount;
+        if rem_entry > 0 {
+            env.storage().persistent().set(&entry_key, &rem_entry);
+            Self::bump_persistent(&env, &entry_key);
+        } else {
+            env.storage().persistent().remove(&entry_key);
+        }
 
-        if entry - amount == 0 {
+        let rem_locked = locked - amount;
+        let locked_key = DataKey::Locked(holder.clone());
+        if rem_locked > 0 {
+            env.storage().persistent().set(&locked_key, &rem_locked);
+            Self::bump_persistent(&env, &locked_key);
+        } else {
+            env.storage().persistent().remove(&locked_key);
+        }
+
+        if rem_entry == 0 {
             Self::remove_lock_holder(&env, &holder, &locker);
         }
         Ok(())
@@ -719,6 +798,8 @@ impl LpToken {
         env.storage()
             .persistent()
             .set(&entry_key, &(existing + amount));
+        Self::bump_persistent(&env, &entry_key);
+        Self::bump_persistent(&env, &DataKey::Locked(holder.clone()));
         if existing == 0 {
             Self::add_lock_holder(&env, &holder, &locker);
         }
@@ -727,6 +808,7 @@ impl LpToken {
 
     fn sum_lock_entry_values(env: &Env, holder: &Address) -> i128 {
         let key = DataKey::LockHolders(holder.clone());
+        Self::bump_persistent(env, &key);
         let holders: Vec<Address> = env
             .storage()
             .persistent()
@@ -735,12 +817,9 @@ impl LpToken {
         let mut sum: i128 = 0;
         for i in 0..holders.len() {
             let locker = holders.get(i).unwrap();
-            sum = sum.saturating_add(
-                env.storage()
-                    .persistent()
-                    .get(&DataKey::LockEntry(holder.clone(), locker))
-                    .unwrap_or(0),
-            );
+            let lk = DataKey::LockEntry(holder.clone(), locker);
+            Self::bump_persistent(env, &lk);
+            sum = sum.saturating_add(env.storage().persistent().get(&lk).unwrap_or(0));
         }
         sum
     }
@@ -754,12 +833,14 @@ impl LpToken {
             .unwrap_or(Vec::new(env));
         for i in 0..holders.len() {
             if holders.get(i).unwrap() == *locker {
+                Self::bump_persistent(env, &key);
                 return;
             }
         }
         let mut new_holders = holders;
         new_holders.push_back(locker.clone());
         env.storage().persistent().set(&key, &new_holders);
+        Self::bump_persistent(env, &key);
     }
 
     fn remove_lock_holder(env: &Env, holder: &Address, locker: &Address) {
@@ -776,7 +857,12 @@ impl LpToken {
                 new_holders.push_back(item);
             }
         }
-        env.storage().persistent().set(&key, &new_holders);
+        if !new_holders.is_empty() {
+            env.storage().persistent().set(&key, &new_holders);
+            Self::bump_persistent(env, &key);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
     }
 
     fn _transfer(env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(), TokenError> {
@@ -788,14 +874,15 @@ impl LpToken {
         if from_bal - locked < amount {
             return Err(TokenError::InsufficientBalance);
         }
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_bal - amount));
+        let from_key = DataKey::Balance(from.clone());
+        let from_rem = from_bal - amount;
+        env.storage().persistent().set(&from_key, &from_rem);
+        Self::bump_persistent(env, &from_key);
         Self::write_checkpoint(env, from);
         let to_bal = Self::balance(env.clone(), to.clone());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_bal + amount));
+        let to_key = DataKey::Balance(to.clone());
+        env.storage().persistent().set(&to_key, &(to_bal + amount));
+        Self::bump_persistent(env, &to_key);
         Self::write_checkpoint(env, to);
         emit_versioned_event!(
             env,
@@ -916,7 +1003,10 @@ impl LpToken {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{storage::Instance as _, Address as _, Ledger},
+        testutils::{
+            storage::{Instance as _, Persistent as _},
+            Address as _, Ledger,
+        },
         Env,
     };
 
@@ -1776,6 +1866,281 @@ mod tests {
         let (version, data): (u32, (BytesN<32>,)) = last_versioned_event(&ts, "upgraded");
         assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
         assert_eq!(data, (new_hash,));
+    }
+
+    // ── Issue #1111: Persistent storage TTL tests ─────────────────────────────
+
+    fn get_persistent_ttl(ts: &TestSetup, key: &DataKey) -> Option<u32> {
+        ts.env.as_contract(&ts.contract_addr, || {
+            if ts.env.storage().persistent().has(key) {
+                Some(ts.env.storage().persistent().get_ttl(key))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn lower_persistent_ttl(ts: &TestSetup, key: &DataKey, ledgers_to_advance: u32) {
+        ts.env
+            .ledger()
+            .with_mut(|l| l.sequence_number += ledgers_to_advance);
+        // Note: Soroban simulation automatically reduces entry TTL by sequence delta
+        let ttl = get_persistent_ttl(ts, key).unwrap();
+        assert!(
+            ttl < LpToken::MIN_TTL,
+            "TTL should be below MIN_TTL, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn test_mint_extends_balance_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        let bal_key = DataKey::Balance(alice.clone());
+        let ttl = get_persistent_ttl(&ts, &bal_key).unwrap();
+        assert!(
+            ttl >= LpToken::BUMP_TO - 1,
+            "balance TTL {ttl} should be at BUMP_TO"
+        );
+    }
+
+    #[test]
+    fn test_balance_read_restores_lapsed_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        let bal_key = DataKey::Balance(alice.clone());
+        lower_persistent_ttl(&ts, &bal_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+
+        assert_eq!(client.balance(&alice), 1_000);
+        let ttl = get_persistent_ttl(&ts, &bal_key).unwrap();
+        assert!(
+            ttl >= LpToken::BUMP_TO - 1,
+            "balance read must restore TTL to BUMP_TO, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn test_balance_at_extends_balance_ttl_if_present() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        let bal_key = DataKey::Balance(alice.clone());
+        let seq = ts.env.ledger().sequence();
+        lower_persistent_ttl(&ts, &bal_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+
+        let bal = client.balance_at(&alice, &seq);
+        assert_eq!(bal, 1_000);
+        let ttl = get_persistent_ttl(&ts, &bal_key).unwrap();
+        assert!(
+            ttl >= LpToken::BUMP_TO - 1,
+            "balance_at must restore balance TTL, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn test_burn_extends_balance_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        let bal_key = DataKey::Balance(alice.clone());
+        lower_persistent_ttl(&ts, &bal_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+
+        client.burn(&alice, &200);
+        let ttl = get_persistent_ttl(&ts, &bal_key).unwrap();
+        assert!(
+            ttl >= LpToken::BUMP_TO - 1,
+            "burn must restore balance TTL, got {ttl}"
+        );
+    }
+
+    #[test]
+    fn test_transfer_extends_both_parties_balance_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let bob = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        client.mint(&bob, &500);
+
+        let alice_key = DataKey::Balance(alice.clone());
+        let bob_key = DataKey::Balance(bob.clone());
+        lower_persistent_ttl(&ts, &alice_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+
+        client.transfer(&alice, &bob, &200);
+        let ttl_alice = get_persistent_ttl(&ts, &alice_key).unwrap();
+        let ttl_bob = get_persistent_ttl(&ts, &bob_key).unwrap();
+        assert!(ttl_alice >= LpToken::BUMP_TO - 1);
+        assert!(ttl_bob >= LpToken::BUMP_TO - 1);
+    }
+
+    #[test]
+    fn test_approve_and_allowance_read_bumps_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let spender = Address::generate(&ts.env);
+
+        // Expiry must be far enough in future so advancing sequence to lower TTL doesn't expire it
+        let expiry = ts.env.ledger().sequence() + LpToken::BUMP_TO + 10_000;
+        client.approve(&alice, &spender, &500, &expiry);
+
+        let allow_key = DataKey::Allowance(alice.clone(), spender.clone());
+        let ttl = get_persistent_ttl(&ts, &allow_key).unwrap();
+        assert!(ttl >= LpToken::BUMP_TO - 1);
+
+        lower_persistent_ttl(&ts, &allow_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+        let allow = client.allowance(&alice, &spender);
+        assert_eq!(allow.amount, 500);
+        let ttl_after = get_persistent_ttl(&ts, &allow_key).unwrap();
+        assert!(ttl_after >= LpToken::BUMP_TO - 1);
+    }
+
+    #[test]
+    fn test_expired_allowance_is_removed_on_read() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let spender = Address::generate(&ts.env);
+
+        let expiry = ts.env.ledger().sequence() + 100;
+        client.approve(&alice, &spender, &500, &expiry);
+
+        let allow_key = DataKey::Allowance(alice.clone(), spender.clone());
+        assert!(get_persistent_ttl(&ts, &allow_key).is_some());
+
+        // Advance ledger past expiry
+        ts.env.ledger().with_mut(|l| l.sequence_number = expiry + 1);
+
+        let allow = client.allowance(&alice, &spender);
+        assert_eq!(allow.amount, 0);
+        assert_eq!(allow.live_until_ledger, 0);
+
+        // Entry should have been removed
+        assert!(get_persistent_ttl(&ts, &allow_key).is_none());
+    }
+
+    #[test]
+    fn test_expired_allowance_fails_transfer_from_and_removes_entry() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let spender = Address::generate(&ts.env);
+        let bob = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        let expiry = ts.env.ledger().sequence() + 100;
+        client.approve(&alice, &spender, &500, &expiry);
+
+        let allow_key = DataKey::Allowance(alice.clone(), spender.clone());
+        ts.env.ledger().with_mut(|l| l.sequence_number = expiry + 1);
+
+        let res = client.try_transfer_from(&spender, &alice, &bob, &100);
+        assert_eq!(res, Err(Ok(TokenError::InsufficientAllowance)));
+        // In Soroban, returning Err rolls back host storage mutations from that invocation.
+        // Reading allowance cleans up the expired entry:
+        let allow = client.allowance(&alice, &spender);
+        assert_eq!(allow.amount, 0);
+        assert!(get_persistent_ttl(&ts, &allow_key).is_none());
+    }
+
+    #[test]
+    fn test_lock_and_locked_balance_bumps_ttl() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        client.mint(&alice, &1_000);
+
+        client.lock(&alice, &300);
+
+        let locked_key = DataKey::Locked(alice.clone());
+        let entry_key = DataKey::LockEntry(alice.clone(), ts.admin.clone());
+        let holders_key = DataKey::LockHolders(alice.clone());
+
+        assert!(get_persistent_ttl(&ts, &locked_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &entry_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &holders_key).unwrap() >= LpToken::BUMP_TO - 1);
+
+        lower_persistent_ttl(&ts, &locked_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+        assert_eq!(client.locked_balance(&alice), 300);
+        assert!(get_persistent_ttl(&ts, &locked_key).unwrap() >= LpToken::BUMP_TO - 1);
+    }
+
+    #[test]
+    fn test_unlock_bumps_or_clears_entries() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        client.mint(&alice, &1_000);
+
+        client.lock(&alice, &300);
+        let locked_key = DataKey::Locked(alice.clone());
+        let entry_key = DataKey::LockEntry(alice.clone(), ts.admin.clone());
+
+        // Partial unlock bumps
+        client.unlock(&alice, &ts.admin, &100);
+        assert_eq!(client.locked_balance(&alice), 200);
+        assert!(get_persistent_ttl(&ts, &locked_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &entry_key).unwrap() >= LpToken::BUMP_TO - 1);
+
+        // Full unlock removes keys
+        client.unlock(&alice, &ts.admin, &200);
+        assert_eq!(client.locked_balance(&alice), 0);
+        assert!(get_persistent_ttl(&ts, &locked_key).is_none());
+        assert!(get_persistent_ttl(&ts, &entry_key).is_none());
+        assert!(get_persistent_ttl(&ts, &DataKey::LockHolders(alice.clone())).is_none());
+    }
+
+    #[test]
+    fn test_bump_account_permissionless_refreshes_all_entries() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let alice = Address::generate(&ts.env);
+        let stranger = Address::generate(&ts.env);
+
+        client.mint(&alice, &1_000);
+        client.lock(&alice, &400);
+
+        let bal_key = DataKey::Balance(alice.clone());
+        let locked_key = DataKey::Locked(alice.clone());
+        let entry_key = DataKey::LockEntry(alice.clone(), ts.admin.clone());
+        let holders_key = DataKey::LockHolders(alice.clone());
+        let cp_key = DataKey::CheckpointTracker(alice.clone());
+        let cp_page_key = DataKey::CheckpointPage(alice.clone(), 0);
+
+        lower_persistent_ttl(&ts, &bal_key, LpToken::BUMP_TO - LpToken::MIN_TTL + 1);
+
+        // Stranger calls bump_account for alice
+        client.bump_account(&alice);
+
+        assert!(get_persistent_ttl(&ts, &bal_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &locked_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &entry_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &holders_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &cp_key).unwrap() >= LpToken::BUMP_TO - 1);
+        assert!(get_persistent_ttl(&ts, &cp_page_key).unwrap() >= LpToken::BUMP_TO - 1);
+        let _ = stranger;
+    }
+
+    #[test]
+    fn test_bump_account_on_empty_account_does_not_trap() {
+        let ts = setup();
+        let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
+        let bob = Address::generate(&ts.env);
+
+        // bob has no balance, no locks, no checkpoints
+        client.bump_account(&bob);
+        assert_eq!(client.balance(&bob), 0);
     }
 
     // ── Issue #1074: Paged checkpoints for O(1) balance writes ──────────────

@@ -246,6 +246,7 @@ pub trait FlashLoanReceiver {
 // ── Swap simulation returned by `simulate_swap` ───────────────────────────────
 
 #[contracttype]
+#[derive(Debug, PartialEq, Clone)]
 pub struct SwapSimulation {
     pub amount_out: i128,
     pub fee_amount: i128,
@@ -330,7 +331,7 @@ impl AmmPool {
     /// - `token_a` – Address of the first pool token (SEP-41 compliant).
     /// - `token_b` – Address of the second pool token (SEP-41 compliant).
     /// - `lp_token` – Address of the LP token contract used to represent pool shares.
-    /// - `fee_bps` – Swap fee in basis points (e.g. `30` = 0.30 %). Must be in `[0, 10_000]`.
+    /// - `fee_bps` – Swap fee in basis points (e.g. `30` = 0.30 %). Must be in `[0, 10_000)`.
     ///
     /// `lp_token` must already be deployed and its admin set to this contract.
     /// `admin` is stored as the contract administrator and is the only address
@@ -340,7 +341,7 @@ impl AmmPool {
     /// # Panics
     /// - If the pool has already been initialized.
     /// - If `token_a == token_b`.
-    /// - If `fee_bps` is outside the range `[0, 10_000]`.
+    /// - If `fee_bps` is outside the range `[0, 10_000)`.
     #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         env: Env,
@@ -386,7 +387,7 @@ impl AmmPool {
             return Err(AmmError::InvalidToken);
         }
         Self::validate_fee_bps(fee_bps)?;
-        Self::validate_fee_bps(flash_loan_fee_bps)?;
+        Self::validate_flash_loan_fee_bps(flash_loan_fee_bps)?;
         if !(0..=fee_bps).contains(&protocol_fee_bps) {
             return Err(AmmError::InvalidFeeBps);
         }
@@ -1343,8 +1344,17 @@ impl AmmPool {
         Ok(())
     }
 
-    /// Shared by initialize, update_fee, and set_protocol_fee.
+    /// Shared by initialize and update_fee.
+    /// Swap fee must be strictly in [0, 10_000) (0 to 9_999 bps).
     fn validate_fee_bps(fee_bps: i128) -> Result<(), AmmError> {
+        if !(0..10_000).contains(&fee_bps) {
+            return Err(AmmError::InvalidFeeBps);
+        }
+        Ok(())
+    }
+
+    /// Flash loan fee validation: [0, 10_000] bps.
+    fn validate_flash_loan_fee_bps(fee_bps: i128) -> Result<(), AmmError> {
         if !(0..=10_000).contains(&fee_bps) {
             return Err(AmmError::InvalidFeeBps);
         }
@@ -1397,11 +1407,11 @@ impl AmmPool {
     ///
     /// # Parameters
     /// - `admin` - must match the stored admin address.
-    /// - `new_fee_bps` - new swap fee in basis points; must be in [0, 10_000].
+    /// - `new_fee_bps` - new swap fee in basis points; must be in [0, 10_000).
     ///
     /// # Panics
     /// - If `admin` auth fails.
-    /// - If `new_fee_bps` is outside [0, 10_000].
+    /// - If `new_fee_bps` is outside [0, 10_000).
     /// - If `new_fee_bps` is less than the current `protocol_fee_bps`.
     pub fn update_fee(env: Env, new_fee_bps: i128) -> Result<(), AmmError> {
         Self::extend_ttl(&env);
@@ -1430,7 +1440,7 @@ impl AmmPool {
         Self::extend_ttl(&env);
         let admin: Address = Self::read_admin(&env)?;
         admin.require_auth();
-        Self::validate_fee_bps(new_fee_bps)?;
+        Self::validate_flash_loan_fee_bps(new_fee_bps)?;
         env.storage()
             .instance()
             .set(&DataKey::FlashLoanFeeBps, &new_fee_bps);
@@ -2319,6 +2329,9 @@ impl AmmPool {
         };
 
         let amount_in = Self::get_amount_in(env.clone(), token_out.clone(), amount_out)?;
+        if amount_in <= 0 {
+            return Err(AmmError::ZeroAmount);
+        }
 
         // Separate protocol fee from LP reserves.
         let protocol_fee_bps: i128 = env
@@ -2660,6 +2673,9 @@ impl AmmPool {
         if reserve_in <= 0 || reserve_out <= 0 {
             return Err(AmmError::EmptyPool);
         }
+        if fee_bps >= 10_000 {
+            return Err(AmmError::InvalidFeeBps);
+        }
         let amount_in_with_fee = amount_in * (10_000 - fee_bps);
         Ok(amount_in_with_fee * reserve_out / (reserve_in * 10_000 + amount_in_with_fee))
     }
@@ -2696,6 +2712,9 @@ impl AmmPool {
         if reserve_in <= 0 || reserve_out <= 0 {
             return Err(AmmError::EmptyPool);
         }
+        if fee_bps >= 10_000 {
+            return Err(AmmError::InvalidFeeBps);
+        }
         let amount_in_with_fee = amount_in * (10_000 - fee_bps);
         let amount_out =
             amount_in_with_fee * reserve_out / (reserve_in * 10_000 + amount_in_with_fee);
@@ -2722,7 +2741,9 @@ impl AmmPool {
     /// The amount of input token needed, or an error if:
     /// - `token_out` does not match either pool token (InvalidToken)
     /// - Either reserve is zero (EmptyPool)
+    /// - `amount_out` is zero or negative (ZeroAmount)
     /// - `amount_out` is >= the output reserve (InsufficientLiquidity)
+    /// - `fee_bps` is >= 10_000 (InvalidFeeBps)
     pub fn get_amount_in(env: Env, token_out: Address, amount_out: i128) -> Result<i128, AmmError> {
         let token_a: Address = Self::read_token_a(&env)?;
         let token_b: Address = Self::read_token_b(&env)?;
@@ -2743,6 +2764,9 @@ impl AmmPool {
         if reserve_in <= 0 || reserve_out <= 0 {
             return Err(AmmError::EmptyPool);
         }
+        if amount_out <= 0 {
+            return Err(AmmError::ZeroAmount);
+        }
         if amount_out >= reserve_out {
             return Err(AmmError::InsufficientLiquidity);
         }
@@ -2750,12 +2774,21 @@ impl AmmPool {
         // a 100% fee makes the `(10_000 - fee_bps)` divisor zero. A swap can
         // never return any output in that case, so the input is unquotable.
         if fee_bps >= 10_000 {
-            return Ok(0);
+            return Err(AmmError::InvalidFeeBps);
         }
-        Ok(
-            (reserve_in * amount_out * 10_000) / ((reserve_out - amount_out) * (10_000 - fee_bps))
-                + 1,
-        )
+        let numerator = reserve_in
+            .checked_mul(amount_out)
+            .ok_or(AmmError::InsufficientLiquidity)?
+            .checked_mul(10_000)
+            .ok_or(AmmError::InsufficientLiquidity)?;
+        let denominator = (reserve_out - amount_out)
+            .checked_mul(10_000 - fee_bps)
+            .ok_or(AmmError::InsufficientLiquidity)?;
+        let amount_in = (numerator / denominator) + 1;
+        if amount_in <= 0 {
+            return Err(AmmError::ZeroAmount);
+        }
+        Ok(amount_in)
     }
 
     /// Return the current swap fee in basis points.

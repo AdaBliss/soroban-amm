@@ -59,49 +59,25 @@ pub fn tick_to_price(tick: i32) -> i128 {
     }
 }
 
-/// Integer square root by Newton's method, mirroring the contract's `sqrt`.
-fn isqrt(y: i128) -> i128 {
-    if y > 3 {
-        let mut z = y;
-        let mut x = y / 2 + 1;
-        while x < z {
-            z = x;
-            x = (y / x + x) / 2;
-        }
-        z
-    } else if y != 0 {
-        1
-    } else {
-        0
-    }
-}
-
 /// The pool's sqrt price at `tick`, in Q64.96.
 ///
-/// Mirrors `ConcentratedLiquidity::tick_to_sqrt_price_x96`: out-of-range ticks
-/// are clamped, and prices above roughly tick 167,000 saturate to a single
-/// value because the contract's `saturating_mul` does.
+/// Mirrors `ConcentratedLiquidity::tick_to_sqrt_price_x96` by delegating to
+/// the Q128 binary decomposition in [`super::math`].
 pub fn tick_to_sqrt_price_x96(tick: i32) -> u128 {
-    let tick = tick.clamp(MIN_TICK, MAX_TICK);
-    let price_scaled = tick_to_price(tick).saturating_mul(1_000_000).max(1);
-    (isqrt(price_scaled) as u128).saturating_mul(Q96) / 1_000_000
+    super::math::tick_to_sqrt_price_x96_u128(tick.clamp(MIN_TICK, MAX_TICK))
 }
 
 /// Largest tick `t` with `tick_to_sqrt_price_x96(t) <= sqrt_price_x96`.
 ///
-/// Mirrors `ConcentratedLiquidity::sqrt_price_x96_to_tick`, including mapping
-/// a zero price to [`MIN_TICK`]. Because the forward mapping is coarse at deep
-/// negative ticks, several adjacent ticks can share a price; the largest one
-/// is returned.
+/// Mirrors `ConcentratedLiquidity::sqrt_price_x96_to_tick`, including clamping
+/// to `[MIN_SQRT_PRICE, MAX_SQRT_PRICE]`.
 pub fn sqrt_price_x96_to_tick(sqrt_price_x96: u128) -> i32 {
-    if sqrt_price_x96 == 0 {
-        return MIN_TICK;
-    }
+    let price = sqrt_price_x96.clamp(super::math::MIN_SQRT_PRICE, super::math::MAX_SQRT_PRICE);
     let mut low = MIN_TICK;
     let mut high = MAX_TICK;
     while low < high {
         let mid = low + (high - low + 1) / 2;
-        if tick_to_sqrt_price_x96(mid) <= sqrt_price_x96 {
+        if tick_to_sqrt_price_x96(mid) <= price {
             low = mid;
         } else {
             high = mid - 1;

@@ -44,7 +44,7 @@ Defined in [contracts/amm/src/lib.rs](../contracts/amm/src/lib.rs) as `AmmError`
 | Code | Symbol | Cause | Remedy |
 |------|--------|-------|--------|
 | 1 | `AlreadyInitialized` | `initialize` (or `initialize_with_flash_loan_fee`) was called on a pool that has already been set up. The presence of `DataKey::TokenA` in instance storage is the guard. | Deploy a fresh pool contract instead of re-initializing. |
-| 2 | `InvalidFeeBps` | A fee value was outside `[0, 10 000]` bps, or `protocol_fee_bps` exceeded `fee_bps`, or `new_fee_bps` was below the current `protocol_fee_bps`. | Ensure `0 ≤ protocol_fee_bps ≤ fee_bps ≤ 10 000`. |
+| 2 | `InvalidFeeBps` | A swap fee was outside `[0, 10 000)` bps (0 to 9,999 bps), a flash loan fee was outside `[0, 10 000]` bps, `protocol_fee_bps` exceeded `fee_bps`, `new_fee_bps` was below the current `protocol_fee_bps`, or `get_amount_in`/`get_amount_out` was called on a pool with `fee_bps >= 10_000`. | Ensure `0 ≤ protocol_fee_bps ≤ fee_bps < 10 000`. |
 | 3 | `InsufficientShares` | The LP share burn amount in `remove_liquidity` exceeded the provider's actual LP token balance. | Query `shares_of(provider)` first and cap the burn amount to that value. |
 | 4 | `DeadlineExceeded` | The `deadline` ledger timestamp passed before the transaction was included. | Re-submit with `deadline = current_ledger_timestamp + buffer`. |
 | 5 | `SlippageExceeded` | For swaps: `amount_out < min_out` or `required_in > max_in`. For `add_liquidity`: minted shares < `min_shares`. For `remove_liquidity`: `out_a < min_a` or `out_b < min_b`. | Widen slippage bounds or use `simulate_swap` / `get_amount_in` to recalculate before submitting. |
@@ -77,7 +77,7 @@ Defined in [contracts/amm-sdk/src/types.rs](../contracts/amm-sdk/src/types.rs) a
 | Code | Symbol | Cause | Remedy |
 |------|--------|-------|--------|
 | 1 | `AlreadyInitialized` | `initialize` called on a pool that is already set up. | Deploy a fresh pool contract instead. |
-| 2 | `InvalidFeeBps` | Fee outside `[0, 10 000]` bps or protocol fee > swap fee. | Use a value in the accepted range. |
+| 2 | `InvalidFeeBps` | Swap fee outside `[0, 10 000)` bps, flash loan fee outside `[0, 10 000]`, or protocol fee > swap fee. | Use a value in the accepted range. |
 | 3 | `InsufficientShares` | LP burn amount exceeds caller's balance. | Reduce `shares` to ≤ `shares_of(provider)`. |
 | 4 | `DeadlineExceeded` | `deadline` ledger timestamp already passed. | Re-submit with a future deadline. |
 | 5 | `SlippageExceeded` | Output or input violated the slippage guard. | Widen `min_out` / `max_in` or retry later. |
@@ -247,7 +247,7 @@ Defined in [contracts/factory/src/lib.rs](../contracts/factory/src/lib.rs) as `F
 | Code | Symbol | Cause | Remedy |
 |------|--------|-------|--------|
 | 1 | `AlreadyInitialized` | `initialize` called twice. | Only initialize the factory once after deployment. |
-| 2 | `InvalidFeeBps` | Fee outside `[0, 10 000]`. | Correct the fee value. |
+| 2 | `InvalidFeeBps` | Fee outside `[0, 10 000)`. | Correct the fee value to `[0, 9 999]`. |
 | 3 | `PoolAlreadyExists` | `create_pool` was called for a `(token_a, token_b)` pair that already has an AMM pool. | Use `get_pool` to retrieve the existing pool address. |
 | 4 | `ClPoolAlreadyExists` | `create_cl_pool` was called for a pair/fee that already has a CL pool. | Use `get_cl_pool` to retrieve the existing address. |
 | 5 | `ClWasmNotSet` | Tried to create a CL pool before the CL WASM hash was registered via `set_cl_wasm`. | Call `set_cl_wasm` with the uploaded CL contract hash first. |
@@ -301,7 +301,7 @@ Defined in [contracts/governance/src/lib.rs](../contracts/governance/src/lib.rs)
 | 3 | `InvalidTimelock` | `initialize` or `set_timelock_delay` was given a timelock outside `[MIN_TIMELOCK_SECS, MAX_TIMELOCK_SECS]` (`1..=2_592_000` seconds, up to 30 days), or timestamp arithmetic in `propose` / `veto` overflowed (#1105). | Use a timelock in `1..=2_592_000` seconds. |
 | 4 | `InvalidQuorumBps` | `initialize` quorum outside `(0, 10 000]`, or `set_quorum_decay_bps_per_day` outside `[0, 10 000]` (#1105). | Use `1..=10_000` for base quorum and `0..=10_000` for daily decay rate. |
 | 5 | `InvalidProposerStake` | `initialize` or `set_min_proposer_stake_bps` was given a proposer stake threshold outside `[0, 10 000]` bps (#1105). | Use a value in `0..=10_000` bps. |
-| 6 | `InvalidFeeBps` | Fee value out of range. | Use `[0, 10 000]`. |
+| 6 | `InvalidFeeBps` | Fee value out of range. | Use `[0, 10 000)` for swap fees or `[0, 10 000]` for flash loan fees. |
 | 7 | `ZeroTotalSupply` | Vote weight computed on a zero LP supply. | Seed the pool with liquidity before creating proposals. |
 | 8 | `InsufficientStake` | Proposer's LP stake is below `min_proposer_stake`. | Acquire more LP tokens before proposing. |
 | 9 | `ProposalNotFound` | Referenced proposal ID does not exist. | Use `get_proposal` to verify the ID. |

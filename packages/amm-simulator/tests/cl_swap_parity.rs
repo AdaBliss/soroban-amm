@@ -122,6 +122,23 @@ const FIXTURES: &[Fixture] = &[
             (true, 1, None),
         ],
     },
+    Fixture {
+        name: "low-price ticks around -69_100",
+        fee_bps: 30,
+        protocol_fee_bps: 0,
+        tick_spacing: 1,
+        initial_tick: -69_100,
+        positions: &[
+            (-69_200, -69_000, 1_000_000_000_000, 1_000_000_000),
+            (-69_150, -69_050, 500_000_000_000, 500_000_000),
+        ],
+        swaps: &[
+            (true, 10_000_000, None),
+            (true, 50_000_000, Some(-69_120)),
+            (false, 20_000, None),
+            (false, 100_000, Some(-69_080)),
+        ],
+    },
 ];
 
 struct Chain<'a> {

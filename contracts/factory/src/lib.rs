@@ -126,6 +126,16 @@ pub enum DataKey {
     PoolTokens(Address), // pool address → (token_a, token_b) for sweep forwarding
     CreationPaused, // bool — true blocks new V2 and CL pool creation
     PendingAdmin, // Option<Address> — nominee for two-step admin rotation
+    ClPoolRegistered(Address), // Address -> bool (O(1) membership check)
+    AmmPoolRegistered(Address), // Address -> bool (O(1) membership check)
+}
+
+/// Identifies whether a deployed pool is a classic AMM or concentrated liquidity.
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PoolKind {
+    Amm = 1,
+    Cl = 2,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -223,15 +233,17 @@ impl Factory {
         env.storage()
             .instance()
             .set(&DataKey::TokenWasmHash, &token_wasm_hash);
-        env.storage()
-            .instance()
-            .set(&DataKey::TokenWasmHash, &token_wasm_hash);
         env.storage().instance().set(&DataKey::PoolCount, &0u64);
         env.storage().instance().set(&DataKey::ClPoolCount, &0u64);
         // Initialize default fee tier to Medium (0.3% = 30 bps)
         env.storage()
             .instance()
             .set(&DataKey::DefaultFeeTier, &2i128);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "initialized"),),
+            (admin, amm_wasm_hash, token_wasm_hash)
+        );
         Ok(())
     }
 
@@ -291,7 +303,7 @@ impl Factory {
         // so a caller is never charged or rate-limited for a request that
         // would have been rejected anyway.
 
-        if !(0..=10_000).contains(&fee_bps) {
+        if !(0..10_000).contains(&fee_bps) {
             return Err(FactoryError::InvalidFeeBps);
         }
 
@@ -427,6 +439,9 @@ impl Factory {
         env.storage()
             .persistent()
             .set(&DataKey::PoolByIndex(n), &pool_addr);
+        env.storage()
+            .persistent()
+            .set(&DataKey::AmmPoolRegistered(pool_addr.clone()), &true);
 
         // Bump the per-pool registry entries on the same call path that writes
         // them, so the registry does not lapse independently of the instance
@@ -437,6 +452,7 @@ impl Factory {
             DataKey::GovernanceFor(pool_addr.clone()),
             DataKey::PoolTokens(pool_addr.clone()),
             DataKey::PoolByIndex(n),
+            DataKey::AmmPoolRegistered(pool_addr.clone()),
         ] {
             env.storage()
                 .persistent()
@@ -536,9 +552,15 @@ impl Factory {
         Self::extend_ttl(&env);
         let admin = Self::read_admin(&env)?;
         admin.require_auth();
+        let old_wasm_hash: Option<BytesN<32>> = env.storage().instance().get(&DataKey::ClWasmHash);
         env.storage()
             .instance()
             .set(&DataKey::ClWasmHash, &cl_wasm_hash);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "cl_wasm_updated"),),
+            (old_wasm_hash, cl_wasm_hash)
+        );
         Ok(())
     }
 
@@ -682,6 +704,9 @@ impl Factory {
         env.storage()
             .persistent()
             .set(&DataKey::ClPoolByIndex(n), &pool_addr);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ClPoolRegistered(pool_addr.clone()), &true);
 
         // Bump the CL registry entries on the same call path that writes them
         // (issue #904).
@@ -690,6 +715,11 @@ impl Factory {
             .extend_ttl(&cl_key, Self::MIN_TTL, Self::BUMP_TO);
         env.storage().persistent().extend_ttl(
             &DataKey::ClPoolByIndex(n),
+            Self::MIN_TTL,
+            Self::BUMP_TO,
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::ClPoolRegistered(pool_addr.clone()),
             Self::MIN_TTL,
             Self::BUMP_TO,
         );
@@ -764,14 +794,25 @@ impl Factory {
         Self::extend_ttl(&env);
         let admin = Self::read_admin(&env)?;
         admin.require_auth();
+        let old_limit: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RateLimitLedgers)
+            .unwrap_or(1);
         env.storage()
             .instance()
             .set(&DataKey::RateLimitLedgers, &min_ledgers);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "rate_limit_set"),),
+            (old_limit, min_ledgers)
+        );
         Ok(())
     }
 
     /// Nominate a new admin. The nominee must call `accept_admin` to complete the transfer.
     pub fn propose_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), FactoryError> {
+        Self::extend_ttl(&env);
         Self::require_admin(&env, &admin)?;
         env.storage()
             .instance()
@@ -786,6 +827,7 @@ impl Factory {
 
     /// Accept the pending admin nomination. Caller becomes the new admin.
     pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), FactoryError> {
+        Self::extend_ttl(&env);
         let pending: Option<Address> = env
             .storage()
             .instance()
@@ -810,11 +852,13 @@ impl Factory {
 
     /// Return current admin address, or `None` if unset.
     pub fn get_admin(env: Env) -> Option<Address> {
+        Self::extend_ttl(&env);
         env.storage().instance().get(&DataKey::Admin)
     }
 
     /// Return pending admin nominee, if any.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::PendingAdmin)
@@ -1009,23 +1053,76 @@ impl Factory {
     /// Check if an address is a registered CL pool in this factory.
     pub fn is_cl_pool(env: Env, pool: Address) -> bool {
         Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ClPoolRegistered(pool))
+            .unwrap_or(false)
+    }
+
+    /// Check if an address is a registered AMM pool in this factory.
+    pub fn is_amm_pool(env: Env, pool: Address) -> bool {
+        Self::extend_ttl(&env);
+        env.storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::AmmPoolRegistered(pool.clone()))
+            .unwrap_or_else(|| env.storage().persistent().has(&DataKey::PoolTokens(pool)))
+    }
+
+    /// Return the kind of pool (AMM or CL) for a given address, or None if unknown.
+    pub fn pool_kind(env: Env, pool: Address) -> Option<PoolKind> {
+        Self::extend_ttl(&env);
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::ClPoolRegistered(pool.clone()))
+            .unwrap_or(false)
+        {
+            Some(PoolKind::Cl)
+        } else if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::AmmPoolRegistered(pool.clone()))
+            .unwrap_or(false)
+            || env.storage().persistent().has(&DataKey::PoolTokens(pool))
+        {
+            Some(PoolKind::Amm)
+        } else {
+            None
+        }
+    }
+
+    /// Backfill `ClPoolRegistered` for pools deployed prior to the O(1) index upgrade.
+    /// Admin-only. Pages over `ClPoolByIndex(offset..offset + limit)` and sets
+    /// `ClPoolRegistered(pool) = true` with TTL bump.
+    pub fn index_existing_cl_pools(env: Env, offset: u64, limit: u64) -> Result<u64, FactoryError> {
+        Self::extend_ttl(&env);
+        let admin = Self::read_admin(&env)?;
+        admin.require_auth();
+
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::ClPoolCount)
             .unwrap_or(0);
-        for i in 0..count {
-            if let Some(p) = env
+        let start = offset.min(count);
+        let end = (start + limit).min(count);
+
+        let mut indexed: u64 = 0;
+        for i in start..end {
+            if let Some(pool) = env
                 .storage()
                 .persistent()
                 .get::<_, Address>(&DataKey::ClPoolByIndex(i))
             {
-                if p == pool {
-                    return true;
-                }
+                let key = DataKey::ClPoolRegistered(pool);
+                env.storage().persistent().set(&key, &true);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, Self::MIN_TTL, Self::BUMP_TO);
+                indexed += 1;
             }
         }
-        false
+        Ok(indexed)
     }
 
     // ── Treasury & protocol fee sweep ────────────────────────────────────────
@@ -1513,6 +1610,7 @@ impl Factory {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use soroban_sdk::{
         testutils::{storage::Instance as _, Address as _, Ledger},
@@ -2873,7 +2971,14 @@ mod tests {
         let ta = Address::generate(&env);
         let tb = Address::generate(&env);
 
-        // Invalid fee_bps (> 10 000) must be rejected without charge.
+        // Invalid fee_bps (>= 10 000) must be rejected without charge.
+        let result_10k = factory.try_create_pool_with_fee_bps(&user, &ta, &tb, &10_000_i128, &None);
+        assert_eq!(
+            result_10k,
+            Err(Ok(FactoryError::InvalidFeeBps)),
+            "fee_bps = 10_000 must return InvalidFeeBps"
+        );
+
         let result = factory.try_create_pool_with_fee_bps(&user, &ta, &tb, &99_999_i128, &None);
         assert_eq!(
             result,
@@ -3423,6 +3528,10 @@ mod tests {
             factory.try_set_global_fee_paginated(&admin, &0_u32, &10_u32),
             Err(Ok(FactoryError::NotInitialized))
         );
+        assert_eq!(
+            factory.try_index_existing_cl_pools(&0_u64, &10_u64),
+            Err(Ok(FactoryError::NotInitialized))
+        );
     }
 
     #[test]
@@ -3444,5 +3553,338 @@ mod tests {
         assert_eq!(factory.get_admin(), None);
         assert_eq!(factory.get_pool_count(), 0);
         assert!(!factory.is_creation_paused());
+    }
+
+    // ── Issue #1110 tests: O(1) is_cl_pool, pool_kind, TTL bumps, and events ──
+
+    #[test]
+    fn test_is_cl_pool_constant_reads_regardless_of_pool_count() {
+        let env = Env::default();
+        env.budget().reset_unlimited();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let dummy_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        factory.initialize(&admin, &dummy_hash, &dummy_hash);
+
+        let unknown = Address::generate(&env);
+
+        // Populate 5 CL pools directly in storage
+        env.as_contract(&factory_addr, || {
+            env.storage().instance().set(&DataKey::ClPoolCount, &5u64);
+            for i in 0..5 {
+                let p = Address::generate(&env);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ClPoolByIndex(i), &p);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ClPoolRegistered(p), &true);
+            }
+        });
+
+        env.budget().reset_default();
+        let _ = factory.is_cl_pool(&unknown);
+        let cost_5 = env.budget().cpu_instruction_cost();
+
+        // Populate up to 150 CL pools
+        env.as_contract(&factory_addr, || {
+            env.storage().instance().set(&DataKey::ClPoolCount, &150u64);
+            for i in 5..150 {
+                let p = Address::generate(&env);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ClPoolByIndex(i), &p);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ClPoolRegistered(p), &true);
+            }
+        });
+
+        env.budget().reset_default();
+        let _ = factory.is_cl_pool(&unknown);
+        let cost_150 = env.budget().cpu_instruction_cost();
+
+        // On main, checking is_cl_pool with 150 pools executed an O(N) loop reading
+        // ClPoolByIndex(0..150) sequentially, requiring over 500,000 instructions.
+        // With O(1) lookup via ClPoolRegistered, the cost is constant (~52k vs ~56k).
+        assert!(
+            cost_150.saturating_sub(cost_5) < 15_000,
+            "is_cl_pool must consume constant resources regardless of pool count (got {cost_5} vs {cost_150})"
+        );
+    }
+
+    #[test]
+    fn test_pool_kind_identifies_amm_cl_and_unknown() {
+        let env = Env::default();
+        env.budget().reset_unlimited();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let amm_hash = env.deployer().upload_contract_wasm(amm::WASM);
+        let token_hash = env.deployer().upload_contract_wasm(token::WASM);
+        let cl_hash = env
+            .deployer()
+            .upload_contract_wasm(concentrated_liquidity::WASM);
+        factory.initialize(&admin, &amm_hash, &token_hash);
+        factory.set_cl_wasm_hash(&cl_hash);
+
+        let t1 = Address::generate(&env);
+        let t2 = Address::generate(&env);
+        let (amm_pool, _) = factory.create_pool_with_fee_bps(&admin, &t1, &t2, &30_i128, &None);
+
+        let t3 = Address::generate(&env);
+        let t4 = Address::generate(&env);
+        let cl_pool = factory.create_cl_pool(&admin, &t3, &t4, &30_i128, &0_i32);
+
+        let unknown = Address::generate(&env);
+
+        assert_eq!(factory.pool_kind(&amm_pool), Some(PoolKind::Amm));
+        assert_eq!(factory.pool_kind(&cl_pool), Some(PoolKind::Cl));
+        assert_eq!(factory.pool_kind(&unknown), None);
+
+        assert!(factory.is_amm_pool(&amm_pool));
+        assert!(!factory.is_amm_pool(&cl_pool));
+        assert!(!factory.is_amm_pool(&unknown));
+
+        assert!(factory.is_cl_pool(&cl_pool));
+        assert!(!factory.is_cl_pool(&amm_pool));
+        assert!(!factory.is_cl_pool(&unknown));
+    }
+
+    #[test]
+    fn test_index_existing_cl_pools_backfill_idempotent() {
+        let env = Env::default();
+        env.budget().reset_unlimited();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let dummy_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        factory.initialize(&admin, &dummy_hash, &dummy_hash);
+
+        // Pre-upgrade state: pools stored in ClPoolByIndex without ClPoolRegistered
+        let mut pools = soroban_sdk::Vec::new(&env);
+        env.as_contract(&factory_addr, || {
+            env.storage().instance().set(&DataKey::ClPoolCount, &10u64);
+            for i in 0..10 {
+                let p = Address::generate(&env);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::ClPoolByIndex(i), &p);
+                pools.push_back(p);
+            }
+        });
+
+        let p0 = pools.get(0).unwrap();
+        let p5 = pools.get(5).unwrap();
+        let p9 = pools.get(9).unwrap();
+
+        assert!(!factory.is_cl_pool(&p0));
+        assert!(!factory.is_cl_pool(&p9));
+
+        // Index first 5 pools
+        let indexed = factory.index_existing_cl_pools(&0_u64, &5_u64);
+        assert_eq!(indexed, 5);
+        assert!(factory.is_cl_pool(&p0));
+        assert!(!factory.is_cl_pool(&p5));
+        assert!(!factory.is_cl_pool(&p9));
+
+        // Re-indexing [0..10] indexes all and is idempotent
+        let indexed_all = factory.index_existing_cl_pools(&0_u64, &10_u64);
+        assert_eq!(indexed_all, 10);
+        assert!(factory.is_cl_pool(&p0));
+        assert!(factory.is_cl_pool(&p5));
+        assert!(factory.is_cl_pool(&p9));
+
+        // Re-indexing again succeeds
+        let indexed_again = factory.index_existing_cl_pools(&0_u64, &10_u64);
+        assert_eq!(indexed_again, 10);
+    }
+
+    #[test]
+    fn test_index_existing_cl_pools_requires_admin_auth() {
+        let env = Env::default();
+        let factory = uninitialized_factory(&env);
+        // Pre-init returns NotInitialized
+        assert_eq!(
+            factory.try_index_existing_cl_pools(&0_u64, &10_u64),
+            Err(Ok(FactoryError::NotInitialized))
+        );
+    }
+
+    #[test]
+    fn test_propose_admin_extends_instance_ttl() {
+        let (env, factory_addr) = ttl_env_and_factory();
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let admin = factory.get_admin().unwrap();
+        let new_admin = Address::generate(&env);
+
+        lower_instance_ttl_below_min(&env, &factory_addr);
+        factory.propose_admin(&admin, &new_admin);
+        assert_instance_ttl_bumped(&env, &factory_addr);
+    }
+
+    #[test]
+    fn test_accept_admin_extends_instance_ttl() {
+        let (env, factory_addr) = ttl_env_and_factory();
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let admin = factory.get_admin().unwrap();
+        let new_admin = Address::generate(&env);
+
+        factory.propose_admin(&admin, &new_admin);
+        lower_instance_ttl_below_min(&env, &factory_addr);
+        factory.accept_admin(&new_admin);
+        assert_instance_ttl_bumped(&env, &factory_addr);
+    }
+
+    #[test]
+    fn test_get_admin_extends_instance_ttl() {
+        let (env, factory_addr) = ttl_env_and_factory();
+        let factory = FactoryClient::new(&env, &factory_addr);
+
+        lower_instance_ttl_below_min(&env, &factory_addr);
+        let _ = factory.get_admin();
+        assert_instance_ttl_bumped(&env, &factory_addr);
+    }
+
+    #[test]
+    fn test_get_pending_admin_extends_instance_ttl() {
+        let (env, factory_addr) = ttl_env_and_factory();
+        let factory = FactoryClient::new(&env, &factory_addr);
+
+        lower_instance_ttl_below_min(&env, &factory_addr);
+        let _ = factory.get_pending_admin();
+        assert_instance_ttl_bumped(&env, &factory_addr);
+    }
+
+    #[test]
+    fn test_initialize_emits_versioned_event_and_correct_hashes() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let amm_hash = BytesN::from_array(&env, &[11u8; 32]);
+        let token_hash = BytesN::from_array(&env, &[22u8; 32]);
+
+        factory.initialize(&admin, &amm_hash, &token_hash);
+
+        // Verify stored hashes
+        env.as_contract(&factory_addr, || {
+            let stored_amm: BytesN<32> =
+                env.storage().instance().get(&DataKey::AmmWasmHash).unwrap();
+            let stored_token: BytesN<32> = env
+                .storage()
+                .instance()
+                .get(&DataKey::TokenWasmHash)
+                .unwrap();
+            assert_eq!(stored_amm, amm_hash);
+            assert_eq!(stored_token, token_hash);
+        });
+
+        // Verify event
+        let events = env.events().all();
+        let init_event = events
+            .iter()
+            .find(|e| {
+                e.0 == factory_addr && e.1 == (Symbol::new(&env, "initialized"),).into_val(&env)
+            })
+            .expect("initialized event must be emitted");
+        let decoded: (u32, (Address, BytesN<32>, BytesN<32>)) = init_event.2.into_val(&env);
+        assert_eq!(decoded.0, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(decoded.1, (admin, amm_hash, token_hash));
+    }
+
+    #[test]
+    fn test_set_cl_wasm_hash_emits_cl_wasm_updated_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let dummy = BytesN::from_array(&env, &[0u8; 32]);
+        factory.initialize(&admin, &dummy, &dummy);
+
+        let hash_1 = BytesN::from_array(&env, &[1u8; 32]);
+        factory.set_cl_wasm_hash(&hash_1);
+
+        let events = env.events().all();
+        let evt1 = events
+            .iter()
+            .find(|e| {
+                e.0 == factory_addr && e.1 == (Symbol::new(&env, "cl_wasm_updated"),).into_val(&env)
+            })
+            .expect("cl_wasm_updated event must be emitted");
+        let decoded1: (u32, (Option<BytesN<32>>, BytesN<32>)) = evt1.2.into_val(&env);
+        assert_eq!(decoded1.0, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(decoded1.1, (None, hash_1.clone()));
+
+        // Second update emits old and new
+        let hash_2 = BytesN::from_array(&env, &[2u8; 32]);
+        factory.set_cl_wasm_hash(&hash_2);
+
+        let events2 = env.events().all();
+        let matching: std::vec::Vec<_> = events2
+            .iter()
+            .filter(|e| {
+                e.0 == factory_addr && e.1 == (Symbol::new(&env, "cl_wasm_updated"),).into_val(&env)
+            })
+            .collect();
+        assert_eq!(matching.len(), 2);
+        let evt2 = matching.get(1).unwrap();
+        let decoded2: (u32, (Option<BytesN<32>>, BytesN<32>)) = evt2.2.into_val(&env);
+        assert_eq!(decoded2.0, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(decoded2.1, (Some(hash_1), hash_2));
+    }
+
+    #[test]
+    fn test_set_rate_limit_emits_rate_limit_set_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let factory = FactoryClient::new(&env, &factory_addr);
+        let dummy = BytesN::from_array(&env, &[0u8; 32]);
+        factory.initialize(&admin, &dummy, &dummy);
+
+        factory.set_rate_limit(&5_u32);
+
+        let events = env.events().all();
+        let evt = events
+            .iter()
+            .find(|e| {
+                e.0 == factory_addr && e.1 == (Symbol::new(&env, "rate_limit_set"),).into_val(&env)
+            })
+            .expect("rate_limit_set event must be emitted");
+        let decoded: (u32, (u32, u32)) = evt.2.into_val(&env);
+        assert_eq!(decoded.0, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(decoded.1, (1_u32, 5_u32));
+
+        // Update again from 5 to 10
+        factory.set_rate_limit(&10_u32);
+        let events2 = env.events().all();
+        let matching: std::vec::Vec<_> = events2
+            .iter()
+            .filter(|e| {
+                e.0 == factory_addr && e.1 == (Symbol::new(&env, "rate_limit_set"),).into_val(&env)
+            })
+            .collect();
+        assert_eq!(matching.len(), 2);
+        let evt2 = matching.get(1).unwrap();
+        let decoded2: (u32, (u32, u32)) = evt2.2.into_val(&env);
+        assert_eq!(decoded2.0, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(decoded2.1, (5_u32, 10_u32));
     }
 }

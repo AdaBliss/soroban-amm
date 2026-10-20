@@ -745,7 +745,7 @@ impl Governance {
 
         match &kind {
             ProposalKind::UpdateFee(new_fee_bps) => {
-                if !(0..=MAX_BPS).contains(new_fee_bps) {
+                if !(0..MAX_BPS).contains(new_fee_bps) {
                     return Err(GovernanceError::InvalidFeeBps);
                 }
             }
@@ -2152,8 +2152,14 @@ mod tests {
         let lp1 = Address::generate(&s.env);
         mint_lp(&s, &lp1, 1000);
 
-        let result = gov.try_propose(&lp1, &ProposalKind::UpdateFee(10_001));
-        assert!(result.is_err());
+        let result_10001 = gov.try_propose(&lp1, &ProposalKind::UpdateFee(10_001));
+        assert_eq!(result_10001, Err(Ok(GovernanceError::InvalidFeeBps)));
+
+        let result_10000 = gov.try_propose(&lp1, &ProposalKind::UpdateFee(10_000));
+        assert_eq!(result_10000, Err(Ok(GovernanceError::InvalidFeeBps)));
+
+        let result_9999 = gov.try_propose(&lp1, &ProposalKind::UpdateFee(9_999));
+        assert!(result_9999.is_ok());
     }
 
     #[test]

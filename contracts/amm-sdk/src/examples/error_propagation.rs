@@ -15,8 +15,8 @@ mod error_propagation {
         Address, Env,
     };
 
-    use soroban_amm_sdk::client::AmmPoolSdk;
-    use soroban_amm_sdk::types::SdkAmmError;
+    use crate::client::AmmPoolSdk;
+    use crate::types::SdkAmmError;
 
     /// Sets up a seeded pool and returns everything a test needs. Mirrors
     /// `examples::basic_swap`'s setup so the two examples stay consistent.
@@ -86,7 +86,7 @@ mod error_propagation {
 
         let sdk = AmmPoolSdk::new(&s.env, &s.amm_id);
         let trader = Address::generate(&s.env);
-        let result = sdk.execute_swap(&trader, &s.ta_addr, 1_000, 0, u64::MAX, None);
+        let result = sdk.execute_swap(&trader, &s.ta_addr, 1_000, 0, u64::MAX);
 
         assert_eq!(result, Err(SdkAmmError::Paused));
     }
@@ -100,7 +100,7 @@ mod error_propagation {
 
         let sdk = AmmPoolSdk::new(&s.env, &s.amm_id);
         // An unreachably high min_out guarantees the on-chain slippage guard trips.
-        let result = sdk.execute_swap(&trader, &s.ta_addr, 1_000, i128::MAX, u64::MAX, None);
+        let result = sdk.execute_swap(&trader, &s.ta_addr, 1_000, i128::MAX, u64::MAX);
 
         assert_eq!(result, Err(SdkAmmError::SlippageExceeded));
     }

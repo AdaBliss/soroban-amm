@@ -749,6 +749,9 @@ mod tests {
                 .persistent()
                 .set(&factory::DataKey::ClPoolByIndex(count), &cl_addr);
             env.storage()
+                .persistent()
+                .set(&factory::DataKey::ClPoolRegistered(cl_addr.clone()), &true);
+            env.storage()
                 .instance()
                 .set(&factory::DataKey::ClPoolCount, &(count + 1));
         });

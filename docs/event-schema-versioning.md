@@ -670,6 +670,9 @@ count. Events marked unversioned carry their payload without the
 | `global_fee_set` | 1 | `protocol_fee_bps`, `offset`, `updated` | v1 |
 | `fees_swept` | 1 | `treasury`, `token`, `offset`, `pools_swept`, `total_collected` | v1 |
 | `creation_fee_paid` | 1 | `caller`, `fee_amount` | v1 |
+| `initialized` | 1 | `admin`, `amm_wasm_hash`, `token_wasm_hash` | v1 |
+| `cl_wasm_updated` | 1 | `old_wasm_hash`, `new_wasm_hash` | v1 |
+| `rate_limit_set` | 1 | `old_limit`, `new_limit` | v1 |
 
 ### `governance`
 
