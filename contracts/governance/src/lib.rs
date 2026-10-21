@@ -23,6 +23,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
 };
 
+use soroban_amm_sdk::types::TokenError;
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MAX_BPS: i128 = 10_000;
@@ -99,6 +101,8 @@ pub enum GovernanceError {
     /// counter) was called before `initialize`. Discriminant 2 is taken by
     /// `InvalidVotingPeriod`, so this is appended rather than renumbered.
     NotInitialized = 35,
+    /// Proposal parameters failed validation (e.g., invalid vesting schedule).
+    InvalidProposalParams = 36,
 }
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
@@ -367,6 +371,7 @@ pub trait LpTokenInterface {
     fn balance(env: Env, id: Address) -> i128;
     fn balance_at(env: Env, id: Address, ledger: u32) -> i128;
     fn total_supply(env: Env) -> i128;
+    fn total_supply_at(env: Env, ledger: u32) -> Result<i128, TokenError>;
     fn lock(env: Env, holder: Address, amount: i128);
     /// `locker` is the contract that originally locked the tokens (issue #556 fix).
     fn unlock(env: Env, holder: Address, locker: Address, amount: i128);
@@ -794,17 +799,80 @@ impl Governance {
                     return Err(GovernanceError::InvalidFeeBps);
                 }
             }
-            ProposalKind::TransferClPoolAdmin(_) => {}
+            ProposalKind::TransferClPoolAdmin(params) => {
+                if params.new_admin == params.cl_pool {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
             ProposalKind::SetClPositionNft(_) => {}
+            ProposalKind::CreatePolVesting(params) => {
+                if params.total <= 0 {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+                if params.cliff_ledger < params.start_ledger {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+                if params.end_ledger <= params.cliff_ledger {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+                // end_ledger must be in the future
+                if params.end_ledger <= env.ledger().sequence() {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
+            ProposalKind::PauseClPool(cl_pool) => {
+                if *cl_pool == env.current_contract_address() {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
+            ProposalKind::UnpauseClPool(cl_pool) => {
+                if *cl_pool == env.current_contract_address() {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
+            ProposalKind::UpdateClOracle(params) => {
+                if let Some(oracle) = &params.oracle {
+                    if *oracle == env.current_contract_address() {
+                        return Err(GovernanceError::InvalidProposalParams);
+                    }
+                }
+            }
+            ProposalKind::EmergencyWithdraw(to) => {
+                if *to == env.current_contract_address() {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
+            ProposalKind::TransferAdmin(new_admin) => {
+                let current_admin = Self::read_admin(&env)?;
+                if new_admin == &current_admin {
+                    return Err(GovernanceError::InvalidProposalParams);
+                }
+            }
         }
 
         let lp_token = Self::read_lp_token(&env)?;
         let lp_client = LpTokenClient::new(&env, &lp_token);
 
-        let total_supply = lp_client.total_supply();
-        if total_supply == 0 {
+        // Snapshot the last already-closed ledger, never the current still-open
+        // one. LpToken::write_checkpoint overwrites (not appends) the checkpoint
+        // when a balance change lands in the same ledger, so using the current
+        // ledger would fold any mint/transfer included in this same ledger —
+        // even in a later transaction — into balance_at(holder, snapshot_ledger),
+        // letting an attacker inflate their snapshotted voting power. Any change
+        // at the current ledger or later is written at a ledger strictly greater
+        // than this snapshot and is therefore excluded.
+        let snapshot_ledger = env.ledger().sequence().saturating_sub(1);
+
+        // Use total_supply_at to get the supply at snapshot_ledger, preventing
+        // quorum manipulation by same-ledger mint/burn.
+        let snapshot_total_supply = lp_client
+            .total_supply_at(&snapshot_ledger)
+            .map_err(|_| GovernanceError::InsufficientSnapshotBal)?;
+        if snapshot_total_supply == 0 {
             return Err(GovernanceError::ZeroTotalSupply);
         }
+
+        let total_supply = lp_client.total_supply();
         let proposer_balance = lp_client.balance(&proposer);
         let min_bps: i128 = env
             .storage()
@@ -835,21 +903,11 @@ impl Governance {
 
         let id = Self::read_proposal_count(&env)?;
 
-        // Snapshot the last already-closed ledger, never the current still-open
-        // one. LpToken::write_checkpoint overwrites (not appends) the checkpoint
-        // when a balance change lands in the same ledger, so using the current
-        // ledger would fold any mint/transfer included in this same ledger —
-        // even in a later transaction — into balance_at(holder, snapshot_ledger),
-        // letting an attacker inflate their snapshotted voting power. Any change
-        // at the current ledger or later is written at a ledger strictly greater
-        // than this snapshot and is therefore excluded.
-        let snapshot_ledger = env.ledger().sequence().saturating_sub(1);
-
         let proposal = Proposal {
             id,
             proposer: proposer.clone(),
             kind: kind.clone(),
-            snapshot_total_supply: total_supply,
+            snapshot_total_supply,
             snapshot_ledger,
             vote_start: now,
             vote_end,
@@ -5008,5 +5066,195 @@ mod prop_tests {
 
         s.env.ledger().with_mut(|l| l.sequence_number += 400_000);
         let _ = gov.get_proposal_count();
+    }
+
+    // ── Quorum denominator regression tests ───────────────────────────────
+
+    #[test]
+    fn test_quorum_denominator_same_ledger_removal() {
+        // Test A: LP holder with 60% of supply calls remove_liquidity(all),
+        // then propose in the same ledger. snapshot_total_supply should equal
+        // the pre-removal supply.
+        let s = setup_prop_env();
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = token::LpTokenClient::new(&s.env, &s.lp_addr);
+
+        // Create a holder with 60% of supply
+        let holder = Address::generate(&s.env);
+        let other = Address::generate(&s.env);
+        lp.mint(&holder, &6_000_i128);
+        lp.mint(&other, &4_000_i128);
+
+        // Advance to ledger 10
+        s.env.ledger().set(10, 10_000);
+
+        // Holder removes all liquidity in ledger 10
+        lp.burn(&holder, &6_000_i128);
+
+        // Propose in the same ledger - snapshot is ledger 9
+        let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
+
+        let proposal = gov.get_proposal(&pid);
+        // snapshot_total_supply should be 10,000 (pre-removal), not 4,000
+        assert_eq!(proposal.snapshot_total_supply, 10_000);
+        assert_eq!(proposal.snapshot_ledger, 9);
+    }
+
+    #[test]
+    fn test_quorum_denominator_same_ledger_addition() {
+        // Test B: a deposit of 10x the supply in the proposal's ledger does not
+        // change snapshot_total_supply.
+        let s = setup_prop_env();
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = token::LpTokenClient::new(&s.env, &s.lp_addr);
+
+        let holder = Address::generate(&s.env);
+        lp.mint(&holder, &1_000_i128);
+
+        // Advance to ledger 10
+        s.env.ledger().set(10, 10_000);
+
+        // Propose - snapshot is ledger 9
+        let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
+
+        let proposal = gov.get_proposal(&pid);
+        assert_eq!(proposal.snapshot_total_supply, 1_000);
+
+        // Add 10x supply in the same ledger (ledger 10)
+        let other = Address::generate(&s.env);
+        lp.mint(&other, &10_000_i128);
+
+        // snapshot_total_supply should still be 1,000, not 11,000
+        let proposal_after = gov.get_proposal(&pid);
+        assert_eq!(proposal_after.snapshot_total_supply, 1_000);
+    }
+
+    #[test]
+    fn test_quorum_denominator_cross_ledger_change() {
+        // Test C: changes in earlier ledgers are reflected exactly.
+        let s = setup_prop_env();
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = token::LpTokenClient::new(&s.env, &s.lp_addr);
+
+        let holder = Address::generate(&s.env);
+
+        // Mint at ledger 1
+        s.env.ledger().set(1, 1_000);
+        lp.mint(&holder, &1_000_i128);
+
+        // Mint at ledger 2
+        s.env.ledger().set(2, 2_000);
+        lp.mint(&holder, &500_i128);
+
+        // Burn at ledger 3
+        s.env.ledger().set(3, 3_000);
+        lp.burn(&holder, &200_i128);
+
+        // Propose at ledger 4 - snapshot is ledger 3
+        s.env.ledger().set(4, 4_000);
+        let pid = gov.propose(&holder, &ProposalKind::UpdateFee(50));
+
+        let proposal = gov.get_proposal(&pid);
+        // snapshot_total_supply should be 1,300 (supply at ledger 3)
+        assert_eq!(proposal.snapshot_total_supply, 1_300);
+        assert_eq!(proposal.snapshot_ledger, 3);
+
+        // Verify total_supply_at returns correct values for each ledger
+        assert_eq!(lp.total_supply_at(&1), Ok(1_000));
+        assert_eq!(lp.total_supply_at(&2), Ok(1_500));
+        assert_eq!(lp.total_supply_at(&3), Ok(1_300));
+    }
+
+    #[test]
+    fn test_proposal_parameter_validation() {
+        // Test that invalid proposal parameters are rejected eagerly
+        let s = setup_prop_env();
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = token::LpTokenClient::new(&s.env, &s.lp_addr);
+
+        let holder = Address::generate(&s.env);
+        lp.mint(&holder, &1_000_i128);
+
+        s.env.ledger().set(10, 10_000);
+
+        // Invalid CreatePolVesting: total <= 0
+        let pol_vesting = Address::generate(&s.env);
+        let beneficiary = Address::generate(&s.env);
+        let pool = Address::generate(&s.env);
+        let invalid_vesting = CreatePolVestingParams {
+            pol_vesting: pol_vesting.clone(),
+            beneficiary: beneficiary.clone(),
+            lp_token: s.lp_addr.clone(),
+            pool: pool.clone(),
+            total: 0,
+            start_ledger: 20,
+            cliff_ledger: 30,
+            end_ledger: 40,
+        };
+        assert_eq!(
+            gov.try_propose(&holder, &ProposalKind::CreatePolVesting(invalid_vesting)),
+            Err(Ok(GovernanceError::InvalidProposalParams))
+        );
+
+        // Invalid CreatePolVesting: cliff < start
+        let invalid_vesting2 = CreatePolVestingParams {
+            pol_vesting: pol_vesting.clone(),
+            beneficiary: beneficiary.clone(),
+            lp_token: s.lp_addr.clone(),
+            pool: pool.clone(),
+            total: 1000,
+            start_ledger: 30,
+            cliff_ledger: 20,
+            end_ledger: 40,
+        };
+        assert_eq!(
+            gov.try_propose(&holder, &ProposalKind::CreatePolVesting(invalid_vesting2)),
+            Err(Ok(GovernanceError::InvalidProposalParams))
+        );
+
+        // Invalid CreatePolVesting: end <= cliff
+        let invalid_vesting3 = CreatePolVestingParams {
+            pol_vesting: pol_vesting.clone(),
+            beneficiary: beneficiary.clone(),
+            lp_token: s.lp_addr.clone(),
+            pool: pool.clone(),
+            total: 1000,
+            start_ledger: 10,
+            cliff_ledger: 20,
+            end_ledger: 20,
+        };
+        assert_eq!(
+            gov.try_propose(&holder, &ProposalKind::CreatePolVesting(invalid_vesting3)),
+            Err(Ok(GovernanceError::InvalidProposalParams))
+        );
+
+        // Invalid CreatePolVesting: end in the past
+        let invalid_vesting4 = CreatePolVestingParams {
+            pol_vesting,
+            beneficiary,
+            lp_token: s.lp_addr.clone(),
+            pool,
+            total: 1000,
+            start_ledger: 5,
+            cliff_ledger: 8,
+            end_ledger: 9, // Current ledger is 10
+        };
+        assert_eq!(
+            gov.try_propose(&holder, &ProposalKind::CreatePolVesting(invalid_vesting4)),
+            Err(Ok(GovernanceError::InvalidProposalParams))
+        );
+
+        // Valid CreatePolVesting should succeed
+        let valid_vesting = CreatePolVestingParams {
+            pol_vesting: Address::generate(&s.env),
+            beneficiary: Address::generate(&s.env),
+            lp_token: s.lp_addr.clone(),
+            pool: Address::generate(&s.env),
+            total: 1000,
+            start_ledger: 20,
+            cliff_ledger: 30,
+            end_ledger: 40,
+        };
+        assert!(gov.try_propose(&holder, &ProposalKind::CreatePolVesting(valid_vesting)).is_ok());
     }
 }

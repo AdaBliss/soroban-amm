@@ -2,6 +2,40 @@
 
 use soroban_sdk::{contracterror, contracttype, Address};
 
+// ── Token error codes ───────────────────────────────────────────────────────────
+
+/// Errors surfaced by the LP token contract.
+#[contracterror]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum TokenError {
+    /// `initialize` was called on a token that is already set up.
+    AlreadyInitialized = 1,
+    /// A function was called before `initialize`.
+    NotInitialized = 2,
+    /// An amount argument was zero or negative where a positive value is
+    /// required (or negative where a non-negative value is required).
+    InvalidAmount = 3,
+    /// The account's unlocked balance is smaller than the requested amount.
+    InsufficientBalance = 4,
+    /// The spender's allowance is smaller than the requested amount.
+    InsufficientAllowance = 5,
+    /// `approve` was given a `live_until_ledger` earlier than the current
+    /// ledger for a non-zero amount.
+    InvalidExpiry = 6,
+    /// The caller is not the address the operation requires (admin, pending
+    /// admin, or the recorded locker).
+    Unauthorized = 7,
+    /// An unlock exceeded the amount the given locker had locked for the
+    /// holder, or exceeded the holder's total locked balance.
+    InsufficientLocked = 8,
+    /// A legacy-lock migration would allocate more than the holder's recorded
+    /// total locked balance.
+    MigrationOverflow = 9,
+    /// `balance_at` or `total_supply_at` was queried for a ledger whose covering
+    /// checkpoint has been evicted; the historical value is no longer recoverable.
+    BalanceUnavailable = 10,
+}
+
 // ── Error codes ───────────────────────────────────────────────────────────────
 
 /// Every error that the AMM pool contract can return.
