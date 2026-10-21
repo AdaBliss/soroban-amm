@@ -13,6 +13,10 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@v7
+            - name: Check repository hygiene
+              run: |
+                  bash scripts/check_repo_hygiene.sh tracked
+                  bash scripts/check_repo_hygiene.test.sh
             # Channel, components and targets all come from
             # rust-toolchain.toml, so CI cannot drift onto a newer stable than
             # contributors are running; `rustup show` installs what it asks
@@ -96,6 +100,9 @@ jobs:
               with:
                   token: ${{ secrets.GITHUB_TOKEN }}
               # Advisories can be ignored via .cargo/audit.toml.
+            - name: Check tests and build left a clean working tree
+              if: always()
+              run: bash scripts/check_repo_hygiene.sh clean
 
     fuzz:
         runs-on: ubuntu-latest

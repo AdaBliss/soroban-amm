@@ -2,10 +2,13 @@
 node_modules
 dist
 coverage
+.DS_Store
 __pycache__/
 *.pyc
 # Editor/tool backup files
 *.backup
 *.bak
 *.orig
-contracts/incentive_campaigns/test_snapshots
+**/test_snapshots/
+.soroban-amm.deploy.env
+optimized-artifacts/
