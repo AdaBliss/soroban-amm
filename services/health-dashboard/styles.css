@@ -289,8 +289,41 @@
       opacity: .6;
       border-radius: 2px 2px 0 0;
       min-height: 2px;
-      transition: height .3s;
+      transition: height .3s, margin-top .3s;
     }
+
+    .chart-axis-label {
+      position: absolute;
+      top: 4px;
+      right: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    .pools-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .pools-table th,
+    .pools-table td {
+      padding: 10px 14px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .pools-table th {
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--muted);
+    }
+    .pools-table tr:last-child td { border-bottom: none; }
+    .pools-table tr:hover td { background: rgba(88,166,255,.05); }
 
     .empty-state {
       color: var(--muted);
