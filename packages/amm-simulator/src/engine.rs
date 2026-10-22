@@ -145,28 +145,58 @@ impl AmmSimulator {
                     one_sided_liquidity: None,
                 })
             }
-            TradeAction::RemoveLiquidityOneSided { shares, token_out, min_out } => {
-                let quote = self.pool.execute_remove_liquidity_one_sided(shares, &token_out, min_out)?;
+            TradeAction::RemoveLiquidityOneSided {
+                shares,
+                token_out,
+                min_out,
+            } => {
+                let quote = self
+                    .pool
+                    .execute_remove_liquidity_one_sided(shares, &token_out, min_out)?;
                 self.total_amount_out += quote.total_out;
                 self.total_fees += quote.protocol_fee;
-                Ok(ActionOutcome { swap: None, exact_out: None, liquidity: None, one_sided_liquidity: Some(quote) })
+                Ok(ActionOutcome {
+                    swap: None,
+                    exact_out: None,
+                    liquidity: None,
+                    one_sided_liquidity: Some(quote),
+                })
             }
-            TradeAction::SetFees { fee_bps, protocol_fee_bps, lp_rebate_bps } => {
+            TradeAction::SetFees {
+                fee_bps,
+                protocol_fee_bps,
+                lp_rebate_bps,
+            } => {
                 let mut candidate = self.pool.clone();
                 candidate.fee_bps = fee_bps;
                 candidate.protocol_fee_bps = protocol_fee_bps;
                 candidate.lp_rebate_bps = lp_rebate_bps;
                 candidate.validate()?;
                 self.pool = candidate;
-                Ok(ActionOutcome { swap: None, exact_out: None, liquidity: None, one_sided_liquidity: None })
+                Ok(ActionOutcome {
+                    swap: None,
+                    exact_out: None,
+                    liquidity: None,
+                    one_sided_liquidity: None,
+                })
             }
             TradeAction::Pause => {
                 self.pool.paused = true;
-                Ok(ActionOutcome { swap: None, exact_out: None, liquidity: None, one_sided_liquidity: None })
+                Ok(ActionOutcome {
+                    swap: None,
+                    exact_out: None,
+                    liquidity: None,
+                    one_sided_liquidity: None,
+                })
             }
             TradeAction::Unpause => {
                 self.pool.paused = false;
-                Ok(ActionOutcome { swap: None, exact_out: None, liquidity: None, one_sided_liquidity: None })
+                Ok(ActionOutcome {
+                    swap: None,
+                    exact_out: None,
+                    liquidity: None,
+                    one_sided_liquidity: None,
+                })
             }
         }
     }

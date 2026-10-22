@@ -4628,7 +4628,8 @@ fn test_emergency_withdraw_requires_pause() {
     seed_pool(&ts);
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     let res = amm.try_emergency_withdraw(&ts.admin, &to);
     assert_eq!(res, Err(Ok(AmmError::Paused)));
 }
@@ -4681,7 +4682,8 @@ fn test_emergency_withdraw_after_delay_succeeds_and_sweeps_fees() {
     amm.pause();
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     amm.emergency_withdraw(&ts.admin, &to);
 
     let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&to);
@@ -4725,7 +4727,8 @@ fn test_cancel_emergency_withdraw_resets_announcement() {
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
     amm.cancel_emergency_withdraw(&ts.admin);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     let res = amm.try_emergency_withdraw(&ts.admin, &to);
     assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
 }
@@ -4739,9 +4742,11 @@ fn test_second_announce_restarts_delay() {
     amm.pause();
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 40_000);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 40_000);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 40_000);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 40_000);
     let res = amm.try_emergency_withdraw(&ts.admin, &to);
     assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
 }
@@ -4848,7 +4853,8 @@ fn test_exec_multisig_emergency_wd_after_delay_succeeds() {
     let to = Address::generate(env);
     let pid = amm.propose_emergency_withdraw(&s1, &to);
     amm.approve_multisig_proposal(&s2, &pid);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     amm.exec_multisig_emergency_wd(&s1, &pid);
 
     let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&to);
@@ -4907,9 +4913,7 @@ fn test_announce_emergency_withdraw_emits_event() {
 
     let events = env.events().all();
     let found = events.iter().any(|e| {
-        e.0 == amm.address
-            && e.1
-                == (Symbol::new(env, "emergency_announce"),).into_val(env)
+        e.0 == amm.address && e.1 == (Symbol::new(env, "emergency_announce"),).into_val(env)
     });
     assert!(found, "emergency_announce event must be emitted");
 }
@@ -4930,9 +4934,7 @@ fn test_cancel_emergency_withdraw_emits_event() {
 
     let events = env.events().all();
     let found = events.iter().any(|e| {
-        e.0 == amm.address
-            && e.1
-                == (Symbol::new(env, "emergency_cancel"),).into_val(env)
+        e.0 == amm.address && e.1 == (Symbol::new(env, "emergency_cancel"),).into_val(env)
     });
     assert!(found, "emergency_cancel event must be emitted");
 }
@@ -4949,15 +4951,14 @@ fn test_emergency_withdraw_emits_event_with_amounts() {
     amm.pause();
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     amm.emergency_withdraw(&ts.admin, &to);
 
     let events = env.events().all();
-    let found = events.iter().any(|e| {
-        e.0 == amm.address
-            && e.1
-                == (Symbol::new(env, "emergency_wd"),).into_val(env)
-    });
+    let found = events
+        .iter()
+        .any(|e| e.0 == amm.address && e.1 == (Symbol::new(env, "emergency_wd"),).into_val(env));
     assert!(found, "emergency_wd event must be emitted");
 }
 
@@ -4970,7 +4971,8 @@ fn test_emergency_withdraw_clears_announcement_after_execution() {
     amm.pause();
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     amm.emergency_withdraw(&ts.admin, &to);
     let res = amm.try_emergency_withdraw(&ts.admin, &to);
     assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
@@ -4986,7 +4988,8 @@ fn test_emergency_withdraw_announcement_recipient_must_match() {
     let to = Address::generate(env);
     let other = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     let res = amm.try_emergency_withdraw(&ts.admin, &other);
     assert!(res.is_err(), "recipient must match the announced address");
 }
@@ -5014,7 +5017,8 @@ fn test_default_emergency_delay_is_24h() {
     let to = Address::generate(env);
     amm.announce_emergency_withdraw(&ts.admin, &to);
     // One second short of 24h must still fail.
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 - 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 - 1);
     let res = amm.try_emergency_withdraw(&ts.admin, &to);
     assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
     // Exactly at 24h must succeed.
@@ -5092,7 +5096,8 @@ fn test_multisig_emergency_withdraw_sweeps_accrued_fees() {
     let to = Address::generate(env);
     let pid = amm.propose_emergency_withdraw(&s1, &to);
     amm.approve_multisig_proposal(&s2, &pid);
-    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400 + 1);
     amm.exec_multisig_emergency_wd(&s1, &pid);
 
     let pool_bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&ts.amm_addr);

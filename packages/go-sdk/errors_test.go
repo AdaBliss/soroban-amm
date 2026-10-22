@@ -36,6 +36,15 @@ func allSentinels() map[string]error {
 		"ErrAlreadyExecuted":          ErrAlreadyExecuted,
 		"ErrProposalExpired":          ErrProposalExpired,
 		"ErrNotInitialized":           ErrNotInitialized,
+		"ErrPoolDrained":              ErrPoolDrained,
+		"ErrQuorumNotMet":             ErrQuorumNotMet,
+		"ErrNoPendingProposal":        ErrNoPendingProposal,
+		"ErrQuorumNotReached":         ErrQuorumNotReached,
+		"ErrInvalidQuorum":            ErrInvalidQuorum,
+		"ErrEmergencyDelayNotElapsed": ErrEmergencyDelayNotElapsed,
+		"ErrInvalidRecipient":         ErrInvalidRecipient,
+		"ErrMultisigGuardActive":      ErrMultisigGuardActive,
+		"ErrInvalidEmergencyDelay":    ErrInvalidEmergencyDelay,
 		"ErrAuthFailed":               ErrAuthFailed,
 		"ErrWasmTrap":                 ErrWasmTrap,
 		"ErrResourceLimit":            ErrResourceLimit,
@@ -76,8 +85,8 @@ func TestSentinelsAreDistinct(t *testing.T) {
 
 func TestAmmErrorTableMatchesDocumentedDiscriminants(t *testing.T) {
 	table := contractErrorsByKind[ContractAmm]
-	if len(table) != 21 {
-		t.Fatalf("AMM error table has %d entries, want 21", len(table))
+	if len(table) != 30 {
+		t.Fatalf("AMM error table has %d entries, want 30", len(table))
 	}
 	seen := map[error]int{}
 	for code := 1; code <= 21; code++ {

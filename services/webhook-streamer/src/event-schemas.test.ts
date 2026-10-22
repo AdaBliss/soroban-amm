@@ -34,7 +34,7 @@ function versioned(version: number, items: unknown[]): string {
 
 /** Plain numbers become i64 (decoded as strings); pass an ScVal for a narrower type. */
 function toScVal(item: unknown): xdr.ScVal {
-  return item instanceof xdr.ScVal ? (item as xdr.ScVal) : nativeToScVal(item);
+  return item instanceof xdr.ScVal ? item : nativeToScVal(item);
 }
 
 /** A payload published without the version envelope. */
@@ -185,16 +185,16 @@ test("random tuples never receive field names unless kind, event, version and ar
 // ── Other payload shapes ─────────────────────────────────────────────────
 
 test("an unversioned event (no envelope) is named and reports schemaVersion 0", () => {
-  // contracts/staking admin_nominated is published without the version envelope.
-  const decoded = decodeEvent(event("admin_nominated", bare([ADDR, ADDR])), "staking");
+  // contracts/token burn is a SEP-41 event, published without the version envelope.
+  const decoded = decodeEvent(event("burn", bare([500])), "token");
   assert.ok(decoded);
   assert.equal(decoded.schemaVersion, 0);
-  assert.deepEqual(decoded.payload, { admin: ADDR, new_admin: ADDR });
+  assert.deepEqual(decoded.payload, { amount: "500" });
 });
 
-test("an unversioned event with an empty payload decodes to an empty object", () => {
-  // contracts/oracle_aggregator pause: ()
-  const decoded = decodeEvent(event("pause", bare([])), "oracle_aggregator");
+test("an event with an empty payload decodes to an empty object", () => {
+  // contracts/reserve_manager pause: ()
+  const decoded = decodeEvent(event("pause", versioned(1, [])), "reserve_manager");
   assert.ok(decoded);
   assert.deepEqual(decoded.payload, {});
 });

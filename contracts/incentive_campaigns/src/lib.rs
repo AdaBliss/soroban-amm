@@ -682,15 +682,15 @@ impl IncentiveCampaigns {
         Self::checkpoint_campaign_rewards(&env, campaign_id, &campaign, now);
 
         let position_key = DataKey::StakePosition(campaign_id, provider.clone());
-        let mut position: StakePosition = env
-            .storage()
-            .persistent()
-            .get(&position_key)
-            .unwrap_or(StakePosition {
-                amount: 0,
-                acc_at_snapshot: campaign.acc_reward_per_share,
-                pending: 0,
-            });
+        let mut position: StakePosition =
+            env.storage()
+                .persistent()
+                .get(&position_key)
+                .unwrap_or(StakePosition {
+                    amount: 0,
+                    acc_at_snapshot: campaign.acc_reward_per_share,
+                    pending: 0,
+                });
         position.pending = Self::position_pending(&position, campaign.acc_reward_per_share);
         position.acc_at_snapshot = campaign.acc_reward_per_share;
         position.amount += amount;
@@ -1551,7 +1551,14 @@ impl IncentiveCampaigns {
         env.storage().persistent().set(&campaign_key, &campaign);
         extend_persistent_ttl(env, &campaign_key);
 
-        Self::record_distribution(env, campaign_id, provider, &campaign.reward_token, pending, now)?;
+        Self::record_distribution(
+            env,
+            campaign_id,
+            provider,
+            &campaign.reward_token,
+            pending,
+            now,
+        )?;
         Ok(pending)
     }
 
@@ -3201,10 +3208,7 @@ mod tests {
         assert_eq!(client.claim_rewards(&provider, &id), 200_000);
 
         set_time(&env, 12_000);
-        assert_eq!(
-            client.recover_leftover_funds(&gov, &id, &treasury),
-            800_000
-        );
+        assert_eq!(client.recover_leftover_funds(&gov, &id, &treasury), 800_000);
     }
 
     /// Each interval is priced at the rate in force over it.
@@ -3448,10 +3452,7 @@ mod tests {
         client.stake(&provider, &id, &1_000);
 
         env.as_contract(&incentives, || {
-            let marker = env
-                .storage()
-                .persistent()
-                .get_ttl(&DataKey::StakeBased(id));
+            let marker = env.storage().persistent().get_ttl(&DataKey::StakeBased(id));
             let total = env
                 .storage()
                 .persistent()
@@ -3485,9 +3486,16 @@ mod tests {
         set_time(&env, 50_000);
         let paid = client.claim_rewards(&provider, &id)
             + client.claim_rewards(&b, &id)
-            + client.try_claim_rewards(&c, &id).ok().and_then(|r| r.ok()).unwrap_or(0);
+            + client
+                .try_claim_rewards(&c, &id)
+                .ok()
+                .and_then(|r| r.ok())
+                .unwrap_or(0);
         assert!(paid <= 1_000_000, "overpaid: {paid}");
-        assert!(paid >= 1_000_000 - 5, "lost more than rounding dust: {paid}");
+        assert!(
+            paid >= 1_000_000 - 5,
+            "lost more than rounding dust: {paid}"
+        );
 
         let treasury = Address::generate(&env);
         let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
@@ -3666,5 +3674,4 @@ mod tests {
         set_time(&env, 6_000);
         assert!(client.claim_rewards(&provider, &id) > 0);
     }
-
 }

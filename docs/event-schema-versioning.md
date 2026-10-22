@@ -727,13 +727,15 @@ count. Events marked unversioned carry their payload without the
 | `creation_fee_set` | 1 | `fee_token`, `fee_amount` | v1 |
 | `admin_nominated` | 1 | `admin`, `new_admin` | v1 |
 | `admin_changed` | 1 | `new_admin` | v1 |
-| `treasury_set` | 1 | `treasury`, `global_protocol_fee_bps`, `updated` | v1 |
-| `global_fee_set` | 1 | `protocol_fee_bps`, `offset`, `updated` | v1 |
-| `fees_swept` | 1 | `treasury`, `token`, `offset`, `pools_swept`, `total_collected` | v1 |
+| `treasury_set` | 1 | `treasury`, `global_protocol_fee_bps`, `applied`, `skipped` | v1 |
+| `global_fee_set` | 1 | `protocol_fee_bps`, `offset`, `applied`, `skipped` | v1 |
+| `fees_swept` | 1 | `treasury`, `token`, `offset`, `pools_swept`, `total_collected`, `pools_skipped` | v1 |
 | `creation_fee_paid` | 1 | `caller`, `fee_amount` | v1 |
 | `initialized` | 1 | `admin`, `amm_wasm_hash`, `token_wasm_hash` | v1 |
 | `cl_wasm_updated` | 1 | `old_wasm_hash`, `new_wasm_hash` | v1 |
 | `rate_limit_set` | 1 | `old_limit`, `new_limit` | v1 |
+| `fee_window_set` | 1 | `old_min_fee_bps`, `old_max_fee_bps`, `min_fee_bps`, `max_fee_bps` | v1 |
+| `pool_deprecated` | 1 | `pool`, `token_a`, `token_b`, `fee_bps` | v1 |
 
 ### `governance`
 
@@ -776,12 +778,21 @@ count. Events marked unversioned carry their payload without the
 | `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
 | `admin_changed` | 1 | `new_admin` | v1 |
 | `upgraded` | 1 | `new_wasm_hash` | v1 |
-| `pause` | 1 | _none_ | unversioned |
-| `unpause` | 1 | _none_ | unversioned |
 | `price` | 1 | `token_a`, `token_b`, `price`, `confidence` | v1 |
-| `src_wt` | 1 | `source_contract`, `old_weight`, `weight` | v1 |
+| `src_wt` | 1 | `pair`, `source_contract`, `old_weight`, `weight` | v1 |
 | `stale_src` | 1 | `stale_sources` | v1 |
 | `deviant` | 1 | `deviant_sources` | v1 |
+| `init` | 1 | `admin`, `max_staleness_seconds`, `max_deviation_bps` | v1 |
+| `paused` | 1 | `admin` | v1 |
+| `unpaused` | 1 | `admin` | v1 |
+| `src_add` | 1 | `pair`, `source_contract`, `source_type`, `weight` | v1 |
+| `src_rm` | 1 | `pair`, `source_contract`, `force` | v1 |
+| `pair_rm` | 1 | `pair` | v1 |
+| `src_migr` | 1 | `migrated` | v1 |
+| `legacy` | 1 | `pair`, `moved` | v1 |
+| `pair_cfg` | 1 | `pair`, `config` | v1 |
+| `stale` | 1 | `max_staleness_seconds` | v1 |
+| `deviation` | 1 | `max_deviation_bps` | v1 |
 
 ### `pol_vesting`
 

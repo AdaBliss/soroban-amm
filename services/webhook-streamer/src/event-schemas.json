@@ -1025,7 +1025,8 @@
             "fields": [
               "treasury",
               "global_protocol_fee_bps",
-              "updated"
+              "applied",
+              "skipped"
             ]
           }
         ],
@@ -1037,7 +1038,8 @@
             "fields": [
               "protocol_fee_bps",
               "offset",
-              "updated"
+              "applied",
+              "skipped"
             ]
           }
         ],
@@ -1051,7 +1053,8 @@
               "token",
               "offset",
               "pools_swept",
-              "total_collected"
+              "total_collected",
+              "pools_skipped"
             ]
           }
         ],
@@ -1097,6 +1100,32 @@
             "fields": [
               "old_limit",
               "new_limit"
+            ]
+          }
+        ],
+        "fee_window_set": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "old_min_fee_bps",
+              "old_max_fee_bps",
+              "min_fee_bps",
+              "max_fee_bps"
+            ]
+          }
+        ],
+        "pool_deprecated": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pool",
+              "token_a",
+              "token_b",
+              "fee_bps"
             ]
           }
         ]
@@ -1426,24 +1455,6 @@
             ]
           }
         ],
-        "pause": [
-          {
-            "version": 1,
-            "topics": 1,
-            "shape": "tuple",
-            "fields": [],
-            "versioned": false
-          }
-        ],
-        "unpause": [
-          {
-            "version": 1,
-            "topics": 1,
-            "shape": "tuple",
-            "fields": [],
-            "versioned": false
-          }
-        ],
         "price": [
           {
             "version": 1,
@@ -1463,6 +1474,7 @@
             "topics": 1,
             "shape": "tuple",
             "fields": [
+              "pair",
               "source_contract",
               "old_weight",
               "weight"
@@ -1486,6 +1498,125 @@
             "shape": "tuple",
             "fields": [
               "deviant_sources"
+            ]
+          }
+        ],
+        "init": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin",
+              "max_staleness_seconds",
+              "max_deviation_bps"
+            ]
+          }
+        ],
+        "paused": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin"
+            ]
+          }
+        ],
+        "unpaused": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin"
+            ]
+          }
+        ],
+        "src_add": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pair",
+              "source_contract",
+              "source_type",
+              "weight"
+            ]
+          }
+        ],
+        "src_rm": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pair",
+              "source_contract",
+              "force"
+            ]
+          }
+        ],
+        "pair_rm": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pair"
+            ]
+          }
+        ],
+        "src_migr": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "migrated"
+            ]
+          }
+        ],
+        "legacy": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pair",
+              "moved"
+            ]
+          }
+        ],
+        "pair_cfg": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "pair",
+              "config"
+            ]
+          }
+        ],
+        "stale": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "max_staleness_seconds"
+            ]
+          }
+        ],
+        "deviation": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "max_deviation_bps"
             ]
           }
         ]
@@ -1683,6 +1814,51 @@
             "shape": "tuple",
             "fields": [
               "admin"
+            ]
+          }
+        ],
+        "route": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "trader",
+              "path",
+              "amount_in",
+              "amount_out",
+              "hops"
+            ]
+          }
+        ],
+        "admin_nominated": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "current_admin",
+              "new_admin"
+            ]
+          }
+        ],
+        "admin_changed": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_admin"
+            ]
+          }
+        ],
+        "upgraded": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_wasm_hash"
             ]
           }
         ]
@@ -1943,6 +2119,7 @@
         ],
         "transfer": [
           {
+            "version": 1,
             "versioned": false,
             "topics": 3,
             "shape": "tuple",
@@ -1966,6 +2143,7 @@
         ],
         "approve": [
           {
+            "version": 1,
             "versioned": false,
             "topics": 3,
             "shape": "tuple",
@@ -1977,6 +2155,7 @@
         ],
         "mint": [
           {
+            "version": 1,
             "versioned": false,
             "topics": 3,
             "shape": "tuple",
@@ -1987,6 +2166,7 @@
         ],
         "burn": [
           {
+            "version": 1,
             "versioned": false,
             "topics": 2,
             "shape": "tuple",

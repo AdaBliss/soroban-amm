@@ -1157,7 +1157,10 @@ impl LpToken {
                 .unwrap_or_else(|| Vec::new(env))
         };
 
-        page.push_back(Checkpoint { ledger, balance: supply });
+        page.push_back(Checkpoint {
+            ledger,
+            balance: supply,
+        });
         env.storage().persistent().set(&page_key, &page);
         env.storage()
             .persistent()
@@ -1392,7 +1395,6 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
         let bob = Address::generate(&ts.env);
-        let carol = Address::generate(&ts.env);
 
         client.mint(&alice, &1_000_i128);
         let live_until = ts.env.ledger().sequence() + 100;
@@ -1407,14 +1409,8 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
 
         // Before any mint, total_supply_at should return 0
-        assert_eq!(
-            client.total_supply_at(&0),
-            Ok(0)
-        );
-        assert_eq!(
-            client.total_supply_at(&100),
-            Ok(0)
-        );
+        assert_eq!(client.total_supply_at(&0), 0);
+        assert_eq!(client.total_supply_at(&100), 0);
     }
 
     #[test]
@@ -1424,31 +1420,40 @@ mod tests {
         let alice = Address::generate(&ts.env);
 
         // Mint at ledger 1
-        ts.env.ledger().set(1, 1);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+            l.timestamp = 1;
+        });
         client.mint(&alice, &1_000_i128);
 
         // Query at ledger 1 should return 1000
-        assert_eq!(client.total_supply_at(&1), Ok(1_000));
+        assert_eq!(client.total_supply_at(&1), 1_000);
 
         // Mint at ledger 2
-        ts.env.ledger().set(2, 2);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 2;
+            l.timestamp = 2;
+        });
         client.mint(&alice, &500_i128);
 
         // Query at ledger 2 should return 1500
-        assert_eq!(client.total_supply_at(&2), Ok(1_500));
+        assert_eq!(client.total_supply_at(&2), 1_500);
 
         // Query at ledger 1 should still return 1000
-        assert_eq!(client.total_supply_at(&1), Ok(1_000));
+        assert_eq!(client.total_supply_at(&1), 1_000);
 
         // Burn at ledger 3
-        ts.env.ledger().set(3, 3);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 3;
+            l.timestamp = 3;
+        });
         client.burn(&alice, &200_i128);
 
         // Query at ledger 3 should return 1300
-        assert_eq!(client.total_supply_at(&3), Ok(1_300));
+        assert_eq!(client.total_supply_at(&3), 1_300);
 
         // Query at ledger 2 should still return 1500
-        assert_eq!(client.total_supply_at(&2), Ok(1_500));
+        assert_eq!(client.total_supply_at(&2), 1_500);
     }
 
     #[test]
@@ -1457,14 +1462,17 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
 
-        ts.env.ledger().set(1, 1);
+        ts.env.ledger().with_mut(|l| {
+            l.sequence_number = 1;
+            l.timestamp = 1;
+        });
         client.mint(&alice, &1_000_i128);
 
         // Two mints in the same ledger - the second overwrites the checkpoint
         client.mint(&alice, &500_i128);
 
         // Query at ledger 1 should return the last value (1500)
-        assert_eq!(client.total_supply_at(&1), Ok(1_500));
+        assert_eq!(client.total_supply_at(&1), 1_500);
     }
 
     #[test]
@@ -1473,9 +1481,15 @@ mod tests {
         let client = LpTokenClient::new(&ts.env, &ts.contract_addr);
         let alice = Address::generate(&ts.env);
 
+        // 2 x 1100 contract calls exceed the default per-test budget.
+        ts.env.budget().reset_unlimited();
+
         // Create enough checkpoints to trigger truncation
-        for i in 0..1100 {
-            ts.env.ledger().set(i, i);
+        for i in 0..1100_u32 {
+            ts.env.ledger().with_mut(|l| {
+                l.sequence_number = i;
+                l.timestamp = u64::from(i);
+            });
             client.mint(&alice, &1_i128);
             client.burn(&alice, &1_i128);
         }
@@ -1483,8 +1497,8 @@ mod tests {
         // Query a ledger before the truncation point should return error
         // The truncation happens after MAX_CHECKPOINTS (1024) entries
         assert_eq!(
-            client.total_supply_at(&0),
-            Err(TokenError::BalanceUnavailable)
+            client.try_total_supply_at(&0),
+            Err(Ok(TokenError::BalanceUnavailable))
         );
     }
 

@@ -1,8 +1,8 @@
+use crate::cl::ClPoolState;
 use crate::engine::AmmSimulator;
 use crate::error::{Result, SimulationError};
 use crate::io::{load_pool_state, load_trade_records};
 use crate::monte_carlo::{MonteCarloConfig, MonteCarloReport};
-use crate::cl::ClPoolState;
 use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -97,22 +97,31 @@ pub struct MonteCarloArgs {
 #[derive(Args, Debug)]
 pub struct ClQuoteArgs {
     /// JSON file containing a serialized ClPoolState.
-    #[arg(long)] pub pool: PathBuf,
+    #[arg(long)]
+    pub pool: PathBuf,
     /// Direction: token A for token B.
-    #[arg(long)] pub zero_for_one: bool,
-    #[arg(long)] pub amount_in: i128,
+    #[arg(long)]
+    pub zero_for_one: bool,
+    #[arg(long)]
+    pub amount_in: i128,
     /// Sqrt price Q64.96 limit; zero means no limit.
-    #[arg(long, default_value_t = 0)] pub sqrt_price_limit_x96: i128,
-    #[arg(long, default_value_t = 0)] pub min_out: i128,
-    #[arg(long)] pub pretty: bool,
+    #[arg(long, default_value_t = 0)]
+    pub sqrt_price_limit_x96: i128,
+    #[arg(long, default_value_t = 0)]
+    pub min_out: i128,
+    #[arg(long)]
+    pub pretty: bool,
 }
 
 #[derive(Args, Debug)]
 pub struct ClReplayArgs {
-    #[arg(long)] pub pool: PathBuf,
+    #[arg(long)]
+    pub pool: PathBuf,
     /// JSON array of {zero_for_one, amount_in, sqrt_price_limit_x96, min_out}.
-    #[arg(long)] pub swaps: PathBuf,
-    #[arg(long)] pub pretty: bool,
+    #[arg(long)]
+    pub swaps: PathBuf,
+    #[arg(long)]
+    pub pretty: bool,
 }
 
 pub fn run() -> Result<()> {
@@ -206,32 +215,104 @@ fn monte_carlo(args: MonteCarloArgs) -> Result<()> {
 }
 
 fn write_json<T: serde::Serialize>(out: &mut impl Write, value: &T, pretty: bool) -> Result<()> {
-    let bytes = if pretty { serde_json::to_vec_pretty(value) } else { serde_json::to_vec(value) }
-        .map_err(|e| SimulationError::InvalidInput(e.to_string()))?;
+    let bytes = if pretty {
+        serde_json::to_vec_pretty(value)
+    } else {
+        serde_json::to_vec(value)
+    }
+    .map_err(|e| SimulationError::InvalidInput(e.to_string()))?;
     match out.write_all(&bytes).and_then(|_| out.write_all(b"\n")) {
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        Err(source) => Err(SimulationError::Io { path: "stdout".into(), source }),
+        Err(source) => Err(SimulationError::Io {
+            path: "stdout".into(),
+            source,
+        }),
         Ok(()) => Ok(()),
     }
 }
 
 fn cl_quote(args: ClQuoteArgs) -> Result<()> {
     #[derive(serde::Serialize)]
-    struct Output<'a> { result: &'a crate::cl::ClSwapResult, pool: &'a ClPoolState }
-    let text = std::fs::read_to_string(&args.pool).map_err(|source| SimulationError::Io { path: args.pool.display().to_string(), source })?;
-    let mut pool: ClPoolState = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: args.pool.display().to_string(), source })?;
-    let result = pool.swap(args.zero_for_one, args.amount_in, args.sqrt_price_limit_x96, args.min_out)?;
-    let mut out = io::stdout().lock(); write_json(&mut out, &Output { result: &result, pool: &pool }, args.pretty)
+    struct Output<'a> {
+        result: &'a crate::cl::ClSwapResult,
+        pool: &'a ClPoolState,
+    }
+    let text = std::fs::read_to_string(&args.pool).map_err(|source| SimulationError::Io {
+        path: args.pool.display().to_string(),
+        source,
+    })?;
+    let mut pool: ClPoolState =
+        serde_json::from_str(&text).map_err(|source| SimulationError::Json {
+            path: args.pool.display().to_string(),
+            source,
+        })?;
+    let result = pool.swap(
+        args.zero_for_one,
+        args.amount_in,
+        args.sqrt_price_limit_x96,
+        args.min_out,
+    )?;
+    let mut out = io::stdout().lock();
+    write_json(
+        &mut out,
+        &Output {
+            result: &result,
+            pool: &pool,
+        },
+        args.pretty,
+    )
 }
 
 fn cl_replay(args: ClReplayArgs) -> Result<()> {
     #[derive(serde::Serialize)]
-    struct Output<'a> { results: &'a [crate::cl::ClSwapResult], pool: &'a ClPoolState }
-    #[derive(serde::Deserialize)] struct Swap { zero_for_one: bool, amount_in: i128, #[serde(default)] sqrt_price_limit_x96: i128, #[serde(default)] min_out: i128 }
-    let p = args.pool; let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io { path: p.display().to_string(), source })?;
-    let mut pool: ClPoolState = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: p.display().to_string(), source })?;
-    let p = args.swaps; let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io { path: p.display().to_string(), source })?;
-    let swaps: Vec<Swap> = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: p.display().to_string(), source })?;
-    let mut results = Vec::new(); for s in swaps { results.push(pool.swap(s.zero_for_one, s.amount_in, s.sqrt_price_limit_x96, s.min_out)?); }
-    let mut out = io::stdout().lock(); write_json(&mut out, &Output { results: &results, pool: &pool }, args.pretty)
+    struct Output<'a> {
+        results: &'a [crate::cl::ClSwapResult],
+        pool: &'a ClPoolState,
+    }
+    #[derive(serde::Deserialize)]
+    struct Swap {
+        zero_for_one: bool,
+        amount_in: i128,
+        #[serde(default)]
+        sqrt_price_limit_x96: i128,
+        #[serde(default)]
+        min_out: i128,
+    }
+    let p = args.pool;
+    let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io {
+        path: p.display().to_string(),
+        source,
+    })?;
+    let mut pool: ClPoolState =
+        serde_json::from_str(&text).map_err(|source| SimulationError::Json {
+            path: p.display().to_string(),
+            source,
+        })?;
+    let p = args.swaps;
+    let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io {
+        path: p.display().to_string(),
+        source,
+    })?;
+    let swaps: Vec<Swap> = serde_json::from_str(&text).map_err(|source| SimulationError::Json {
+        path: p.display().to_string(),
+        source,
+    })?;
+    let mut results = Vec::new();
+    for s in swaps {
+        results.push(pool.swap(
+            s.zero_for_one,
+            s.amount_in,
+            s.sqrt_price_limit_x96,
+            s.min_out,
+        )?);
+    }
+    let mut out = io::stdout().lock();
+    write_json(
+        &mut out,
+        &Output {
+            results: &results,
+            pool: &pool,
+        },
+        args.pretty,
+    )
 }

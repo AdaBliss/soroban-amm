@@ -155,7 +155,7 @@ async function signAndSubmit(
     await delay(backoff);
     backoff = Math.min(backoff * 2, 5_000);
   }
-  throw new TransactionTimeoutError(signed.hash().toString("hex"), timeoutSeconds);
+  throw new TransactionTimeoutError(Buffer.from(signed.hash()).toString("hex"), timeoutSeconds);
 }
 
 function transactionFee(multiplier: number, resourcePadding = 0): string {

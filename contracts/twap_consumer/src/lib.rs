@@ -693,10 +693,18 @@ impl TwapConsumer {
             .ok_or(TwapError::InvalidSpotPrice)?
             / info.reserve_b;
         cum_a = cum_a
-            .checked_add(price_a.checked_mul(elapsed).ok_or(TwapError::InvalidSpotPrice)?)
+            .checked_add(
+                price_a
+                    .checked_mul(elapsed)
+                    .ok_or(TwapError::InvalidSpotPrice)?,
+            )
             .ok_or(TwapError::InvalidSpotPrice)?;
         cum_b = cum_b
-            .checked_add(price_b.checked_mul(elapsed).ok_or(TwapError::InvalidSpotPrice)?)
+            .checked_add(
+                price_b
+                    .checked_mul(elapsed)
+                    .ok_or(TwapError::InvalidSpotPrice)?,
+            )
             .ok_or(TwapError::InvalidSpotPrice)?;
         Ok((cum_a, cum_b, now))
     }
@@ -714,9 +722,12 @@ impl TwapConsumer {
         if ledger_ts_now < window_seconds {
             return Err(TwapError::InsufficientHistory);
         }
+        // Read the pool before looking at history, so a pool that does not
+        // implement the AMM oracle interface is reported as such (#964) rather
+        // than as having too little history.
+        let (cum_a_now, _, _) = Self::extrapolated_amm_cumulative(&env, &pool)?;
         let snapshot = Self::floor_snapshot_entry(&env, &pool, ledger_ts_now - window_seconds)
             .ok_or(TwapError::InsufficientHistory)?;
-        let (cum_a_now, _, _) = Self::extrapolated_amm_cumulative(&env, &pool)?;
         let elapsed = ledger_ts_now.saturating_sub(snapshot.0);
         if elapsed == 0 {
             return Err(TwapError::ElapsedZero);
@@ -889,7 +900,13 @@ impl TwapConsumer {
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
-        let cum_now = ClPoolOracleClient::new(&env, &pool).observe(&0);
+        // `observe(0)` is the cumulative extrapolated to the current ledger
+        // time, which is what `elapsed` below is measured against. A pool that
+        // does not implement it is a typed error, not a trap (#964).
+        let cum_now = match ClPoolOracleClient::new(&env, &pool).try_observe(&0) {
+            Ok(Ok(v)) => v,
+            _ => return Err(TwapError::CrossContractCallFailed),
+        };
         let ledger_ts_now = env.ledger().timestamp();
         if ledger_ts_now < window_seconds {
             return Err(TwapError::InsufficientHistory);
@@ -929,7 +946,8 @@ impl TwapConsumer {
 }
 
 /// Minimal mock CL pool used by tests only. Satisfies the `ClPoolOracle`
-/// interface (`get_tick_cumulative`) without requiring the full CL contract.
+/// interface (`get_tick_cumulative` and `observe`) without requiring the full
+/// CL contract.
 /// Reports `(1_000, 10_000)` until a test moves it with `set_tick_cumulative`.
 #[cfg(test)]
 mod mock_cl_pool {
@@ -945,6 +963,16 @@ mod mock_cl_pool {
                 .instance()
                 .get(&symbol_short!("tick_cum"))
                 .unwrap_or((1_000_i64, 10_000_u64))
+        }
+
+        /// Mirrors the CL pool's `observe(0)`: the current cumulative. Only the
+        /// present is supported, which is all the consumer asks for.
+        pub fn observe(env: Env, seconds_ago: u64) -> i64 {
+            assert_eq!(
+                seconds_ago, 0,
+                "MockClPool only reports the current cumulative"
+            );
+            Self::get_tick_cumulative(env).0
         }
 
         pub fn set_tick_cumulative(env: Env, tick_cum: i64, ts: u64) {

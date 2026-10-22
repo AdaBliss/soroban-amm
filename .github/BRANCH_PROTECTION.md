@@ -22,12 +22,11 @@ list by hand without running the checker.
 
 <!-- begin: required-checks (generated from ci.yml) ** DO NOT EDIT MANUALLY ** -->
 - `build-and-test`
+- `Security audit`
 - `fuzz`
 - `go-sdk`
 - `node-versions`
-- `docker-build`
-- `python-examples`
-- `Security audit`
+- `event-schemas`
 - `npm-packages (packages/sdk)`
 - `npm-packages (packages/ui-components)`
 - `npm-packages (packages/ts-advanced-client)`
@@ -35,6 +34,8 @@ list by hand without running the checker.
 - `npm-packages (services/webhook-streamer)`
 - `npm-packages (services/health-dashboard)`
 - `npm-packages (examples/client)`
+- `docker-build`
+- `python-examples`
 <!-- end: required-checks -->
 
 Notes:
@@ -68,19 +69,20 @@ gh api -X PUT repos/promisszn/soroban-amm/branches/main/protection \
     "strict": true,
     "contexts": [
       "build-and-test",
+      "Security audit",
       "fuzz",
       "go-sdk",
       "node-versions",
-      "docker-build",
-      "python-examples",
-      "Security audit",
+      "event-schemas",
       "npm-packages (packages/sdk)",
       "npm-packages (packages/ui-components)",
       "npm-packages (packages/ts-advanced-client)",
       "npm-packages (services/graphql-api)",
       "npm-packages (services/webhook-streamer)",
       "npm-packages (services/health-dashboard)",
-      "npm-packages (examples/client)"
+      "npm-packages (examples/client)",
+      "docker-build",
+      "python-examples"
     ]
   },
   "enforce_admins": true,

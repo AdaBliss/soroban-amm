@@ -113,6 +113,25 @@ Defined in [contracts/amm-sdk/src/types.rs](../contracts/amm-sdk/src/types.rs) a
 
 ---
 
+## SdkTokenError (`contracts/amm-sdk`)
+
+Defined in [contracts/amm-sdk/src/types.rs](../contracts/amm-sdk/src/types.rs) as `SdkTokenError`. It mirrors the token contract's `TokenError` for SDK consumers; the codes are identical to the Token section above.
+
+| Code | Symbol | Cause | Remedy |
+|------|--------|-------|--------|
+| 1 | `AlreadyInitialized` | The token contract was initialized twice. | Initialize once upon deployment. |
+| 2 | `NotInitialized` | A function was called before `initialize` (the admin is unset). | Initialize the token first. |
+| 3 | `InvalidAmount` | An amount was zero or negative where a positive value is required, or negative where a non-negative value is required. | Pass a valid amount. |
+| 4 | `InsufficientBalance` | A transfer, burn, or lock exceeded the account's unlocked balance. | Operate on no more than the available unlocked balance. |
+| 5 | `InsufficientAllowance` | `transfer_from` exceeded the spender's approved allowance. | Approve a sufficient allowance before transferring. |
+| 6 | `InvalidExpiry` | `approve` was given a `live_until_ledger` before the current ledger for a non-zero amount. | Pass a `live_until_ledger` at or after the current ledger. |
+| 7 | `Unauthorized` | `propose_admin` was called by a non-admin, or `accept_admin` by a non-nominee. | Call from the correct admin or nominated pending-admin address. |
+| 8 | `InsufficientLocked` | An unlock exceeded the locker's entry for the holder, or the holder's total locked balance. | Unlock no more than the locker locked for the holder. |
+| 9 | `MigrationOverflow` | A legacy-lock migration would allocate more than the holder's recorded total locked balance. | Migrate an amount within the total locked balance. |
+| 10 | `BalanceUnavailable` | `balance_at` was queried for a ledger whose covering checkpoint has been evicted. | Query a ledger within the retained checkpoint window. |
+
+---
+
 ## BatchAuction (`contracts/batch_auction`)
 
 Defined in [contracts/batch_auction/src/lib.rs](../contracts/batch_auction/src/lib.rs) as `AuctionError`.
@@ -269,6 +288,9 @@ Defined in [contracts/factory/src/lib.rs](../contracts/factory/src/lib.rs) as `F
 | 10 | `NoPendingAdmin` | `accept_admin` was called when no admin transfer is in progress. | Call `propose_admin` first to nominate a successor. |
 | 11 | `WrongAdmin` | `accept_admin` was called by an address that does not match the pending nominee. | Have the correct address (the one passed to `propose_admin`) call `accept_admin`. |
 | 12 | `NotInitialized` | A function that reads factory configuration (admin, AMM/LP WASM hashes) was called before `initialize`. Covers pool creation (`create_pool`, `create_pool_with_fee_bps`, `create_cl_pool`) and every admin entrypoint. Code 2 is `InvalidFeeBps`, so this code is appended. | Call `initialize` first. |
+| 13 | `FeeOutOfRange` | A requested AMM fee lies outside the admin-configured `[min_fee_bps, max_fee_bps]` window (see `set_fee_bps_window`). Distinct from `InvalidFeeBps`, which reports a value that is invalid outright. | Request a fee inside the configured window, or have the admin widen it with `set_fee_bps_window`. |
+| 14 | `PoolNotFound` | The pool is not an AMM pool registered by this factory, or is not currently active in the pair registry. | Pass a pool created by this factory; check it with `get_pool`. |
+| 15 | `PoolAlreadyDeprecated` | `deprecate_pool` was called on a pool that is already deprecated. | No action needed; the pool is already deprecated. |
 
 ---
 
@@ -492,6 +514,23 @@ Defined in [contracts/token/src/lib.rs](../contracts/token/src/lib.rs) as `Token
 
 ---
 
+## OracleAdapters (`contracts/oracle_adapters`)
+
+Defined in [contracts/oracle_adapters/src/lib.rs](../contracts/oracle_adapters/src/lib.rs) as `AdapterError`.
+
+| Code | Symbol | Cause | Remedy |
+|------|--------|-------|--------|
+| 1 | `AlreadyInitialized` | `initialize` was called on an adapter that is already set up. | Initialize the adapter only once after deployment. |
+| 2 | `NotInitialized` | A function that reads adapter configuration was called before `initialize`. | Call `initialize` first. |
+| 3 | `InvalidConfiguration` | `initialize` was given `window_seconds == 0` or `max_age_seconds == 0`, or a concentrated-liquidity adapter was given an empty `fee_tiers` list. | Pass a non-zero window and max age, and at least one fee tier for a CL adapter. |
+| 4 | `PoolNotFound` | The factory has no pool for the requested token pair (or fee tier), so no price can be read. | Create the pool through the factory, or request a pair and fee tier that exist. |
+| 5 | `NoSnapshot` | The TWAP consumer has no snapshot for the pool, so no TWAP can be computed. | Wait for the keeper to save a snapshot. |
+| 6 | `StaleSnapshot` | The newest snapshot is older than the configured `max_age_seconds`. | Wait for a fresh snapshot from the keeper. |
+| 7 | `InvalidPrice` | The computed TWAP price is zero or negative. | Check that the pool reserves and cumulative prices are positive. |
+| 8 | `ArithmeticOverflow` | A price conversion or scaling step overflowed. | Use a smaller amount or a pool with less extreme reserves. |
+
+---
+
 ## V2ToV3Migration (`contracts/v2_to_v3_migration`)
 
 Defined in [contracts/v2_to_v3_migration/src/lib.rs](../contracts/v2_to_v3_migration/src/lib.rs) as `MigrationError`.
@@ -552,6 +591,8 @@ Defined in [contracts/twap_consumer/src/lib.rs](../contracts/twap_consumer/src/l
 | 12 | `InvalidRetentionPolicy` | `max_age_seconds` is shorter than the minimum supported TWAP window (`LONGEST_TWAP_WINDOW`). | Set `max_age_seconds` to at least `LONGEST_TWAP_WINDOW` or 0 (disabled). |
 | 13 | `Unauthorized` | Non-keeper/admin address attempted an administrative action. | Submit the transaction authenticated by the configured keeper/admin. |
 | 14 | `CrossContractCallFailed` | A call into a pool's oracle failed: the pool does not implement the interface its tracked type implies (`get_price_cumulative` for `Amm`, `get_tick_cumulative` for `Cl`), the address is not a contract, or the callee panicked. Returned by the snapshot and TWAP reads, including `get_twap_all`, instead of a host trap (#964). | Check the pool address and type with `get_tracked_pools_typed`. A legacy entry that is really a CL pool is re-typed by calling `save_cl_snapshot` for it. |
+| 15 | `SnapshotRateLimited` | A snapshot was saved for a pool less than `MinSnapshotInterval` seconds (300 by default) after its previous snapshot. | Wait until the minimum snapshot interval has elapsed before saving another snapshot. |
+| 16 | `PoolNotRegistered` | The pool is not registered with the factory (no factory is configured, or the factory has no token pair for it), so a snapshot was refused. | Register the pool through the factory, or pass a pool the factory created. |
 
 ---
 

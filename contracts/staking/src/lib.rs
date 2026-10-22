@@ -1622,7 +1622,9 @@ impl Staking {
             );
             return Ok(0);
         }
-        env.storage().instance().set(&DataKey::MigrationCursor, &end);
+        env.storage()
+            .instance()
+            .set(&DataKey::MigrationCursor, &end);
         Ok(len - end)
     }
 
@@ -1728,7 +1730,9 @@ impl Staking {
             if credited > already {
                 owed_total += credited - already;
             }
-            env.storage().persistent().set(&state_key, &(epoch, credited));
+            env.storage()
+                .persistent()
+                .set(&state_key, &(epoch, credited));
             env.storage()
                 .persistent()
                 .extend_ttl(&state_key, MIN_TTL, BUMP_TO);
@@ -2065,7 +2069,9 @@ impl Staking {
         let count: Option<u32> = env.storage().persistent().get(&key);
         match count {
             Some(count) => {
-                env.storage().persistent().extend_ttl(&key, MIN_TTL, BUMP_TO);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, MIN_TTL, BUMP_TO);
                 count
             }
             None => 0,
@@ -2086,7 +2092,9 @@ impl Staking {
         let count = Self::_staker_count(env);
         let at_key = DataKey::StakerAt(count);
         env.storage().persistent().set(&at_key, staker);
-        env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+        env.storage()
+            .persistent()
+            .extend_ttl(&at_key, MIN_TTL, BUMP_TO);
         env.storage().persistent().set(&slot_key, &count);
         env.storage()
             .persistent()
@@ -2121,7 +2129,9 @@ impl Staking {
             let moved: Address = env.storage().persistent().get(&last_key).unwrap();
             let at_key = DataKey::StakerAt(slot);
             env.storage().persistent().set(&at_key, &moved);
-            env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+            env.storage()
+                .persistent()
+                .extend_ttl(&at_key, MIN_TTL, BUMP_TO);
             let moved_slot_key = DataKey::StakerSlot(moved);
             env.storage().persistent().set(&moved_slot_key, &slot);
             env.storage()
@@ -2152,7 +2162,9 @@ impl Staking {
         while i < end && i < count {
             let at_key = DataKey::StakerAt(i);
             let staker: Address = env.storage().persistent().get(&at_key).unwrap();
-            env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+            env.storage()
+                .persistent()
+                .extend_ttl(&at_key, MIN_TTL, BUMP_TO);
             page.push_back(staker);
             i += 1;
         }
@@ -4459,8 +4471,11 @@ mod tests {
     use std::vec::Vec as StdVec;
 
     fn find_event(env: &Env, name: &str) -> Option<soroban_sdk::Val> {
-        use soroban_sdk::{testutils::Events as _, IntoVal};
-        let topic: soroban_sdk::Val = Symbol::new(env, name).into_val(env);
+        use soroban_sdk::{testutils::Events as _, TryFromVal};
+        // Compare decoded symbols, not raw `Val` payloads: a symbol longer than
+        // nine characters is an object handle, so two equal long symbols have
+        // different payloads.
+        let wanted = Symbol::new(env, name);
         env.events()
             .all()
             .iter()
@@ -4468,7 +4483,8 @@ mod tests {
                 event
                     .1
                     .get(0)
-                    .map(|t| t.get_payload() == topic.get_payload())
+                    .and_then(|t| Symbol::try_from_val(env, &t).ok())
+                    .map(|topic| topic == wanted)
                     .unwrap_or(false)
             })
             .map(|event| event.2)
@@ -4679,8 +4695,7 @@ mod tests {
 
         staking.propose_admin(&admin, &next);
         let data = find_event(&env, "admin_nominated").expect("admin_nominated event");
-        let (version, (from, to)) =
-            <(u32, (Address, Address))>::try_from_val(&env, &data).unwrap();
+        let (version, (from, to)) = <(u32, (Address, Address))>::try_from_val(&env, &data).unwrap();
         assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
         assert_eq!((from, to), (admin.clone(), next.clone()));
 
@@ -4852,6 +4867,47 @@ mod tests {
 
     // ── #1113: registry cost ─────────────────────────────────────────────────
 
+    // ── O(1) registry (#1113) ────────────────────────────────────────────────
+    //
+    // These tests used to compare CPU instruction counts between a 5-staker and
+    // a 500-staker pool. In the native test host that number is dominated by the
+    // size of the whole test ledger, not by the contract: every call copies the
+    // host's storage map, and every new entry is inserted into it, so a plain
+    // `get_pool_info` or SAC `transfer` costs more as unrelated entries pile up.
+    // Counting how many ledger entries a call changes measures what the registry
+    // is meant to guarantee — a fixed amount of storage work whatever the pool
+    // size — and does not depend on the host's metering.
+
+    /// Every ledger entry (key, value and TTL), rendered so two snapshots can be
+    /// compared without depending on the entry types.
+    fn ledger_dump(
+        env: &Env,
+    ) -> std::collections::BTreeMap<std::string::String, std::string::String> {
+        env.to_ledger_snapshot()
+            .ledger_entries
+            .iter()
+            .map(|(key, (entry, ttl))| {
+                (
+                    std::format!("{key:?}"),
+                    std::format!("{entry:?} ttl={ttl:?}"),
+                )
+            })
+            .collect()
+    }
+
+    /// How many ledger entries `f` added, removed or changed.
+    fn entries_touched(env: &Env, f: impl FnOnce()) -> usize {
+        let before = ledger_dump(env);
+        f();
+        let after = ledger_dump(env);
+        let changed = after
+            .iter()
+            .filter(|(k, v)| before.get(*k) != Some(*v))
+            .count();
+        let removed = before.keys().filter(|k| !after.contains_key(*k)).count();
+        changed + removed
+    }
+
     #[test]
     fn test_stake_cost_does_not_grow_with_staker_count() {
         let env = Env::default();
@@ -4864,28 +4920,28 @@ mod tests {
             join(&env, &staking, &lp, 100);
         }
         let fifth = fresh_staker(&env, &lp, 100);
-        env.budget().reset_default();
-        staking.stake(&fifth, &100_i128);
-        let cost_5th = env.budget().cpu_instruction_cost();
+        let touched_5th = entries_touched(&env, || {
+            staking.stake(&fifth, &100_i128);
+        });
 
-        env.budget().reset_unlimited();
         for _ in 0..494 {
             join(&env, &staking, &lp, 100);
         }
         let last = fresh_staker(&env, &lp, 100);
-        env.budget().reset_default();
-        staking.stake(&last, &100_i128);
-        let cost_500th = env.budget().cpu_instruction_cost();
+        let touched_500th = entries_touched(&env, || {
+            staking.stake(&last, &100_i128);
+        });
 
-        env.budget().reset_unlimited();
         assert_eq!(registry(&env, &staking).len(), 500);
-        assert!(
-            cost_500th <= cost_5th + cost_5th / 10,
-            "stake cost grew from {cost_5th} to {cost_500th} instructions"
+        assert!(touched_5th > 0, "a stake must write something");
+        assert_eq!(
+            touched_500th, touched_5th,
+            "stake touched {touched_5th} ledger entries for the 5th staker but {touched_500th} for the 500th"
         );
     }
 
-    fn exit_cost(n: u32, idx: usize, emergency: bool) -> u64 {
+    /// Ledger entries touched when the staker at `idx` of `n` leaves.
+    fn exit_cost(n: u32, idx: usize, emergency: bool) -> usize {
         let env = Env::default();
         env.mock_all_auths();
         env.budget().reset_unlimited();
@@ -4899,17 +4955,16 @@ mod tests {
             staking.set_emergency_mode(&admin, &true);
         }
         let who = stakers[idx].clone();
-        env.budget().reset_default();
-        if emergency {
-            staking.emergency_withdraw(&who);
-        } else {
-            let _ = staking.unstake(&who, &100_i128);
-        }
-        let cost = env.budget().cpu_instruction_cost();
-        env.budget().reset_unlimited();
+        let touched = entries_touched(&env, || {
+            if emergency {
+                staking.emergency_withdraw(&who);
+            } else {
+                let _ = staking.unstake(&who, &100_i128);
+            }
+        });
         assert_eq!(registry(&env, &staking).len(), n as usize - 1);
         assert!(!has_slot(&env, &staking, &who));
-        cost
+        touched
     }
 
     #[test]
@@ -4917,9 +4972,10 @@ mod tests {
         // A middle staker leaves, so the swap-remove path runs in both pools.
         let small = exit_cost(5, 2, false);
         let large = exit_cost(500, 250, false);
-        assert!(
-            large <= small + small / 10,
-            "unstake cost grew from {small} to {large} instructions"
+        assert!(small > 0, "an unstake must write something");
+        assert_eq!(
+            large, small,
+            "unstake touched {small} ledger entries in a 5-staker pool but {large} in a 500-staker pool"
         );
     }
 
@@ -4927,10 +4983,32 @@ mod tests {
     fn test_emergency_withdraw_cost_does_not_grow_with_staker_count() {
         let small = exit_cost(5, 2, true);
         let large = exit_cost(500, 250, true);
-        assert!(
-            large <= small + small / 10,
-            "emergency_withdraw cost grew from {small} to {large} instructions"
+        assert!(small > 0, "an emergency withdrawal must write something");
+        assert_eq!(
+            large, small,
+            "emergency_withdraw touched {small} ledger entries in a 5-staker pool but {large} in a 500-staker pool"
         );
+    }
+
+    /// The staking contract's instance entry, rendered. It is the one instance
+    /// entry that holds `TotalEffectiveStaked`.
+    fn staking_instance_dump(env: &Env) -> std::string::String {
+        let matches: StdVec<std::string::String> = env
+            .to_ledger_snapshot()
+            .ledger_entries
+            .iter()
+            .filter(|(key, (entry, _))| {
+                std::format!("{key:?}").contains("LedgerKeyContractInstance")
+                    && std::format!("{entry:?}").contains("TotalEffectiveStaked")
+            })
+            .map(|(_, (entry, _))| std::format!("{entry:?}"))
+            .collect();
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected exactly one staking instance entry"
+        );
+        matches.into_iter().next().unwrap()
     }
 
     #[test]
@@ -4944,32 +5022,34 @@ mod tests {
         for _ in 0..5 {
             stakers.push(join(&env, &staking, &lp, 100));
         }
-        // Every call loads the whole instance entry, so a read that does
-        // nothing else measures how big it is.
-        env.budget().reset_default();
-        staking.get_pool_info();
-        let small = env.budget().cpu_instruction_cost();
+        // Count the keys of the instance map; counter values gaining digits as
+        // stakers join is not growth.
+        let key_count = |env: &Env| staking_instance_dump(env).matches("key:").count();
+        let small = key_count(&env);
 
-        env.budget().reset_unlimited();
         for _ in 0..295 {
             stakers.push(join(&env, &staking, &lp, 100));
         }
-        env.budget().reset_default();
-        staking.get_pool_info();
-        let large = env.budget().cpu_instruction_cost();
-        env.budget().reset_unlimited();
+        let large = key_count(&env);
 
+        // Every call loads the whole instance entry, so the number of keys in it
+        // must not depend on how many stakers there are.
         assert!(
-            large <= small + small / 10,
-            "instance load grew from {small} to {large} instructions"
+            small > 0,
+            "the instance map should hold the pool configuration"
         );
-        // And none of the registry lives in instance storage.
+        assert_eq!(
+            large, small,
+            "instance map grew from {small} to {large} keys"
+        );
+        // And none of the registry or per-staker data lives in instance storage.
         env.as_contract(&staking.address, || {
             let instance = env.storage().instance();
             assert!(!instance.has(&DataKey::StakerIndex));
             assert!(!instance.has(&DataKey::StakerCount));
             assert!(!instance.has(&DataKey::StakerAt(0)));
             assert!(!instance.has(&DataKey::StakerSlot(stakers[0].clone())));
+            assert!(!instance.has(&DataKey::StakerAmount(stakers[0].clone())));
         });
     }
 
@@ -5070,7 +5150,10 @@ mod tests {
         }
 
         for who in gone.iter() {
-            assert!(!has_slot(&env, &staking, who), "departed staker kept a slot");
+            assert!(
+                !has_slot(&env, &staking, who),
+                "departed staker kept a slot"
+            );
         }
         assert_eq!(
             staking.get_pool_info().total_effective_staked,
@@ -5088,7 +5171,9 @@ mod tests {
         let a = join(&env, &staking, &lp, 100);
 
         let ttl = |key: DataKey| -> u32 {
-            env.as_contract(&staking.address, || env.storage().persistent().get_ttl(&key))
+            env.as_contract(&staking.address, || {
+                env.storage().persistent().get_ttl(&key)
+            })
         };
         assert!(ttl(DataKey::StakerCount) >= BUMP_TO - 1);
         assert!(ttl(DataKey::StakerAt(0)) >= BUMP_TO - 1);
@@ -5098,7 +5183,10 @@ mod tests {
             .with_mut(|l| l.sequence_number += BUMP_TO - MIN_TTL + 1);
         assert!(ttl(DataKey::StakerAt(0)) < MIN_TTL);
         staking.list_expired_boosts(&0, &10);
-        assert!(ttl(DataKey::StakerAt(0)) >= BUMP_TO - 1, "page read must bump");
+        assert!(
+            ttl(DataKey::StakerAt(0)) >= BUMP_TO - 1,
+            "page read must bump"
+        );
         assert!(ttl(DataKey::StakerCount) >= BUMP_TO - 1);
     }
 

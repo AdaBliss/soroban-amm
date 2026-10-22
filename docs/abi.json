@@ -2514,65 +2514,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -2853,6 +2794,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -4447,65 +4447,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -4786,6 +4727,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -6321,65 +6321,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -6660,6 +6601,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -8378,65 +8378,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -8717,6 +8658,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -10462,7 +10462,7 @@
       },
       {
         "function_v0": {
-          "doc": "Display-only view returning `PRICE_SCALE * 1.0001^tick` via binary\\nexponentiation (`PRICE_SCALE = 1_000_000`).\\n\\nNote: this 6-decimal representation is lossy at low negative ticks and\\nsaturating at high positive ticks, so it must never be used for trade or\\nposition math (use [`Self::tick_to_sqrt_price_x96`] instead).",
+          "doc": "Display-only view returning `PRICE_SCALE * 1.0001^tick` via binary\\nexponentiation (`PRICE_SCALE = 1_000_000`).\\n\\nNote: this 6-decimal representation is lossy at low negative ticks and\\nsaturating at high positive ticks, so it must never be used for trade or\\nposition math (use `tick_to_sqrt_price_x96` instead).",
           "inputs": [
             {
               "doc": "",
@@ -11229,7 +11229,7 @@
       },
       {
         "function_v0": {
-          "doc": "Returns the largest tick `t` such that `tick_to_sqrt_price_x96(t) <= sqrt_price_x96`.\\n\\nDelegates to [`math::sqrt_price_x96_to_tick`] after clamping the input to\\n`[math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE]`. Across the non-saturated\\ndomain `[MIN_TICK, 443_636]` this is the exact floor inverse of\\n[`Self::tick_to_sqrt_price_x96`].",
+          "doc": "Returns the largest tick `t` such that `tick_to_sqrt_price_x96(t) <= sqrt_price_x96`.\\n\\nDelegates to [`math::sqrt_price_x96_to_tick`] after clamping the input to\\n`[math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE]`. Across the non-saturated\\ndomain `[MIN_TICK, 443_636]` this is the exact floor inverse of\\n`tick_to_sqrt_price_x96`.",
           "inputs": [
             {
               "doc": "",
@@ -11627,65 +11627,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -11966,6 +11907,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -13287,65 +13287,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -13626,6 +13567,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -14960,7 +14960,7 @@
             },
             {
               "tuple_v0": {
-                "doc": "normalized (token_a, token_b) -> Vec<Address> of active AMM pools, sorted\\nby ascending fee. The first entry is the pair's canonical pool.",
+                "doc": "normalized (token_a, token_b) -> `Vec<Address>` of active AMM pools, sorted\\nby ascending fee. The first entry is the pair's canonical pool.",
                 "name": "PairPools",
                 "type": [
                   "address",
@@ -16334,65 +16334,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -16673,6 +16614,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -19661,65 +19661,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -20000,6 +19941,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -21866,65 +21866,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -22205,6 +22146,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -23805,65 +23805,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -24144,6 +24085,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -25468,65 +25468,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -25807,6 +25748,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -27202,65 +27202,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -27541,6 +27482,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -28782,65 +28782,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -29121,6 +29062,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -31645,65 +31645,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -31984,6 +31925,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -33558,65 +33558,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -33897,6 +33838,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -35297,65 +35297,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -35636,6 +35577,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -37416,65 +37416,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -37755,6 +37696,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {
@@ -39265,65 +39265,6 @@
         "udt_error_enum_v0": {
           "cases": [
             {
-              "doc": "`initialize` was called on a token that is already set up.",
-              "name": "AlreadyInitialized",
-              "value": 1
-            },
-            {
-              "doc": "A function was called before `initialize`.",
-              "name": "NotInitialized",
-              "value": 2
-            },
-            {
-              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
-              "name": "InvalidAmount",
-              "value": 3
-            },
-            {
-              "doc": "The account's unlocked balance is smaller than the requested amount.",
-              "name": "InsufficientBalance",
-              "value": 4
-            },
-            {
-              "doc": "The spender's allowance is smaller than the requested amount.",
-              "name": "InsufficientAllowance",
-              "value": 5
-            },
-            {
-              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
-              "name": "InvalidExpiry",
-              "value": 6
-            },
-            {
-              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
-              "name": "Unauthorized",
-              "value": 7
-            },
-            {
-              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
-              "name": "InsufficientLocked",
-              "value": 8
-            },
-            {
-              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
-              "name": "MigrationOverflow",
-              "value": 9
-            },
-            {
-              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
-              "name": "BalanceUnavailable",
-              "value": 10
-            }
-          ],
-          "doc": "Errors surfaced by the LP token contract.",
-          "lib": "",
-          "name": "TokenError"
-        }
-      },
-      {
-        "udt_error_enum_v0": {
-          "cases": [
-            {
               "doc": "",
               "name": "AlreadyInitialized",
               "value": 1
@@ -39604,6 +39545,65 @@
           ],
           "lib": "",
           "name": "SwapOutQuote"
+        }
+      },
+      {
+        "udt_error_enum_v0": {
+          "cases": [
+            {
+              "doc": "`initialize` was called on a token that is already set up.",
+              "name": "AlreadyInitialized",
+              "value": 1
+            },
+            {
+              "doc": "A function was called before `initialize`.",
+              "name": "NotInitialized",
+              "value": 2
+            },
+            {
+              "doc": "An amount argument was zero or negative where a positive value is\\nrequired (or negative where a non-negative value is required).",
+              "name": "InvalidAmount",
+              "value": 3
+            },
+            {
+              "doc": "The account's unlocked balance is smaller than the requested amount.",
+              "name": "InsufficientBalance",
+              "value": 4
+            },
+            {
+              "doc": "The spender's allowance is smaller than the requested amount.",
+              "name": "InsufficientAllowance",
+              "value": 5
+            },
+            {
+              "doc": "`approve` was given a `live_until_ledger` earlier than the current\\nledger for a non-zero amount.",
+              "name": "InvalidExpiry",
+              "value": 6
+            },
+            {
+              "doc": "The caller is not the address the operation requires (admin, pending\\nadmin, or the recorded locker).",
+              "name": "Unauthorized",
+              "value": 7
+            },
+            {
+              "doc": "An unlock exceeded the amount the given locker had locked for the\\nholder, or exceeded the holder's total locked balance.",
+              "name": "InsufficientLocked",
+              "value": 8
+            },
+            {
+              "doc": "A legacy-lock migration would allocate more than the holder's recorded\\ntotal locked balance.",
+              "name": "MigrationOverflow",
+              "value": 9
+            },
+            {
+              "doc": "`balance_at` or `total_supply_at` was queried for a ledger whose covering\\ncheckpoint has been evicted; the historical value is no longer recoverable.",
+              "name": "BalanceUnavailable",
+              "value": 10
+            }
+          ],
+          "doc": "Errors surfaced by the LP token contract, as seen from the SDK.\\n\\nNamed `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with\\nthe token contract's own `TokenError` in any wasm that links this crate.",
+          "lib": "",
+          "name": "SdkTokenError"
         }
       },
       {

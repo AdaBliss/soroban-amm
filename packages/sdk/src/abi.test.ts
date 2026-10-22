@@ -25,6 +25,20 @@ import { FactoryClient } from "./factory.js";
 import { RouterClient } from "./router.js";
 import { TokenClient } from "./token.js";
 
+
+/** The `invokeContract` payload of the first operation of a built transaction. */
+function invokeOf(tx: { operations: unknown[] }): { functionName: unknown; args: xdr.ScVal[] } {
+  const op = tx.operations[0] as {
+    func: { invokeContract: { functionName: unknown; args: xdr.ScVal[] } };
+  };
+  return op.func.invokeContract;
+}
+
+/** The XDR type discriminant name of an ScVal, e.g. `"scvI128"`. */
+function scvName(v: xdr.ScVal): string {
+  return `scv${v.constructor.name.replace(/^ScVal/, "")}`;
+}
+
 // ── Fixture: the conformance oracle ───────────────────────────────────────────
 
 interface AbiEntrypoint {
@@ -87,7 +101,7 @@ const factory = new FactoryClient(config);
 
 /** The XDR type discriminant name of an ScVal, e.g. "scvI128". */
 function typeOf(v: xdr.ScVal): string {
-  return v.switch().name;
+  return scvName(v);
 }
 
 /** Assert the ordered list of XDR type discriminants of an argument array. */
@@ -113,9 +127,9 @@ interface Call {
 function mockServer<T>(client: T, responder: (call: Call) => xdr.ScVal | Error): Call[] {
   const server = (client as unknown as { server: Record<string, unknown> }).server;
   const calls: Call[] = [];
-  server.simulateTransaction = async (tx: { operations: Array<{ func: xdr.HostFunction }> }) => {
-    const invoke = tx.operations[0].func.invokeContract();
-    const call: Call = { method: String(invoke.functionName()), args: invoke.args() };
+  server.simulateTransaction = async (tx: { operations: unknown[] }) => {
+    const invoke = invokeOf(tx);
+    const call: Call = { method: String(invoke.functionName), args: invoke.args };
     calls.push(call);
     const out = responder(call);
     if (out instanceof Error) return { error: out.message };

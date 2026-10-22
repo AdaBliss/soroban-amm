@@ -147,7 +147,7 @@ pub enum DataKey {
     /// pool per (pair, fee), mirroring the CL scheme. Cleared on deprecation so
     /// a replacement can be created at the same fee.
     PoolByFee(Address, Address, i128),
-    /// normalized (token_a, token_b) -> Vec<Address> of active AMM pools, sorted
+    /// normalized (token_a, token_b) -> `Vec<Address>` of active AMM pools, sorted
     /// by ascending fee. The first entry is the pair's canonical pool.
     PairPools(Address, Address),
     /// pool address -> swap fee in bps recorded at creation.

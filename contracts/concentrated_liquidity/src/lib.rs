@@ -2224,7 +2224,7 @@ impl ConcentratedLiquidity {
     /// Delegates to [`math::sqrt_price_x96_to_tick`] after clamping the input to
     /// `[math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE]`. Across the non-saturated
     /// domain `[MIN_TICK, 443_636]` this is the exact floor inverse of
-    /// [`Self::tick_to_sqrt_price_x96`].
+    /// `tick_to_sqrt_price_x96`.
     pub fn sqrt_price_x96_to_tick(sqrt_price_x96: u128) -> i32 {
         math::sqrt_price_x96_to_tick(
             sqrt_price_x96.clamp(math::MIN_SQRT_PRICE, math::MAX_SQRT_PRICE),
@@ -3914,7 +3914,7 @@ impl ConcentratedLiquidity {
     ///
     /// Note: this 6-decimal representation is lossy at low negative ticks and
     /// saturating at high positive ticks, so it must never be used for trade or
-    /// position math (use [`Self::tick_to_sqrt_price_x96`] instead).
+    /// position math (use `tick_to_sqrt_price_x96` instead).
     pub fn tick_to_price(tick: i32) -> i128 {
         Self::tick_to_price_bexp(tick)
     }

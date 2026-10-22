@@ -29,8 +29,18 @@ pub enum TradeAction {
         #[serde(default)]
         min_b: i128,
     },
-    RemoveLiquidityOneSided { shares: i128, token_out: String, #[serde(default)] min_out: i128 },
-    SetFees { fee_bps: i128, protocol_fee_bps: i128, #[serde(default)] lp_rebate_bps: i128 },
+    RemoveLiquidityOneSided {
+        shares: i128,
+        token_out: String,
+        #[serde(default)]
+        min_out: i128,
+    },
+    SetFees {
+        fee_bps: i128,
+        protocol_fee_bps: i128,
+        #[serde(default)]
+        lp_rebate_bps: i128,
+    },
     Pause,
     Unpause,
 }
@@ -87,9 +97,12 @@ pub(crate) struct FlatTradeRecord {
     pub min_a: Option<i128>,
     #[serde(default)]
     pub min_b: Option<i128>,
-    #[serde(default)] pub fee_bps: Option<i128>,
-    #[serde(default)] pub protocol_fee_bps: Option<i128>,
-    #[serde(default)] pub lp_rebate_bps: Option<i128>,
+    #[serde(default)]
+    pub fee_bps: Option<i128>,
+    #[serde(default)]
+    pub protocol_fee_bps: Option<i128>,
+    #[serde(default)]
+    pub lp_rebate_bps: Option<i128>,
 }
 
 impl FlatTradeRecord {

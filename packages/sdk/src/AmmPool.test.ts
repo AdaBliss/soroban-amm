@@ -14,6 +14,20 @@ import { Networks, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { AmmPool, AmmContractError, decodeError } from "./AmmPool.js";
 import { AmmErrors, AmmErrorNames } from "./types.js";
 
+
+/** The `invokeContract` payload of the first operation of a built transaction. */
+function invokeOf(tx: { operations: unknown[] }): { functionName: unknown; args: xdr.ScVal[] } {
+  const op = tx.operations[0] as {
+    func: { invokeContract: { functionName: unknown; args: xdr.ScVal[] } };
+  };
+  return op.func.invokeContract;
+}
+
+/** The XDR type discriminant name of an ScVal, e.g. `"scvI128"`. */
+function scvName(v: xdr.ScVal): string {
+  return `scv${v.constructor.name.replace(/^ScVal/, "")}`;
+}
+
 describe("decodeError", () => {
   it("maps Error(Contract, #6) to the PAUSED entry", () => {
     const err = decodeError(
@@ -36,6 +50,8 @@ describe("decodeError", () => {
     [19, "AlreadyExecuted", "multisig proposal already executed"],
     [20, "ProposalExpired", "multisig proposal expired"],
     [21, "NotInitialized", "pool not initialized"],
+    [27, "EmergencyDelayNotElapsed", "emergency delay not elapsed"],
+    [29, "MultisigGuardActive", "multisig guard is active"],
   ])("maps Error(Contract, #%i) to %s", (code, name, text) => {
     const err = decodeError(new Error(`Error(Contract, #${code})`));
     expect(err).toBeInstanceOf(AmmContractError);
@@ -99,9 +115,9 @@ describe("decodeError", () => {
 });
 
 describe("AmmErrors", () => {
-  it("covers all 21 AmmError discriminants from contracts/amm/src/lib.rs", () => {
+  it("covers all 30 AmmError discriminants from contracts/amm/src/lib.rs", () => {
     const codes = Object.keys(AmmErrors).map(Number).sort((a, b) => a - b);
-    expect(codes).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+    expect(codes).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
   });
 
   it("has a symbolic name for every discriminant", () => {
@@ -132,6 +148,15 @@ describe("AmmErrors", () => {
       19: "AlreadyExecuted",
       20: "ProposalExpired",
       21: "NotInitialized",
+      22: "PoolDrained",
+      23: "QuorumNotMet",
+      24: "NoPendingProposal",
+      25: "QuorumNotReached",
+      26: "InvalidQuorum",
+      27: "EmergencyDelayNotElapsed",
+      28: "InvalidRecipient",
+      29: "MultisigGuardActive",
+      30: "InvalidEmergencyDelay",
     });
   });
 
@@ -174,9 +199,9 @@ function mockPool(responder: (call: SimCall) => xdr.ScVal): { client: AmmPool; c
   const client = new AmmPool(poolConfig);
   const server = (client as unknown as { server: Record<string, unknown> }).server;
   const calls: SimCall[] = [];
-  server.simulateTransaction = async (tx: { operations: Array<{ func: xdr.HostFunction }> }) => {
-    const invoke = tx.operations[0].func.invokeContract();
-    const call: SimCall = { method: String(invoke.functionName()), args: invoke.args() };
+  server.simulateTransaction = async (tx: { operations: unknown[] }) => {
+    const invoke = invokeOf(tx);
+    const call: SimCall = { method: String(invoke.functionName), args: invoke.args };
     calls.push(call);
     return { result: { retval: responder(call) } };
   };
@@ -237,7 +262,7 @@ describe("AmmPool.simulateSwap", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("simulate_swap");
-    expect(calls[0].args.map((a) => a.switch().name)).toEqual(["scvAddress", "scvI128"]);
+    expect(calls[0].args.map((a) => scvName(a))).toEqual(["scvAddress", "scvI128"]);
     expect(quote).toEqual({
       amountIn: 1_000n,
       amountOut: expected.amountOut,

@@ -119,6 +119,15 @@ export const AmmErrors = {
   19: "multisig proposal already executed",
   20: "multisig proposal expired",
   21: "pool not initialized",
+  22: "pool drained by an emergency withdrawal",
+  23: "governance quorum not met",
+  24: "no pending emergency announcement or multisig proposal",
+  25: "multisig quorum not reached",
+  26: "invalid multisig quorum",
+  27: "emergency delay not elapsed",
+  28: "invalid emergency recipient",
+  29: "multisig guard is active",
+  30: "invalid emergency delay",
 } as const;
 
 /** Numeric discriminant of an `AmmError` variant. */
@@ -150,6 +159,15 @@ export const AmmErrorNames = {
   19: "AlreadyExecuted",
   20: "ProposalExpired",
   21: "NotInitialized",
+  22: "PoolDrained",
+  23: "QuorumNotMet",
+  24: "NoPendingProposal",
+  25: "QuorumNotReached",
+  26: "InvalidQuorum",
+  27: "EmergencyDelayNotElapsed",
+  28: "InvalidRecipient",
+  29: "MultisigGuardActive",
+  30: "InvalidEmergencyDelay",
 } as const;
 
 export type AmmErrorKey = (typeof AmmErrorNames)[AmmErrorCode];

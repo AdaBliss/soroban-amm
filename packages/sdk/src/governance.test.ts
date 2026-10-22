@@ -40,6 +40,20 @@ import {
   type ProposalKind,
 } from "./governance.js";
 
+
+/** The `invokeContract` payload of the first operation of a built transaction. */
+function invokeOf(tx: { operations: unknown[] }): { functionName: unknown; args: xdr.ScVal[] } {
+  const op = tx.operations[0] as {
+    func: { invokeContract: { functionName: unknown; args: xdr.ScVal[] } };
+  };
+  return op.func.invokeContract;
+}
+
+/** The XDR type discriminant name of an ScVal, e.g. `"scvI128"`. */
+function scvName(v: xdr.ScVal): string {
+  return `scv${v.constructor.name.replace(/^ScVal/, "")}`;
+}
+
 // ── Contract source: the conformance oracle ───────────────────────────────────
 
 const CONTRACT_RS_URL = new URL("../../../contracts/governance/src/lib.rs", import.meta.url);
@@ -128,9 +142,9 @@ function mockClient(responder: (call: Call) => xdr.ScVal | Error) {
   const server = (client as unknown as { server: Record<string, unknown> }).server;
   const calls: Call[] = [];
 
-  server.simulateTransaction = async (tx: { operations: Array<{ func: xdr.HostFunction }> }) => {
-    const invoke = tx.operations[0].func.invokeContract();
-    const call: Call = { method: String(invoke.functionName()), args: invoke.args() };
+  server.simulateTransaction = async (tx: { operations: unknown[] }) => {
+    const invoke = invokeOf(tx);
+    const call: Call = { method: String(invoke.functionName), args: invoke.args };
     calls.push(call);
     const out = responder(call);
     if (out instanceof Error) return { error: out.message };
@@ -142,7 +156,7 @@ function mockClient(responder: (call: Call) => xdr.ScVal | Error) {
 
 /** The XDR type discriminant name of an ScVal, e.g. `"scvI128"`. */
 function typeOf(v: xdr.ScVal): string {
-  return v.switch().name;
+  return scvName(v);
 }
 
 /** Assert the ordered list of XDR type discriminants of an argument array. */
@@ -163,15 +177,15 @@ const mapv = (entries: Array<[string, xdr.ScVal]>) =>
 
 /** The elements of an `scvVec`, asserted present. */
 function vecOf(v: xdr.ScVal): xdr.ScVal[] {
-  const items = v.vec();
-  if (!items) throw new Error(`expected an scvVec, got ${v.switch().name}`);
+  const items = (v as unknown as { vec?: xdr.ScVal[] }).vec;
+  if (!items) throw new Error(`expected an scvVec, got ${scvName(v)}`);
   return items;
 }
 
 /** The entries of an `scvMap`, asserted present. */
 function mapOf(v: xdr.ScVal): xdr.ScMapEntry[] {
-  const entries = v.map();
-  if (!entries) throw new Error(`expected an scvMap, got ${v.switch().name}`);
+  const entries = (v as unknown as { map?: xdr.ScMapEntry[] }).map;
+  if (!entries) throw new Error(`expected an scvMap, got ${scvName(v)}`);
   return entries;
 }
 
@@ -384,7 +398,7 @@ describe("ProposalKind encoding — one assertion per contract variant", () => {
       params: { factory: BOB, offset: 1, limit: 5 },
     });
     const map = mapOf(vecOf(v)[1]);
-    const types = map.map((e) => typeOf(e.val()));
+    const types = map.map((e) => typeOf(e.val));
     expect(types).toEqual(["scvAddress", "scvU32", "scvU32"]);
     expect(scValToNative(v)).toEqual([
       "UpdateFactoryGlobalFee",
@@ -445,7 +459,7 @@ describe("ProposalKind encoding — one assertion per contract variant", () => {
       params: { clPool: BOB, oracle: CAROL },
     });
     const map = mapOf(vecOf(v)[1]);
-    const oracleVal = map[1].val();
+    const oracleVal = map[1].val;
     expect(typeOf(oracleVal)).toBe("scvVec");
     expect(vecOf(oracleVal)).toHaveLength(1);
     expect(scValToNative(v)).toEqual([
@@ -457,7 +471,7 @@ describe("ProposalKind encoding — one assertion per contract variant", () => {
   it("UpdateClOracle(struct) encodes Option::None as scvVoid", () => {
     const v = encodeProposalKind({ kind: "UpdateClOracle", params: { clPool: BOB, oracle: null } });
     const map = mapOf(vecOf(v)[1]);
-    expect(typeOf(map[1].val())).toBe("scvVoid");
+    expect(typeOf(map[1].val)).toBe("scvVoid");
     expect(scValToNative(v)).toEqual(["UpdateClOracle", { cl_pool: BOB, oracle: null }]);
   });
 
@@ -497,7 +511,7 @@ describe("ProposalKind encoding — one assertion per contract variant", () => {
   it("SetClPositionNft(struct) encodes Option::None as scvVoid", () => {
     const v = encodeProposalKind({ kind: "SetClPositionNft", params: { clPool: BOB, nft: null } });
     const map = mapOf(vecOf(v)[1]);
-    expect(typeOf(map[1].val())).toBe("scvVoid");
+    expect(typeOf(map[1].val)).toBe("scvVoid");
     expect(scValToNative(v)).toEqual(["SetClPositionNft", { cl_pool: BOB, nft: null }]);
   });
 
@@ -511,7 +525,7 @@ describe("ProposalKind encoding — one assertion per contract variant", () => {
 
   it("never encodes a ProposalKind as a scvMap keyed by the variant", () => {
     // The regression: { UpdateFee: n } is a scvMap, which the contract rejects.
-    expect(typeOf(nativeToScVal({ UpdateFee: 30n }, { type: "map" }))).toBe("scvMap");
+    expect(typeOf(nativeToScVal({ UpdateFee: 30n }))).toBe("scvMap");
     for (const variant of PROPOSAL_KIND_VARIANTS) {
       expect(typeOf(encodeProposalKind(KINDS[variant])), variant).not.toBe("scvMap");
     }

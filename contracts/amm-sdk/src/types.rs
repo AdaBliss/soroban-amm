@@ -4,10 +4,13 @@ use soroban_sdk::{contracterror, contracttype, Address};
 
 // ── Token error codes ───────────────────────────────────────────────────────────
 
-/// Errors surfaced by the LP token contract.
+/// Errors surfaced by the LP token contract, as seen from the SDK.
+///
+/// Named `SdkTokenError` (like `SdkAmmError`) so its spec does not collide with
+/// the token contract's own `TokenError` in any wasm that links this crate.
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum TokenError {
+pub enum SdkTokenError {
     /// `initialize` was called on a token that is already set up.
     AlreadyInitialized = 1,
     /// A function was called before `initialize`.

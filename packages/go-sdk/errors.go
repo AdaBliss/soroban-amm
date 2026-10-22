@@ -55,6 +55,24 @@ var (
 	ErrProposalExpired = errors.New("proposal expired")
 	// ErrNotInitialized is AmmError::NotInitialized (21).
 	ErrNotInitialized = errors.New("pool not initialized")
+	// ErrPoolDrained is AmmError::PoolDrained (22).
+	ErrPoolDrained = errors.New("pool drained")
+	// ErrQuorumNotMet is AmmError::QuorumNotMet (23).
+	ErrQuorumNotMet = errors.New("quorum not met")
+	// ErrNoPendingProposal is AmmError::NoPendingProposal (24).
+	ErrNoPendingProposal = errors.New("no pending proposal")
+	// ErrQuorumNotReached is AmmError::QuorumNotReached (25).
+	ErrQuorumNotReached = errors.New("multisig quorum not reached")
+	// ErrInvalidQuorum is AmmError::InvalidQuorum (26).
+	ErrInvalidQuorum = errors.New("invalid multisig quorum")
+	// ErrEmergencyDelayNotElapsed is AmmError::EmergencyDelayNotElapsed (27).
+	ErrEmergencyDelayNotElapsed = errors.New("emergency delay not elapsed")
+	// ErrInvalidRecipient is AmmError::InvalidRecipient (28).
+	ErrInvalidRecipient = errors.New("invalid emergency recipient")
+	// ErrMultisigGuardActive is AmmError::MultisigGuardActive (29).
+	ErrMultisigGuardActive = errors.New("multisig guard active")
+	// ErrInvalidEmergencyDelay is AmmError::InvalidEmergencyDelay (30).
+	ErrInvalidEmergencyDelay = errors.New("invalid emergency delay")
 )
 
 // Client-side sentinels, distinct from contract errors.
@@ -124,6 +142,15 @@ var contractErrorsByKind = map[ContractKind]map[int]contractErrorInfo{
 		19: {"AlreadyExecuted", ErrAlreadyExecuted},
 		20: {"ProposalExpired", ErrProposalExpired},
 		21: {"NotInitialized", ErrNotInitialized},
+		22: {"PoolDrained", ErrPoolDrained},
+		23: {"QuorumNotMet", ErrQuorumNotMet},
+		24: {"NoPendingProposal", ErrNoPendingProposal},
+		25: {"QuorumNotReached", ErrQuorumNotReached},
+		26: {"InvalidQuorum", ErrInvalidQuorum},
+		27: {"EmergencyDelayNotElapsed", ErrEmergencyDelayNotElapsed},
+		28: {"InvalidRecipient", ErrInvalidRecipient},
+		29: {"MultisigGuardActive", ErrMultisigGuardActive},
+		30: {"InvalidEmergencyDelay", ErrInvalidEmergencyDelay},
 	},
 }
 

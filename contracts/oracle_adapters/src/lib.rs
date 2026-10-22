@@ -55,33 +55,26 @@ pub struct ClTwapResult {
     pub snapshot_timestamp: u64,
 }
 
+// Only the generated `FactoryClient` is used; the trait is its source of truth.
+#[allow(dead_code)]
 #[contractclient(name = "FactoryClient")]
 trait Factory {
     fn get_pool(env: Env, token_a: Address, token_b: Address) -> Option<Address>;
-    fn get_cl_pool(
-        env: Env,
-        token_a: Address,
-        token_b: Address,
-        fee_bps: i128,
-    ) -> Option<Address>;
+    fn get_cl_pool(env: Env, token_a: Address, token_b: Address, fee_bps: i128) -> Option<Address>;
     fn get_pool_tokens(env: Env, pool: Address) -> Option<(Address, Address)>;
 }
 
+// Only the generated `TwapConsumerClient` is used; the trait is its source of truth.
+#[allow(dead_code)]
 #[contractclient(name = "TwapConsumerClient")]
 trait TwapConsumer {
-    fn get_twap_price_detailed(
-        env: Env,
-        pool: Address,
-        window_seconds: u64,
-    ) -> TwapResult;
-    fn get_cl_twap_detailed(
-        env: Env,
-        pool: Address,
-        window_seconds: u64,
-    ) -> ClTwapResult;
+    fn get_twap_price_detailed(env: Env, pool: Address, window_seconds: u64) -> TwapResult;
+    fn get_cl_twap_detailed(env: Env, pool: Address, window_seconds: u64) -> ClTwapResult;
     fn get_latest_snapshot_timestamp(env: Env, pool: Address) -> u64;
 }
 
+// Only the generated `ClPoolClient` is used; the trait is its source of truth.
+#[allow(dead_code)]
 #[contractclient(name = "ClPoolClient")]
 trait ClPool {
     fn active_liquidity(env: Env) -> i128;
@@ -92,6 +85,7 @@ pub struct OracleTwapAdapter;
 
 #[contractimpl]
 impl OracleTwapAdapter {
+    #[allow(clippy::too_many_arguments)]
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -115,8 +109,12 @@ impl OracleTwapAdapter {
         env.storage().instance().set(&DataKey::Factory, &factory);
         env.storage().instance().set(&DataKey::Consumer, &consumer);
         env.storage().instance().set(&DataKey::Mode, &mode);
-        env.storage().instance().set(&DataKey::Window, &window_seconds);
-        env.storage().instance().set(&DataKey::MaxAge, &max_age_seconds);
+        env.storage()
+            .instance()
+            .set(&DataKey::Window, &window_seconds);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxAge, &max_age_seconds);
         env.storage().instance().set(&DataKey::FeeTiers, &fee_tiers);
         Ok(())
     }
@@ -143,17 +141,22 @@ impl OracleTwapAdapter {
                 for tier in tiers.iter() {
                     if let Some(candidate) = factory_client.get_cl_pool(&token_a, &token_b, &tier) {
                         let liquidity = ClPoolClient::new(&env, &candidate).active_liquidity();
-                        if selected.as_ref().map(|(_, l)| liquidity > *l).unwrap_or(true) {
+                        if selected
+                            .as_ref()
+                            .map(|(_, l)| liquidity > *l)
+                            .unwrap_or(true)
+                        {
                             selected = Some((candidate, liquidity));
                         }
                     }
                 }
-                selected.map(|(pool, _)| pool).ok_or(AdapterError::PoolNotFound)?
+                selected
+                    .map(|(pool, _)| pool)
+                    .ok_or(AdapterError::PoolNotFound)?
             }
         };
 
-        let newest = TwapConsumerClient::new(&env, &consumer)
-            .get_latest_snapshot_timestamp(&pool);
+        let newest = TwapConsumerClient::new(&env, &consumer).get_latest_snapshot_timestamp(&pool);
         if newest == 0 {
             return Err(AdapterError::NoSnapshot);
         }
@@ -162,12 +165,14 @@ impl OracleTwapAdapter {
         }
 
         let mut price = match mode {
-            AdapterMode::Amm => TwapConsumerClient::new(&env, &consumer)
-                .get_twap_price_detailed(&pool, &window)
-                .twap,
+            AdapterMode::Amm => {
+                TwapConsumerClient::new(&env, &consumer)
+                    .get_twap_price_detailed(&pool, &window)
+                    .twap
+            }
             AdapterMode::ConcentratedLiquidity => {
-                let result = TwapConsumerClient::new(&env, &consumer)
-                    .get_cl_twap_detailed(&pool, &window);
+                let result =
+                    TwapConsumerClient::new(&env, &consumer).get_cl_twap_detailed(&pool, &window);
                 Self::tick_to_price(result.average_tick)?
             }
         };
@@ -197,10 +202,7 @@ impl OracleTwapAdapter {
         ))
     }
 
-    fn read<T>(
-        env: &Env,
-        key: DataKey,
-    ) -> Result<T, AdapterError>
+    fn read<T>(env: &Env, key: DataKey) -> Result<T, AdapterError>
     where
         T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>,
         T::Error: core::fmt::Debug,

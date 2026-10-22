@@ -23,7 +23,7 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
 };
 
-use soroban_amm_sdk::types::TokenError;
+use soroban_amm_sdk::types::SdkTokenError as TokenError;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -4329,7 +4329,9 @@ mod tests {
             let mut state = seed;
             for _ in 0..5 {
                 let d = Address::generate(&s.env);
-                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
                 mint_lp(&s, &d, 50 + ((state >> 33) % 500) as i128);
                 gov.delegate(&d, &delegatee);
                 delegators.push_back(d);
@@ -4338,7 +4340,9 @@ mod tests {
             let pid = propose_at_ledger(&s, &gov, &proposer);
 
             for d in delegators.iter() {
-                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
                 let held = lp.balance(&d);
                 match (state >> 33) % 3 {
                     0 => {}
@@ -6106,6 +6110,8 @@ mod prop_tests {
             cliff_ledger: 30,
             end_ledger: 40,
         };
-        assert!(gov.try_propose(&holder, &ProposalKind::CreatePolVesting(valid_vesting)).is_ok());
+        assert!(gov
+            .try_propose(&holder, &ProposalKind::CreatePolVesting(valid_vesting))
+            .is_ok());
     }
 }

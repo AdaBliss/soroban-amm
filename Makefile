@@ -2,7 +2,7 @@
 # .github/workflows/ci.yml — that workflow is the source of truth; keep this
 # file in sync with it rather than the other way around.
 
-WASM_DIR := target/wasm32v1none/release
+WASM_DIR := target/wasm32v1-none/release
 
 SHELL := bash
 
@@ -10,18 +10,18 @@ SHELL := bash
         size size-check doc audit bench deploy e2e clean fuzz-amm fuzz-amm-nightly fuzz-cl
 
 # Bare `make` explains itself instead of building.
-.DEFAULT_GOAL: = help
+.DEFAULT_GOAL := help
 
 help: ## Show this help
 	@echo "Available targets:"
-	@grep -E '^[a-zA-Z0-9_-]+:.*## .*' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 all: build ## Build release WASM (default target if invoked explicitly)
 
 # Exclusions live in scripts/build_workspace.sh, shared with ci.yml and
 # release.yml so all three stay in sync.
-build: ## Build every deployable contract for wasm32v1none
+build: ## Build every deployable contract for wasm32v1-none
 	bash scripts/build_workspace.sh
 
 release-build: build ## Alias for the release build (same as `make build`)
@@ -29,11 +29,11 @@ release-build: build ## Alias for the release build (same as `make build`)
 optimize: build ## Optimize every WASM artifact produced by `make build`
 	@shopt -s nullglob; \
 	wasms=($(WASM_DIR)/*.wasm); \
-	if [ ${#wasms[@]} -eq 0 ]; then \
-		echo "error: no WASM artifacts found in $(WASM_DIR)— run 'make build' first" >&2; \
+	if [ $${#wasms[@]} -eq 0 ]; then \
+		echo "error: no WASM artifacts found in $(WASM_DIR) — run 'make build' first" >&2; \
 		exit 1; \
 	fi; \
-	for f in "${wasms[@]}"; do; \
+	for f in "$${wasms[@]}"; do \
 		echo "optimizing $$f"; \
 		stellar contract optimize --wasm "$$f"; \
 	done
@@ -58,10 +58,10 @@ fuzz-amm: ## Build AMM WASM and run the deployed stateful invariant suite (CI ca
 	PROPTEST_CASES=$${PROPTEST_CASES:-256} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
 
 fuzz-amm-nightly: ## Run 10,000 deployed AMM state-machine cases
-	cargo build --release --target wasm32v1-none -p amm -0 token
+	cargo build --release --target wasm32v1-none -p amm -p token
 	PROPTEST_CASES=$${PROPTEST_CASES:-10000} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
 
-fuzz-cl: ## Build the wasm deps mm_fuzz imports, then run the full amm_fuzz suite incl CL stateful properties
+fuzz-cl: ## Build the wasm deps amm_fuzz imports, then run the full amm_fuzz suite incl. CL stateful properties
 	cargo build --release --target wasm32v1-none -p concentrated_liquidity -p amm -p token
 	cargo test -p amm_fuzz --features cl
 
@@ -80,8 +80,8 @@ check-node-versions: ## Verify every JS package's @types/node and engines.node m
 check-docs: ## Verify docs/error-codes.md matches #[contracterror] enums
 	bash scripts/check_error_docs.sh
 
-check-branch-protection: ## Verify BRANCH_PROTECTION.md lists match ci.yml job names
-	node scripts/check_branch_protection_doc.mjs
+check-branch-protection: ## Verify BRANCH_PROTECTION.md lists match ci.yml job names (ARGS="--write" regenerates)
+	node scripts/check_branch_protection_doc.mjs $(ARGS)
 
 check-branch-protection-remote: ## Verify the live branch protection against ci.yml (needs admin scope)
 	node scripts/check_branch_protection_doc.mjs --verify-remote
@@ -99,7 +99,7 @@ size-check: ## Fail if any contract WASM exceeds the size limit
 	bash scripts/size_report.sh --fail-on-limit
 
 doc: ## Build workspace docs with warnings denied
-	RUSTDOCSFLAGS="-D warnings" cargo doc --no-deps --workspace
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
 
 audit: ## Run a security audit of dependencies (cargo install cargo-audit if missing)
 	@command -v cargo-audit >/dev/null 2>&1 || { \

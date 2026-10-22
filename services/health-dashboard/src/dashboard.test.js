@@ -36,6 +36,11 @@ function setupRefreshTestDom() {
   return doc;
 }
 
+/** All text a fake element renders: its own text/HTML plus every descendant's. */
+function renderedText(el) {
+  return [el.innerHTML, el.textContent, ...el.children.map(renderedText)].join(" ");
+}
+
 test("formats millions", () => assert.equal(formatMetric(1_250_000), "1.25M"));
 test("formats thousands", () => assert.equal(formatMetric(12_500), "12.5K"));
 test("formats small metrics", () => assert.equal(formatMetric(12.5), "12.50"));
@@ -245,18 +250,24 @@ test("renderEvents shows an empty state for no events", () => {
   }
 });
 
-test("renderHistory draws one bar per point, scaled to the maximum price", () => {
+test("renderHistory draws an axis label and one min/max range bar per point", () => {
   const doc = installFakeDocument(["price-chart"]);
   renderHistory([
     { poolId: "p", timestamp: Date.now(), price: 1, feeBps: 30 },
     { poolId: "p", timestamp: Date.now(), price: 2, feeBps: 30 },
   ]);
   const chart = doc.getElementById("price-chart");
-  assert.equal(chart.children.length, 2);
-  // The tallest bar is the max price; the other is proportionally shorter.
-  assert.equal(chart.children[1].style.height, "136px");
-  assert.equal(chart.children[0].style.height, "68px");
-  assert.ok(chart.children[0].title.includes("1.000000"));
+  // Axis label first, then one bar per point (each point is its own bucket).
+  assert.equal(chart.children.length, 3);
+  assert.ok(chart.children[0].textContent.includes("Range:"));
+  const [, low, high] = chart.children;
+  // A single-price bucket has no range, so it gets the 2px minimum height and
+  // is positioned by its price against a chart that is baselined at zero.
+  assert.equal(low.style.height, "2px");
+  assert.equal(high.style.height, "2px");
+  assert.equal(high.style.marginTop, "0px");
+  assert.equal(low.style.marginTop, "68px");
+  assert.ok(low.title.includes("1.000000"));
 });
 
 test("renderHistory shows an empty state for no history", () => {
@@ -553,7 +564,8 @@ test("formatTokenAmount scales by decimals and adds symbol", () => {
 });
 
 test("formatMetricWithUnit formats with K/M suffixes", () => {
-  assert.equal(formatMetricWithUnit(10_000_000_000, "tokens", 7), "1.00M tokens");
+  assert.equal(formatMetricWithUnit(10_000_000_000_000, "tokens", 7), "1.00M tokens");
+  assert.equal(formatMetricWithUnit(10_000_000_000, "tokens", 7), "1.0K tokens");
   assert.equal(formatMetricWithUnit(10_000_000, "tokens", 7), "1.00 tokens");
   assert.equal(formatMetricWithUnit(1_000_000_000, "tokens", 7), "100.00 tokens");
 });
@@ -566,10 +578,11 @@ test("renderPoolsOverview creates a table with all pools", () => {
   ];
   renderPoolsOverview(stats);
   const grid = doc.getElementById("metrics-grid");
-  assert.ok(grid.innerHTML.includes("pool-a"));
-  assert.ok(grid.innerHTML.includes("pool-b"));
-  assert.ok(grid.innerHTML.includes("AAA"));
-  assert.ok(grid.innerHTML.includes("CCC"));
+  const html = renderedText(grid);
+  assert.ok(html.includes("pool-a"));
+  assert.ok(html.includes("pool-b"));
+  assert.ok(html.includes("AAA"));
+  assert.ok(html.includes("CCC"));
 });
 
 test("renderPoolsOverview shows empty state when no stats", () => {
@@ -584,7 +597,7 @@ test("renderStats with no poolId calls renderPoolsOverview", () => {
   const stats = [{ poolId: "pool-a", tokenA: "AAA", tokenB: "BBB", tvl: 10_000_000, volume24h: 5_000_000, fees24h: 100_000, swapCount: 100, priceDeviationBps: 50 }];
   renderStats(stats, "");
   const grid = doc.getElementById("metrics-grid");
-  assert.ok(grid.innerHTML.includes("pool-a"));
+  assert.ok(renderedText(grid).includes("pool-a"));
 });
 
 test("renderStats with poolId shows single-pool metrics without dollar signs", () => {
@@ -609,7 +622,7 @@ test("renderHistory downsamples to at most 200 buckets", () => {
   renderHistory(history);
   const chart = doc.getElementById("price-chart");
   // Should have axis label + at most 200 bars
-  assert.ok(chart.innerHTML.includes("Range:"));
+  assert.ok(chart.children[0].textContent.includes("Range:"));
   const barCount = chart.children.length - 1; // minus axis label
   assert.ok(barCount <= 200);
 });
@@ -621,9 +634,9 @@ test("renderHistory adds axis label with price range", () => {
     { poolId: "p", timestamp: Date.now(), price: 2, feeBps: 30 },
   ]);
   const chart = doc.getElementById("price-chart");
-  assert.ok(chart.innerHTML.includes("Range:"));
-  assert.ok(chart.innerHTML.includes("1.000000"));
-  assert.ok(chart.innerHTML.includes("2.000000"));
+  const label = chart.children[0].textContent;
+  // The axis is baselined at zero, so the range runs from 0 to the max price.
+  assert.equal(label, "Range: 0.000000 - 2.000000");
 });
 
 test("renderHealth uses configured threshold for deviation gauge color", () => {

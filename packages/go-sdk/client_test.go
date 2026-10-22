@@ -368,6 +368,9 @@ func TestDecodeContractErrorCoversEveryDiscriminant(t *testing.T) {
 		13: ErrWrongAdmin, 14: ErrReentrant, 15: ErrCircuitBreaker,
 		16: ErrFotSlippage, 17: ErrOracleDeviationExceeded, 18: ErrFlashLoanRepaymentFailed,
 		19: ErrAlreadyExecuted, 20: ErrProposalExpired, 21: ErrNotInitialized,
+		22: ErrPoolDrained, 23: ErrQuorumNotMet, 24: ErrNoPendingProposal,
+		25: ErrQuorumNotReached, 26: ErrInvalidQuorum, 27: ErrEmergencyDelayNotElapsed,
+		28: ErrInvalidRecipient, 29: ErrMultisigGuardActive, 30: ErrInvalidEmergencyDelay,
 	}
 	for code, sentinel := range want {
 		raw := "HostError: Error(Contract, #" + itoa(code) + ")"
