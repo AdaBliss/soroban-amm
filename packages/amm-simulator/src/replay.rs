@@ -1,4 +1,4 @@
-use crate::pool::{LiquidityQuote, PoolState, SwapQuote, SwapResult};
+use crate::pool::{LiquidityQuote, OneSidedLiquidityQuote, PoolState, SwapQuote, SwapResult};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -29,6 +29,10 @@ pub enum TradeAction {
         #[serde(default)]
         min_b: i128,
     },
+    RemoveLiquidityOneSided { shares: i128, token_out: String, #[serde(default)] min_out: i128 },
+    SetFees { fee_bps: i128, protocol_fee_bps: i128, #[serde(default)] lp_rebate_bps: i128 },
+    Pause,
+    Unpause,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -83,11 +87,13 @@ pub(crate) struct FlatTradeRecord {
     pub min_a: Option<i128>,
     #[serde(default)]
     pub min_b: Option<i128>,
+    #[serde(default)] pub fee_bps: Option<i128>,
+    #[serde(default)] pub protocol_fee_bps: Option<i128>,
+    #[serde(default)] pub lp_rebate_bps: Option<i128>,
 }
 
 impl FlatTradeRecord {
-    /// Returns `Err` with the offending discriminator if `kind` is not one of
-    /// the four supported trade kinds.
+    /// Returns `Err` with the offending discriminator if `kind` is unsupported.
     pub(crate) fn into_record(self) -> std::result::Result<TradeRecord, String> {
         let action = match self.kind.as_str() {
             "swap_exact_in" => TradeAction::SwapExactIn {
@@ -110,6 +116,18 @@ impl FlatTradeRecord {
                 min_a: self.min_a.unwrap_or_default(),
                 min_b: self.min_b.unwrap_or_default(),
             },
+            "remove_liquidity_one_sided" => TradeAction::RemoveLiquidityOneSided {
+                shares: self.shares.unwrap_or_default(),
+                token_out: self.token_out.unwrap_or_default(),
+                min_out: self.min_out.unwrap_or_default(),
+            },
+            "set_fees" => TradeAction::SetFees {
+                fee_bps: self.fee_bps.unwrap_or_default(),
+                protocol_fee_bps: self.protocol_fee_bps.unwrap_or_default(),
+                lp_rebate_bps: self.lp_rebate_bps.unwrap_or_default(),
+            },
+            "pause" => TradeAction::Pause,
+            "unpause" => TradeAction::Unpause,
             other => return Err(other.to_string()),
         };
 
@@ -143,6 +161,8 @@ pub struct TradeOutcome {
     pub exact_out: Option<SwapResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub liquidity: Option<LiquidityQuote>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub one_sided_liquidity: Option<OneSidedLiquidityQuote>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

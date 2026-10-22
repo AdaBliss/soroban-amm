@@ -21,7 +21,7 @@ pub use cli::{run, Cli};
 pub use engine::{AmmSimulator, SimulationStep};
 pub use error::SimulationError;
 pub use monte_carlo::{MonteCarloConfig, MonteCarloReport};
-pub use pool::{LiquidityQuote, PoolState, SwapQuote, SwapResult};
+pub use pool::{LiquidityQuote, OneSidedLiquidityQuote, PoolState, SwapQuote, SwapResult};
 pub use replay::{ReplayReport, ReplaySummary, TradeAction, TradeOutcome, TradeRecord};
 
 pub use io::{load_pool_state, load_trade_records, save_json_pretty};

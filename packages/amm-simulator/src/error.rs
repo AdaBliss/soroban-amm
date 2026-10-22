@@ -16,6 +16,8 @@ pub enum SimulationError {
     DeadlineExceeded { deadline: u64 },
     #[error("pool is paused")]
     Paused,
+    #[error("replay completed with {0} failed trade(s)")]
+    FailedTrades(usize),
     #[error("{0}")]
     InvalidInput(String),
     #[error("invalid fee bps {fee_bps}")]

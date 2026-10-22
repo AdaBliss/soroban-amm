@@ -32,4 +32,6 @@ thiserror = "2"
 [dev-dependencies]
 # `tests/cl_swap_parity.rs` runs the real contract next to the simulator.
 concentrated_liquidity = { path = "../../contracts/concentrated_liquidity", features = ["testutils"] }
+amm = { path = "../../contracts/amm", features = ["testutils"] }
+token = { path = "../../contracts/token", features = ["testutils"] }
 soroban-sdk = { workspace = true, features = ["testutils"] }

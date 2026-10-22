@@ -624,6 +624,52 @@ impl PoolState {
         Ok(quote)
     }
 
+    /// Redeem LP shares into one token, mirroring the V2 contract's internal
+    /// swap of the other proportional withdrawal amount.
+    pub fn execute_remove_liquidity_one_sided(
+        &mut self,
+        shares: i128,
+        token_out: &str,
+        min_out: i128,
+    ) -> Result<OneSidedLiquidityQuote> {
+        if self.paused { return Err(SimulationError::Paused); }
+        if shares <= 0 { return Err(SimulationError::ZeroAmount); }
+        if token_out != self.token_a && token_out != self.token_b {
+            return Err(SimulationError::InvalidToken { token: token_out.to_string() });
+        }
+        let withdrawal = self.quote_remove_liquidity(shares)?;
+        let (amount_keep, amount_swap) = if token_out == self.token_a {
+            (withdrawal.amount_a, withdrawal.amount_b)
+        } else {
+            (withdrawal.amount_b, withdrawal.amount_a)
+        };
+        let reserve_a = self.reserve_a.checked_sub(withdrawal.amount_a).ok_or(SimulationError::Overflow)?;
+        let reserve_b = self.reserve_b.checked_sub(withdrawal.amount_b).ok_or(SimulationError::Overflow)?;
+        let amount_after_fee = amount_swap.checked_mul(BPS_DENOMINATOR - self.fee_bps).ok_or(SimulationError::Overflow)?;
+        let (reserve_in, reserve_out) = if token_out == self.token_a { (reserve_b, reserve_a) } else { (reserve_a, reserve_b) };
+        if reserve_in <= 0 || reserve_out <= 0 { return Err(SimulationError::EmptyPool); }
+        let swap_output = amount_after_fee.checked_mul(reserve_out).ok_or(SimulationError::Overflow)?
+            / reserve_in.checked_mul(BPS_DENOMINATOR).ok_or(SimulationError::Overflow)?
+                .checked_add(amount_after_fee).ok_or(SimulationError::Overflow)?;
+        let protocol_fee = self.protocol_fee(amount_swap)?;
+        let rebate = self.lp_rebate(protocol_fee)?;
+        let net_protocol_fee = protocol_fee.checked_sub(rebate).ok_or(SimulationError::Overflow)?;
+        let total_out = amount_keep.checked_add(swap_output).ok_or(SimulationError::Overflow)?;
+        if total_out < min_out { return Err(SimulationError::SlippageExceeded); }
+        self.apply_checkpoint()?;
+        if token_out == self.token_a {
+            self.reserve_a = reserve_a.checked_sub(swap_output).ok_or(SimulationError::Overflow)?;
+            self.reserve_b = reserve_b.checked_add(amount_swap).and_then(|v| v.checked_sub(net_protocol_fee)).ok_or(SimulationError::Overflow)?;
+            self.accrued_fee_b = self.accrued_fee_b.checked_add(net_protocol_fee).ok_or(SimulationError::Overflow)?;
+        } else {
+            self.reserve_a = reserve_a.checked_add(amount_swap).and_then(|v| v.checked_sub(net_protocol_fee)).ok_or(SimulationError::Overflow)?;
+            self.reserve_b = reserve_b.checked_sub(swap_output).ok_or(SimulationError::Overflow)?;
+            self.accrued_fee_a = self.accrued_fee_a.checked_add(net_protocol_fee).ok_or(SimulationError::Overflow)?;
+        }
+        self.total_shares = self.total_shares.checked_sub(shares).ok_or(SimulationError::Overflow)?;
+        Ok(OneSidedLiquidityQuote { token_out: token_out.to_string(), shares, amount_keep, amount_swapped: amount_swap, swap_output, total_out, protocol_fee, net_protocol_fee })
+    }
+
     fn apply_checkpoint(&mut self) -> Result<()> {
         // The simulator keeps the TWAP accumulator consistent with the contract
         // by checkpointing at the current timestamp before every state change.
@@ -705,6 +751,18 @@ pub struct LiquidityQuote {
     pub amount_b: i128,
     pub shares: i128,
     pub pool_ratio: i128,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct OneSidedLiquidityQuote {
+    pub token_out: String,
+    pub shares: i128,
+    pub amount_keep: i128,
+    pub amount_swapped: i128,
+    pub swap_output: i128,
+    pub total_out: i128,
+    pub protocol_fee: i128,
+    pub net_protocol_fee: i128,
 }
 
 fn isqrt(n: i128) -> i128 {

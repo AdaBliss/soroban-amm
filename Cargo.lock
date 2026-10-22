@@ -1796,6 +1796,7 @@ dependencies = [
 name = "soroban_amm_simulator"
 version = "0.1.0"
 dependencies = [
+ "amm",
  "clap",
  "concentrated_liquidity",
  "csv",
@@ -1805,6 +1806,7 @@ dependencies = [
  "serde_json",
  "soroban-sdk",
  "thiserror 2.0.21",
+ "token",
 ]
 
 [[package]]

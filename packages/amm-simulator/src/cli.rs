@@ -2,6 +2,7 @@ use crate::engine::AmmSimulator;
 use crate::error::{Result, SimulationError};
 use crate::io::{load_pool_state, load_trade_records};
 use crate::monte_carlo::{MonteCarloConfig, MonteCarloReport};
+use crate::cl::ClPoolState;
 use clap::{Args, Parser, Subcommand};
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -21,6 +22,10 @@ pub enum Commands {
     Replay(ReplayArgs),
     /// Run a Monte Carlo stress test against a trade log.
     MonteCarlo(MonteCarloArgs),
+    /// Quote a concentrated-liquidity swap from a ClPoolState JSON file.
+    ClQuote(ClQuoteArgs),
+    /// Replay concentrated-liquidity swaps from JSON.
+    ClReplay(ClReplayArgs),
 }
 
 #[derive(Args, Debug)]
@@ -43,6 +48,8 @@ pub struct QuoteArgs {
     /// Pretty-print JSON output.
     #[arg(long, default_value_t = false)]
     pub pretty: bool,
+    #[arg(long, conflicts_with = "pretty")]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug)]
@@ -53,9 +60,11 @@ pub struct ReplayArgs {
     /// JSON or CSV trade log.
     #[arg(long)]
     pub trades: PathBuf,
-    /// Pretty-print JSON output.
-    #[arg(long, default_value_t = true)]
+    /// Emit indented JSON (compact JSON is the default).
+    #[arg(long)]
     pub pretty: bool,
+    #[arg(long, conflicts_with = "pretty")]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug)]
@@ -78,9 +87,32 @@ pub struct MonteCarloArgs {
     /// RNG seed for reproducible runs.
     #[arg(long, default_value_t = 0)]
     pub seed: u64,
-    /// Pretty-print JSON output.
-    #[arg(long, default_value_t = true)]
+    /// Emit indented JSON (compact JSON is the default).
+    #[arg(long)]
     pub pretty: bool,
+    #[arg(long, conflicts_with = "pretty")]
+    pub compact: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ClQuoteArgs {
+    /// JSON file containing a serialized ClPoolState.
+    #[arg(long)] pub pool: PathBuf,
+    /// Direction: token A for token B.
+    #[arg(long)] pub zero_for_one: bool,
+    #[arg(long)] pub amount_in: i128,
+    /// Sqrt price Q64.96 limit; zero means no limit.
+    #[arg(long, default_value_t = 0)] pub sqrt_price_limit_x96: i128,
+    #[arg(long, default_value_t = 0)] pub min_out: i128,
+    #[arg(long)] pub pretty: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ClReplayArgs {
+    #[arg(long)] pub pool: PathBuf,
+    /// JSON array of {zero_for_one, amount_in, sqrt_price_limit_x96, min_out}.
+    #[arg(long)] pub swaps: PathBuf,
+    #[arg(long)] pub pretty: bool,
 }
 
 pub fn run() -> Result<()> {
@@ -89,6 +121,8 @@ pub fn run() -> Result<()> {
         Commands::Quote(args) => quote(args),
         Commands::Replay(args) => replay(args),
         Commands::MonteCarlo(args) => monte_carlo(args),
+        Commands::ClQuote(args) => cl_quote(args),
+        Commands::ClReplay(args) => cl_replay(args),
     }
 }
 
@@ -100,6 +134,7 @@ fn quote(args: QuoteArgs) -> Result<()> {
         token_out,
         amount_out,
         pretty,
+        compact: _,
     } = args;
     let pool = load_pool_state(&pool)?;
     let stdout = io::stdout();
@@ -108,16 +143,16 @@ fn quote(args: QuoteArgs) -> Result<()> {
     if let (Some(token_in), Some(amount_in)) = (token_in, amount_in) {
         let quote = pool.quote_swap_exact_in(&token_in, amount_in)?;
         if pretty {
-            serde_json::to_writer_pretty(&mut handle, &quote).unwrap();
+            write_json(&mut handle, &quote, true)?;
         } else {
-            serde_json::to_writer(&mut handle, &quote).unwrap();
+            write_json(&mut handle, &quote, false)?;
         }
     } else if let (Some(token_out), Some(amount_out)) = (token_out, amount_out) {
         let quote = pool.quote_swap_exact_out(&token_out, amount_out)?;
         if pretty {
-            serde_json::to_writer_pretty(&mut handle, &quote).unwrap();
+            write_json(&mut handle, &quote, true)?;
         } else {
-            serde_json::to_writer(&mut handle, &quote).unwrap();
+            write_json(&mut handle, &quote, false)?;
         }
     } else {
         return Err(SimulationError::InvalidInput(
@@ -125,7 +160,6 @@ fn quote(args: QuoteArgs) -> Result<()> {
         ));
     }
 
-    writeln!(&mut handle).ok();
     Ok(())
 }
 
@@ -137,12 +171,15 @@ fn replay(args: ReplayArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     if args.pretty {
-        serde_json::to_writer_pretty(&mut handle, &report).unwrap();
+        write_json(&mut handle, &report, true)?;
     } else {
-        serde_json::to_writer(&mut handle, &report).unwrap();
+        write_json(&mut handle, &report, false)?;
     }
-    writeln!(&mut handle).ok();
-    Ok(())
+    if report.summary.failed_trades > 0 {
+        Err(SimulationError::FailedTrades(report.summary.failed_trades))
+    } else {
+        Ok(())
+    }
 }
 
 fn monte_carlo(args: MonteCarloArgs) -> Result<()> {
@@ -161,10 +198,40 @@ fn monte_carlo(args: MonteCarloArgs) -> Result<()> {
     let stdout = io::stdout();
     let mut handle = stdout.lock();
     if args.pretty {
-        serde_json::to_writer_pretty(&mut handle, &report).unwrap();
+        write_json(&mut handle, &report, true)?;
     } else {
-        serde_json::to_writer(&mut handle, &report).unwrap();
+        write_json(&mut handle, &report, false)?;
     }
-    writeln!(&mut handle).ok();
     Ok(())
+}
+
+fn write_json<T: serde::Serialize>(out: &mut impl Write, value: &T, pretty: bool) -> Result<()> {
+    let bytes = if pretty { serde_json::to_vec_pretty(value) } else { serde_json::to_vec(value) }
+        .map_err(|e| SimulationError::InvalidInput(e.to_string()))?;
+    match out.write_all(&bytes).and_then(|_| out.write_all(b"\n")) {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(source) => Err(SimulationError::Io { path: "stdout".into(), source }),
+        Ok(()) => Ok(()),
+    }
+}
+
+fn cl_quote(args: ClQuoteArgs) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Output<'a> { result: &'a crate::cl::ClSwapResult, pool: &'a ClPoolState }
+    let text = std::fs::read_to_string(&args.pool).map_err(|source| SimulationError::Io { path: args.pool.display().to_string(), source })?;
+    let mut pool: ClPoolState = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: args.pool.display().to_string(), source })?;
+    let result = pool.swap(args.zero_for_one, args.amount_in, args.sqrt_price_limit_x96, args.min_out)?;
+    let mut out = io::stdout().lock(); write_json(&mut out, &Output { result: &result, pool: &pool }, args.pretty)
+}
+
+fn cl_replay(args: ClReplayArgs) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Output<'a> { results: &'a [crate::cl::ClSwapResult], pool: &'a ClPoolState }
+    #[derive(serde::Deserialize)] struct Swap { zero_for_one: bool, amount_in: i128, #[serde(default)] sqrt_price_limit_x96: i128, #[serde(default)] min_out: i128 }
+    let p = args.pool; let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io { path: p.display().to_string(), source })?;
+    let mut pool: ClPoolState = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: p.display().to_string(), source })?;
+    let p = args.swaps; let text = std::fs::read_to_string(&p).map_err(|source| SimulationError::Io { path: p.display().to_string(), source })?;
+    let swaps: Vec<Swap> = serde_json::from_str(&text).map_err(|source| SimulationError::Json { path: p.display().to_string(), source })?;
+    let mut results = Vec::new(); for s in swaps { results.push(pool.swap(s.zero_for_one, s.amount_in, s.sqrt_price_limit_x96, s.min_out)?); }
+    let mut out = io::stdout().lock(); write_json(&mut out, &Output { results: &results, pool: &pool }, args.pretty)
 }
