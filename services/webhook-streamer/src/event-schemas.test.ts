@@ -34,7 +34,7 @@ function versioned(version: number, items: unknown[]): string {
 
 /** Plain numbers become i64 (decoded as strings); pass an ScVal for a narrower type. */
 function toScVal(item: unknown): xdr.ScVal {
-  return item instanceof xdr.ScVal ? item : nativeToScVal(item);
+  return item instanceof xdr.ScVal ? (item as xdr.ScVal) : nativeToScVal(item);
 }
 
 /** A payload published without the version envelope. */

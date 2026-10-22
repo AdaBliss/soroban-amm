@@ -35,8 +35,9 @@ if not os.path.exists(doc_file):
     sys.exit(1)
 
 # 1. Parse all #[contracterror] enums from Rust files under contracts/
-rs_files = glob.glob(os.path.join(contracts_dir, '**', '*.rs'), recursive=True)
+rs_files = sorted(glob.glob(os.path.join(contracts_dir, '**', '*.rs'), recursive=True))
 code_enums = {}
+conflicts = []
 
 for path in rs_files:
     with open(path, 'r', encoding='utf-8') as f:
@@ -55,10 +56,22 @@ for path in rs_files:
                 v_match = re.match(r'(\w+)\s*=\s*(\d+)', line)
                 if v_match:
                     variants[v_match.group(1)] = int(v_match.group(2))
-            code_enums[enum_name] = {
-                'file': os.path.relpath(path, root_dir),
-                'variants': variants
-            }
+            rel_path = os.path.relpath(path, root_dir)
+            if enum_name not in code_enums:
+                code_enums[enum_name] = {'file': rel_path, 'variants': variants}
+                continue
+            # The same enum name can be declared more than once, e.g. a
+            # client-side mirror that only lists the variants a caller needs.
+            # Merge them instead of letting the last file read win, and flag
+            # any variant the copies disagree on.
+            known = code_enums[enum_name]
+            for var, code_val in variants.items():
+                if known['variants'].get(var, code_val) != code_val:
+                    conflicts.append(
+                        f"`{enum_name}::{var}` is {known['variants'][var]} in {known['file']} "
+                        f"but {code_val} in {rel_path}"
+                    )
+                known['variants'].setdefault(var, code_val)
 
 # 2. Parse docs/error-codes.md
 with open(doc_file, 'r', encoding='utf-8') as f:
@@ -90,7 +103,7 @@ for line in lines:
         doc_enums[current_enum][symbol_val] = code_val
 
 # 3. Validate code vs docs
-errors = []
+errors = [f"Conflicting definitions: {c}" for c in conflicts]
 
 for enum_name, data in code_enums.items():
     code_vars = data['variants']
