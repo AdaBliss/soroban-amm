@@ -1,1 +1,454 @@
-IyBBTU0gUG9vbCBNYW5hZ2VtZW50IEJlc3QgUHJhY3RpY2VzCgpBIGNvbXByZWhlbnNpdmUgZ3VpZGUgZm9yIGRlcGxveWluZywgY29uZmlndXJpbmcsIGFuZCBvcGVyYXRpbmcgQU1NIHBvb2xzIG9uIFNvcm9iYW4uCgotLS0KCiMjIDEuIEZlZSBUaWVyIFNlbGVjdGlvbgoKQ2hvb3NpbmcgdGhlIHJpZ2h0IGZlZSB0aWVyIGlzIHRoZSBzaW5nbGUgbW9zdCBpbXBhY3RmdWwgY29uZmlndXJhdGlvbiBkZWNpc2lvbi4gVGhlIHBvb2wgZmVlIChgZmVlX2Jwc2ApIGlzIHNldCBhdCBpbml0aWFsaXphdGlvbiBhbmQgY2FuIG9ubHkgYmUgY2hhbmdlZCBsYXRlciB2aWEgZ292ZXJuYW5jZS4KCnwgRmVlIChicHMpIHwgRmVlICglKSB8IEJlc3QgZm9yIHwKfC0tLXwtLS18LS0tfAp8IDEgfCAwLjAxJSB8IFBlZ2dlZCBwYWlycyAoZS5nLiBVU0RDL1VTRFQpIOKAlCBtaW5pbWFsIHNsaXBwYWdlLCBoaWdoIHZvbHVtZSB8CnwgNSB8IDAuMDUlIHwgSGlnaGx5IGNvcnJlbGF0ZWQgYXNzZXRzIChlLmcuIHN0YWJsZWNvaW4gdmFyaWFudHMpIHwKfCAzMCB8IDAuMzAlIHwgU3RhbmRhcmQgdm9sYXRpbGUgcGFpcnMgKGUuZy4gWExNL1VTREMpIOKAlCB0aGUgbW9zdCBjb21tb24gY2hvaWNlIHwKfCAxMDAgfCAxLjAwJSB8IEV4b3RpYyBvciBsb3ctbGlxdWlkaXR5IHBhaXJzIHdpdGggaGlnaCBwcmljZSB2b2xhdGlsaXR5IHwKCioqUnVsZXMgb2YgdGh1bWI6KioKLSBTdGFydCB3aXRoIDMwIGJwcyBmb3IgYW55IG5ldyB2b2xhdGlsZSBwYWlyLiBJdCBtYXRjaGVzIHRoZSBtYXJrZXQgZXhwZWN0YXRpb24gYW5kIGF0dHJhY3RzIHRoZSBtb3N0IGludGVncmF0b3JzLgotIFVzZSA1IGJwcyBvbmx5IHdoZW4gYm90aCB0b2tlbnMgdHJhY2sgdGhlIHNhbWUgdW5kZXJseWluZyAoZS5nLiB0d28gVVNEIHN0YWJsZWNvaW5zKS4gSGlnaGVyIGZlZXMgd2lsbCBkcml2ZSB2b2x1bWUgdG8gY29tcGV0aXRvcnMuCi0gVXNlIDEwMCBicHMgd2hlbiB0aGUgcGFpciBoYXMgdGhpbiBsaXF1aWRpdHkgYW5kIGxhcmdlIHByaWNlIHN3aW5ncy4gVGhlIGhpZ2hlciBmZWUgY29tcGVuc2F0ZXMgTFBzIGZvciBpbXBlcm1hbmVudCBsb3NzLgotIGBwcm90b2NvbF9mZWVfYnBzYCBtdXN0IGFsd2F5cyBiZSDiiaQgYGZlZV9icHNgLiBBIGNvbW1vbiBzcGxpdCBpcyBgZmVlX2JwcyA9IDMwYCwgYHByb3RvY29sX2ZlZV9icHMgPSA1YCAoNSBicHMgdG8gdGhlIHByb3RvY29sLCAyNSBicHMgdG8gTFBzKS4KCioqQ2hhbmdpbmcgZmVlcyBwb3N0LWRlcGxveW1lbnQ6KioKCkZlZXMgY2FuIGJlIHVwZGF0ZWQgdmlhIGB1cGRhdGVfZmVlYCAoYWRtaW4tb25seSkgb3IgdGhyb3VnaCBhIGdvdmVybmFuY2UgYFVwZGF0ZUZlZWAgcHJvcG9zYWwuIEFsd2F5cyBzaW11bGF0ZSB0aGUgaW1wYWN0IGJlZm9yZSBleGVjdXRpbmc6CgpgYGBzaAojIFJlYWQgY3VycmVudCBmZWUKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS0gZ2V0X2luZm8KCiMgUHJvcG9zZSBhIGZlZSBjaGFuZ2UgdmlhIGdvdmVybmFuY2UKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8R09WRVJOQU5DRT4gLS1zb3VyY2UgPFBST1BPU0VSPiBcCiAgLSBwcm9wb3NlIFwKICAtLXByb3Bvc2VyIDxQUk9QT1NFUl9BRERSRVNTPiBcCiAgLS1raW5kICd7IlVwZGF0ZUZlZSI6IDIwfScKYGBgCgotLS0KCiMjIDIuIFBvb2wgSW5pdGlhbGl6YXRpb24gQ2hlY2tsaXN0CgpCZWZvcmUgY2FsbGluZyBgaW5pdGlhbGl6ZWAsIHZlcmlmeToKCjEuIEJvdGggdG9rZW4gY29udHJhY3RzIGFyZSBkZXBsb3llZCBhbmQgU0VQLTQxIGNvbXBsaWFudC4KMi4gVGhlIExQIHRva2VuIGNvbnRyYWN0IGlzIGRlcGxveWVkIHdpdGggdGhlIEFNTSBwb29sIGFkZHJlc3MgYXMgaXRzIGFkbWluLgozLiBgdG9rZW5fYSAhPSB0b2tlbl9iYC4KNC4gYGZlZV9icHNgIGlzIGluIGBbMCwgMTBfMDAwXWAuCjUuIGBwcm90b2NvbF9mZWVfYnBzYCBpcyBpbiBgWzAsIGZlZV9icHNdYC4KNi4gVGhlIGBmZWVfcmVjaXBpZW50YCBhZGRyZXNzIGlzIGEgbXVsdGlzaWcgb3IgYSBjb250cmFjdCDigJQgbm90IGEgc2luZ2xlIGhvdCB3YWxsZXQuCjcuIFRoZSBgYWRtaW5gIGFkZHJlc3MgaXMgYSBtdWx0aXNpZyBvciBhIGdvdmVybmFuY2UgY29udHJhY3QgZm9yIHByb2R1Y3Rpb24gZGVwbG95bWVudHMuCjguIFRoZSBlbWVyZ2VuY3kgZGVsYXkgKGBFTUVSR0VOQ1lfREVMAVlfU0VDU2ApIGlzIHNldCB0byBhIHZhbHVlIHRoYXQgZ2l2ZXMgTFBzIHRpbWUgdG8gcmVhY3QgKGRlZmF1bHQgMjQgaCwgY2FwIDcgZGF5cykuCgpgYGBzaAojIEluaXRpYWxpemUgdmlhIGZhY3RvcnkgKHJlY29tbWVuZGVkKQpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxGQUNUT1JZPiAtLXNvdXJjZSA8QURNSU4+IFwKICAtLSBjcmVhdGVfcG9vbCBcCiAgLS10b2tlbl9hIDxUT0tFTl9BPiBcCiAgLS10b2tlbl9iIDxUT0tFTl9CPiBcCiAgLS1mZWVfYnBzIDMwCgojIE9yIG1hbnVhbGx5CnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPFBPT0w+IC0tc291cmNlIDxBRE1JTj4gXAogIC0taW5pdGlhbGl6ZSBcCiAgLS1hZG1pbiA8QURNSU5fQUREUkVTUz4gXAogIC0tdG9rZW5fYSA8VE9LRU5fQT4gXAogIC0tdG9rZW5fYiA8VE9LRU5fQj4gXAogIC0tbHBfdG9rZW4gPExQX1RPS0VOPiBcCiAgLS1mZWVfYnBzIDMwIFwKICAtLWZlZV9yZWNpcGllbnQgPEZFRV9SRUNJUElFTlQ+IFwKICAtLXByb3RvY29sX2ZlZV9icHMgNSBcCiAgLS1lbWVyZ2VuY3lfZGVsYXlfc2VjcyA4NjQwMApgYGAKCi0tLQoKIyMgMy4gTGlxdWlkaXR5IFByb3Zpc2lvbmluZyBTdHJhdGVnaWVzCgojIyMgMy4xIEluaXRpYWwgU2VlZGluZwoKVGhlIGZpcnN0IGRlcG9zaXQgc2V0cyB0aGUgcG9vbCBwcmljZS4gRGVwb3NpdCB0b2tlbnMgaW4gdGhlIHJhdGlvIHRoYXQgcmVmbGVjdHMgdGhlIGN1cnJlbnQgbWFya2V0IHByaWNlLiBJZiBYTE0gdHJhZGVzIGF0IDAuMTAgVVNEQywgc2VlZCB3aXRoIDEwIFhMTSBwZXIgMSBVU0RDLgoKYGBgCkluaXRpYWwgc2hhcmVzID0gc3FydChhbW91bnRfYSAqIGFtb3VudF9iKQpgYGAKCkEgc2VlZCBvZiAxLDAwMCwwMDAgWExNIGFuZCAxMDAsMDAwIFVTREMgeWllbGRzIGBzcXJ0KDFlNiAqIDFlNSkg4omIIDMxNiwyMjciIExQIHNoYXJlcy4KClNldCBgbWluX3NoYXJlcyA9IDBgIG9ubHkgZm9yIHRoZSBpbml0aWFsIGRlcG9zaXQuIEZvciBhbGwgc3Vic2VxdWVudCBkZXBvc2l0cywgY29tcHV0ZSB0aGUgZXhwZWN0ZWQgc2hhcmVzIG9mZi1jaGFpbiBhbmQgc2V0IGEgdGlnaHQgYG1pbl9zaGFyZXNgLgoKIyMjIDMuMiBTdWJzZXF1ZW50IERlcG9zaXRzCgpUaGUgcG9vbCBhY2NlcHRzIGFueSByYXRpbyBidXQgbWludHMgc2hhcmVzIGJhc2VkIG9uIHRoZSAqbGVzc2VyKiBvZiB0aGUgdHdvIHByb3BvcnRpb25hbCBjb250cmlidXRpb25zOgoKYGBgCnNoYXJlcyA9IG1pbigKICAgIGFtb3VudF9hICogdG90YWxfc2hhcmVzIC8gcmVzZXJ2ZV9hLAogICAgYW1vdW50X2IgKiB0b3RhbF9zaGFyZXMgLyByZXNlcnZlX2IKKQpgYGAKCkV4Y2VzcyB0b2tlbnMgYmV5b25kIHRoZSBwb29sIHJhdGlvIGFyZSBhY2NlcHRlZCBidXQgZG8gbm90IGVhcm4gYWRkaXRpb25hbCBzaGFyZXMuIEFsd2F5cyBjb21wdXRlIHRoZSBvcHRpbWFsIHJhdGlvIGJlZm9yZSBkZXBvc2l0aW5nOgoKYGBgdHlwZXNjcmlwdAovLyBDb21wdXRlIG9wdGltYWwgYW1vdW50X2IgZ2l2ZW4gYW1vdW50X2EKY29uc3Qgb3B0aW1hbEIgPSAoYW1vdW50QSAqIHJlc2VydmVCKSAvIHJlc2VydmVBOwpgYGAKCiMjIyAzLjMgU2xpcHBhZ2UgUHJvdGVjdGlvbgoKQWx3YXlzIHNldCBub24temVybyBgbWluX3NoYXJlc2AgZm9yIHByb2R1Y3Rpb24gZGVwb3NpdHMuIEEgMC414oCTMSUgdG9sZXJhbmNlIGlzIHR5cGljYWw6CgpgYGBzaApzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8UFJPVklERVI+IFwKICAtLSBhZGRfbGlxdWlkaXR5IFwKICAtLXByb3ZpZGVyIDxQUk9WSURFUl9BRERSRVNTPiBcCiAgLS1hbW91bnRfYSAxMDAwMDAwIFwKICAtLWFtb3VudF9iIDEwMDAwMDAgXAogIC0tbWluX3NoYXJlcyA5OTAwMDAgXAogIC0tZGVhZGxpbmUgPE5PV19QTFVTXzYwX1NFQ09ORFM+CmBgYAoKIyMjIDMuNCBSZW1vdmluZyBMaXF1aWRpdHkKClVzZSBgcmVtb3ZlX2xpcXVpZGl0eWAgZm9yIHByb3BvcnRpb25hbCB3aXRoZHJhd2FsLiBVc2UgYHJlbW92ZV9saXF1aWRpdHlfb25lX3NpZGVkYCB3aGVuIHlvdSB3YW50IHRvIGV4aXQgaW50byBhIHNpbmdsZSB0b2tlbiDigJQgaXQgcGVyZm9ybXMgYW4gaW50ZXJuYWwgc3dhcCBhbmQgc2F2ZXMgYSBzZXBhcmF0ZSB0cmFuc2FjdGlvbi4KCmBgYHNoCiMgUHJvcG9ydGlvbmFsIHJlbW92YWwKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPFBST1ZJREVSPiBcCiAgLSByZW1vdmVfbGlxdWlkaXR5IFwKICAtLXByb3ZpZGVyIDxQUk9WSURFUl9BRERSRVNTPiBcCiAgLS1zaGFyZXMgPExQX0FNT1VOVD4gXAogIC0tbWluX2EgMCBcCiAgLS1taW5fYiAwIFwKICAtLWRlYWRsaW5lIDxERUFETElORT4KCiMgU2luZ2xlLXRva2VuIGV4aXQgKHJlY2VpdmVzIG9ubHkgdG9rZW5fYSkKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPFBST1ZJREVSPiBcCiAgLSByZW1vdmVfbGlxdWlkaXR5X29uZV9zaWRlZCBcCiAgLS1wcm92aWRlciA8UFJPVklERVJfQUREUkVTUz4gXAogIC0tc2hhcmVzIDxMUF9BTU9VTlQ+IFwKICAtLXRva2VuX291dCA8VE9LRU5fQT4gXAogIC0tbWluX291dCA8TUlOX0FNT1VOVD4gXAogIC0tZGVhZGxpbmUgPERFQURMSU5FPgpgYGAKCi0tLQoKIyMgNC4gUmlzayBNYW5hZ2VtZW50IGZvciBMUHMgCgpQcm92aWRpbmcgbGlxdWlkaXR5IHRvIGFuIEFNTSBwb29sIGV4cG9zZXMgTFBzIHRvIHZhcmlvdXMgcmlza3MsIGluY2x1ZGluZyBpbXBlcm1hbmVudCBsb3NzLCBzbWFydCBjb250cmFjdCByaXNrLCBhbmQgZ292ZXJuYW5jZSByaXNrLiBVbmRlcnN0YW5kaW5nIGFuZCBtaXRpZ2F0aW5nIHRoZXNlIHJpc2tzIGlzIGNydWNpYWwgZm9yIGxvbmctdGVybSBwcm9maXRhYmlsaXR5LgoKIyMjIDQuMSBJbXBlcm1hbmVudCBMb3NzCgpJbXBlcm1hbmVudCBsb3NzIG9jY3VycyB3aGVuIHRoZSBwcmljZSBvZiB0aGUgZGVwb3NpdGVkIHRva2VucyBjaGFuZ2VzIHJlbGF0aXZlIHRvIHdoZW4gdGhleSB3ZXJlIGRlcG9zaXRlZC4gVGhlIGxvc3MgaXMgImltcGVybWFuZW50IiBiZWNhdXNlIGlmIHRoZSBwcmljZSByZXR1cm5zIHRvIHRoZSBvcmlnaW5hbCBsZXZlbCwgdGhlIGxvc3MgaXMgcmVjb3ZlcmVkLiBIb3dldmVyLCBpZiB0aGUgTFAgeWl0aGRyYXdzIGF0IGEgZGlmZmVyZW50IHByaWNlLCB0aGUgbG9zcyBiZWNvbWVzIHBlcm1hbmVudC4KClRoZSBpbXBlcm1hbmVudCBsb3NzIGNhbiBiZSBlc3RpbWF0ZWQgdXNpbmcgdGhlIGZvcm11bGE6CgpgYGAKSUwgPSAyICogc3FydChwcmljZV9yYXRpbykgLyAoMSArIHByaWNlX3JhdGlvKSAtIDEKYGBgCgp3aGVyZSBgcHJpY2VfcmF0aW9gIGlzIHRoZSByYXRpbyBvZiB0aGUgY3VycmVudCBwcmljZSB0byB0aGUgcHJpY2UgYXQgZGVwb3NpdC4KCkZvciBleGFtcGxlLCBpZiB0aGUgcHJpY2Ugb2YgdG9rZW4gQSBkb3VibGVzIHJlbGF0aXZlIHRvIHRva2VuIEIgKHByaWNlX3JhdGlvID0gMiksIHRoZSBpbXBlcm1hbmVudCBsb3NzIGlzIGFwcHJveGltYXRlbHkgNS43JS4KClRvIG1pdGlnYXRlIGltcGVybWFuZW50IGxvc3M6Ci0gQ2hvb3NlIHBhaXJzIHdpdGggbG93IHZvbGF0aWxpdHkgKGUuZy4sIHN0YWJsZWNvaW4gcGFpcnMpLgotIENvbnNpZGVyIHByb3ZpZGluZyBsaXF1aWRpdHkgdG8gcG9vbHMgd2l0aCBjb3JyZWxhdGVkIGFzc2V0cy4KLSBNb25pdG9yIHRoZSBwcmljZSByYXRpbyBhbmQgd2l0aGRyYXcgaWYgdGhlIGltcGVybWFuZW50IGxvc3MgZXhjZWVkcyB5b3VyIHRvbGVyYW5jZS4KCiMjIyA0LjIgU21hcnQgQ29udHJhY3QgUmlzawoKV2hpbGUgdGhlIEFNTSBjb250cmFjdHMgaGF2ZSBiZWVuIGF1ZGl0ZWQsIHRoZXJlIGlzIGFsd2F5cyBhIHJpc2sgb2YgdnVsbmVyYWJpbGl0aWVzIGluIHNtYXJ0IGNvbnRyYWN0cy4gVG8gbWl0aWdhdGUgdGhpcyByaXNrOgotIE9ubHkgaW50ZXJhY3Qgd2l0aCBjb250cmFjdHMgdGhhdCBoYXZlIGJlZW4gYXVkaXRlZCBieSByZXB1dGFibGUgZmlybXMuCi0gQ2hlY2sgdGhlIGNvbnRyYWN0J3MgdXBncmFkZWFiaWxpdHkgZmVhdHVyZXMgYW5kIGVuc3VyZSB0aGF0IHVwZ3JhZGVzIHJlcXVpcmUgZ292ZXJuYW5jZSBhcHByb3ZhbC4KLSBDb25zaWRlciB1c2luZyBhIG11bHRpc2lnIHdhbGxldCBmb3IgbGFyZ2UgTFAgcG9zaXRpb25zIHRvIHJlcXVpcmUgbXVsdGlwbGUgYXBwcm92YWxzIGZvciB0cmFuc2FjdGlvbnMuCgojIyMgNC4zIEdvdmVybmFuY2UgUmlzawoKTFAgdG9rZW4gaG9sZGVycyBoYXZlIGdvdmVybmFuY2UgcmlnaHRzIG92ZXIgdGhlIHBvb2wsIGluY2x1ZGluZyB0aGUgYWJpbGl0eSB0byBjaGFuZ2UgZmVlcyBhbmQgdXBncmFkZSB0aGUgY29udHJhY3QuIEhvd2V2ZXIsIHRoaXMgYWxzbyBtZWFucyB0aGF0IG1hbGljaW91cyBwcm9wb3NhbHMgY291bGQgaGFybSBMUHMuIFRvIG1pdGlnYXRlIGdvdmVybmFuY2UgcmlzazoKLSBQYXJ0aWNpcGF0ZSBpbiBnb3Zlcm5hbmNlIHZvdGVzIHRvIHByb3RlY3QgeW91ciBpbnRlcmVzdHMuCi0gRGVsZWdhdGluZyB5b3VyIHZvdGluZyBwb3dlciB0byBhIHRydXN0ZWQgZW50aXR5IGlmIHlvdSBjYW5ub3QgcGFydGljaXBhdGUgYWN0aXZlbHkuCi0gTW9uaXRvciBnb3Zlcm5hbmNlIHByb3Bvc2FscyBhbmQgdm90ZSBhZ2FpbnN0IHRob3NlIHRoYXQgY291bGQgbmVnYXRpdmVseSBpbXBhY3QgdGhlIHBvb2wuCgojIyMgNC40IE1pdGlnYXRpb24gU3RyYXRlZ2llcwoKT3ZlcmFsbCwgTFBzIGNhbiBhZG9wdCB0aGUgZm9sbG93aW5nIHN0cmF0ZWdpZXMgdG8gbWFuYWdlIHJpc2s6Ci0gRGl2ZXJzaWZ5IGFjcm9zcyBtdWx0aXBsZSBwb29scyBhbmQgYXNzZXQgcGFpcnMuCi0gU3RhcnQgd2l0aCBzbWFsbCBwb3NpdGlvbnMgdG8gdGVzdCB0aGUgcG9vbCdzIHBlcmZvcm1hbmNlLgotIFJlZ3VsYXJseSBtb25pdG9yIHBvb2wgbWV0cmljcyBzdWNoIGFzIHJlc2VydmVzLCB2b2x1bWUsIGFuZCBmZWUgYWNjcnVhbHMuCi0gQ29uc2lkZXIgdXNpbmcgaW5zdXJhbmNlIGZ1bmRzIG9yIGhlZGdpbmcgc3RyYXRlZ2llcyBpZiBhdmFpbGFibGUuCgotLS0KCiMjIDUuIEFkbWluIEtleSBNYW5hZ2VtZW50CgpUaGUgcG9vbCBhZG1pbiBjYW4gcGF1c2UgdGhlIHBvb2wsIHVwZGF0ZSBmZWVzLCBzZXQgdGhlIHByb3RvY29sIGZlZSwgYW5kIGluaXRpYXRlIGNvbnRyYWN0IHVwZ3JhZGVzLiBDb21wcm9taXNlIG9mIHRoZSBhZG1pbiBrZXkgaXMgYSBjcml0aWNhbCBzZWN1cml0eSBldmVudC4KCioqQmVzdCBwcmFjdGljZXM6KioKCi0gVXNlIGEgMi1vZi0zIG11bHRpc2lnIGZvciB0aGUgYWRtaW4gYWRkcmVzcyBvbiBtYWlubmV0LgotIFRyYW5zZmVyIGFkbWluIHRvIGEgZ292ZXJuYW5jZSBjb250cmFjdCBvbmNlIHRoZSBwb29sIGlzIGVzdGFibGlzaGVkLgotIFVzZSB0aGUgdHdvLXN0ZXAgYHByb3Bvc2VfYWRtaW5gIC8gYGFjY2VwdF9hZG1pbmAgcGF0dGVybiBmb3IgYWxsIGFkbWluIHRyYW5zZmVycyDigJQgbmV2ZXIgdHJhbnNmZXIgZGlyZWN0bHkuCgpgYGBzaAojIFN0ZXAgMTogY3VycmVudCBhZG1pbiBub21pbmF0ZXMgYSBuZXcgYWRtaW4Kc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPENVUlJFTlRfQURNSU4+IFwKICAtLSBwcm9wb3NlX2FkbWluIFwKICAtLWN1cnJlbnRfYWRtaW4gPENVUlJFTlRfQURNSU5fQUREUkVTUz4gXAogIC0tbmV3X2FkbWluIDxORVdfQURNSU5fQUREUkVTUz4KCiMgU3RlcCAyOiBuZXcgYWRtaW4gYWNjZXB0cwpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8TkVXX0FETUlOPiBcCiAgLSBhY2NlcHRfYWRtaW4gXAogIC0tbmV3X2FkbWluIDxORVdfQURNSU5fQUREUkVTUz4KYGBgCgotLS0KCiMjIDYuIEdvdmVybmFuY2UgUGFydGljaXBhdGlvbgoKTFAgdG9rZW4gaG9sZGVycyBnb3Zlcm4gdGhlIHBvb2wgdGhyb3VnaCB0aGUgZ292ZXJuYW5jZSBjb250cmFjdC4gUGFydGljaXBhdGlvbiBwcm90ZWN0cyB5b3VyIHBvc2l0aW9uIGZyb20gdW5pbGF0ZXJhbCBmZWUgY2hhbmdlcyBvciBwYXJhbWV0ZXIgdXBkYXRlcy4KCiMjIyA2LjEgUHJvcG9zaW5nIGEgQ2hhbmdlCgpZb3UgbmVlZCBhdCBsZWFzdCBgbWluX3Byb3Bvc2VyX3N0YWtlX2JwcyAvIDEwXzAwMCAqIHRvdGFsX3N1cHBseWAgTFAgdG9rZW5zIHRvIHByb3Bvc2UuCgpgYGBzaAojIENoZWNrIHlvdXIgc3Rha2UgYW5kIHRoZSBtaW5pbXVtIHJlcXVpcmVkCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPEdPVkVSTkFOQ0U+IC0tIGdldF9wYXJhbXMKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS0gc2hhcmVzX29mIC0tcHJvdmlkZXIgPFlPVVJfQUREUkVTUz4KCiMgUHJvcG9zZSBhIGZlZSByZWR1Y3Rpb24gZnJvbSAzMCB0byAyMCBicHMKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8R09WRVJOQU5DRT4gLS1zb3VyY2UgPFBST1BPU0VSPiBcCiAgLSBwcm9wb3NlIFwKICAtLXByb3Bvc2VyIDxQUk9QT1NFUl9BRERSRVNTPiBcCiAgLS1raW5kICd7IlVwZGF0ZUZlZSI6IDIwfScKYGBgCgojIyMgNi4yIFZvdGluZwoKVm90aW5nIHBvd2VyIGVxdWFscyB5b3VyIExQIHRva2VuIGJhbGFuY2UgYXQgdGhlIHRpbWUgeW91IHZvdGUuIFRva2VucyBhcmUgbG9ja2VkIHVudGlsIHRoZSBwcm9wb3NhbCByZXNvbHZlcy4KCmBgYHNoCiMgVm90ZSBpbiBmYXZvdXIKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8R09WRVJOQU5DRT4gLS1zb3VyY2UgPFZPVEVSPiBcCiAgLSB2b3RlIFwKICAtLXZvdGVyIDxWT1RFUl9BRERSRVNTPiBcCiAgLS1wcm9wb3NhbF9pZCAxIFwKICAtLXN1cHBvcnQgdHJ1ZQoKIyBDaGVjayBwcm9wb3NhbCBzdGF0dXMKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8R09WRVJOQU5DRT4gLS0gcHJvcG9zYWxfc3RhdHVzIC0tcHJvcG9zYWxfaWQgMQpgYGAKCiMjIyA2LjMgRXhlY3V0aW5nIGFuZCBVbmxvY2tpbmcKCkFmdGVyIHRoZSB2b3RpbmcgcGVyaW9kIGVuZHMgYW5kIHRoZSB0aW1lbG9jayBlbGFwc2VzLCBhbnlvbmUgY2FuIGV4ZWN1dGUgYSBwYXNzaW5nIHByb3Bvc2FsLgoKYGBgc2gKIyBFeGVjdXRlCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPEdPVkVSTkFOQ0U+IC0tIGV4ZWN1dGUgLS1wcm9wb3NhbF9pZCAxCgojIFVubG9jayB5b3VyIExQIHRva2VucwpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxHT1ZFUk5BTkNFPiAtLXNvdXJjZSA8Vk9URVI+IFwKICAtIHVubG9ja192b3RlIFwKICAtLXZvdGVyIDxWT1RFUl9BRERSRVNTPiBcCiAgLS1wcm9wb3NhbF9pZCAxCmBgYAoKLS0tCgojIyA3LiBDaXJjdWl0IEJyZWFrZXIKClRoZSBwb29sIGhhcyBhIGJ1aWx0LWluIGNpcmN1aXQgYnJlYWtlciB0aGF0IGF1dG8tcGF1c2VzIHdoZW4gdGhlIHNwb3QgcHJpY2UgZGV2aWF0ZXMgbW9yZSB0aGFuIGB0aHJlc2hvbGRfYnBzYCAoZGVmYXVsdCA1LDAwMCA9IDUwJSkgd2l0aGluIGEgc2luZ2xlIGxlZGdlciBzZXF1ZW5jZS4gVGhpcyBwcm90ZWN0cyBhZ2FpbnN0IGZsYXNoLWxvYW4gcHJpY2UgbWFuaXB1bGF0aW9uLgoKYGBgc2gKIyBSZWFkIGN1cnJlbnQgY2lyY3VpdCBicmVha2VyIGNvbmZpZwpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLSBnZXRfY2lyY3VpdF9icmVha2VyX2NvbmZpZwoKIyBBdHRlbXB0IGF1dG9tYXRpYyByZWNvdmVyeSBhZnRlciBjb29sZG93biAoZGVmYXVsdCA2MDBzKQpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLSB0cnlfY2lyY3VpdF9icmVha2VyX3JlY292ZXJ5CgojIEFkbWluIGNhbiBhbHNvIG1hbnVhbGx5IHVucGF1c2UKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPEFETUlOPiAtLSB1bnBhdXNlCmBgYAoKVG8gdHVuZSB0aGUgY2lyY3VpdCBicmVha2VyIGZvciBhIG1vcmUgdm9sYXRpbGUgcGFpcjoKCmBgYHNoCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPFBPT0w+IC0tc291cmNlIDxBRE1JTj4gXAogIC0gc2V0X2NpcmN1aXRfYnJlYWtlcl9jb25maWcgXAogIC0tdGhyZXNob2xkX2JwcyA4MDAwIFwKICAtLWNvb2xkb3duX3NlY3MgMzAwCmBgYAoKLS0tCgojIyA4LiBQcm90b2NvbCBGZWUgTWFuYWdlbWVudAoKUHJvdG9jb2wgZmVlcyBhY2NydWUgaW4gdGhlIHBvb2wgYW5kIG11c3QgYmUgZXhwbGljaXRseSB3aXRoZHJhd24gYnkgdGhlIGBmZWVfcmVjaXBpZW50YC4KCmBgYHNoCiMgQ2hlY2sgcGVuZGluZyBmZWVzIHdpdGhvdXQgbW92aW5nIGZ1bmRzCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPFBPT0w+IC0tIGdldF9hY2NydWVkX2ZlZXMKCiMgV2l0aGRyYXcgdG8gZmVlX3JlY2lwaWVudApzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8RkVFX1JFQ0lQSUVOVD4gXAogIC0gd2l0aGRyYXdfcHJvdG9jb2xfZmVlcwpgYGAKClNldCB1cCBhIHBlcmlvZGljIGtlZXBlciBqb2IgKGUuZy4gYSBjcm9uIHNjcmlwdCBjYWxsaW5nIHRoZSBTdGVsbGFyIFJQQykgdG8gd2l0aGRyYXcgZmVlcyByZWd1bGFybHkuIEZlZXMgbGVmdCBpbiB0aGUgcG9vbCBkbyBub3QgY29tcG91bmQg4oCUIHRoZXkgc2l0IGlkbGUgdW50aWwgd2l0aGRyYXduLgoKLS0tCgojIyA5LiBNb25pdG9yaW5nIGFuZCBBbGVydGluZwoKS2V5IG1ldHJpY3MgdG8gbW9uaXRvciBmb3IgYSBoZWFsdGh5IHBvb2w6Cgp8IE1ldHJpYyB8IEhvdyB0byByZWFkIHwgQWxlcnQgdGhyZXNob2xkIHwKfC0tLXwtLS18LS0tfAp8IFJlc2VydmUgcmF0aW8gfCBgZ2V0X2luZm8oKS5yZXNlcnZlX2EgLyByZXNlcnZlX2JgIHwgPiAxMMOXIGRyaWZ0IGZyb20gaW5pdGlhbCByYXRpbyB8CnwgVG90YWwgc2hhcmVzIHwgYGdldF9pbmZvKCkudG90YWxfc2hhcmVzYCB8IFN1ZGRlbiBkcm9wID4gMjAlIGluIG9uZSBibG9jayB8CnwgQWNjcnVlZCBmZWVzIHwgYGdldF9hY2NydWVkX2ZlZXMoKWAgfCBFeGNlZWRzIGEgY29uZmlndXJlZCBVU0QgdGhyZXNob2xkIHwKfCBQYXVzZWQgc3RhdGUgfCBgaXNfcGF1c2VkKClgIHwgQW55IGB0cnVlYCB2YWx1ZSB8CnwgQ2lyY3VpdCBicmVha2VyIHwgYGdldF9jaXJjdWl0X2JyZWFrZXJfY29uZmlnKCkudHJpcHBlZGAgfCBBbnkgYHRydWVgIHZhbHVlIHwKfCBUV0FQIHZzIHNwb3QgfCBgcHJpY2VfcmF0aW8oKWAgdnMgVFdBUCBjb25zdW1lciB8IERldmlhdGlvbiA+IDUlIHwKfCBFbWVyZ2VuY3kgYW5ub3VuY2VtZW50IHwgYGVtZXJnZW5jeV93aXRoZHJhd2FsX2Fubm91bmNlZGAgZXZlbnQgfCBBbnkgYW5ub3VuY2VtZW50IHwKCgpTdWJzY3JpYmUgdG8gb24tY2hhaW4gZXZlbnRzIGZvciByZWFsLXRpbWUgYWxlcnRzOgoKfCBFdmVudCB8IE1lYW5pbmcgfAp8LS0tfC0tLXwKfCBgY2lyY3VpdF9icmVha2AgfCBQb29sIGF1dG8tcGF1c2VkOyBpbnZlc3RpZ2F0ZSBpbW1lZGlhdGVseSB8CnwgYGVtZXJnZW5jeV93aXRoZHJhd2FsX2Fubm91bmNlZGAgfCBBZG1pbiBhbm5vdW5jZWQgYSBkcmFpbjsgTFBzIGhhdmUgYEVNRVJHRU5DWV9ERUxBWl9TRUNTYCB0byByZWFjdCB8CnwgYGVtZXJnZW5jeV93aXRoZHJhd2FsX2NhbmNlbGxlZGAgfCBBZG1pbiBjYW5jZWxsZWQgdGhlIGFubm91bmNlbWVudDsgbm8gZHJhaW4gb2NjdXJyZWQgfAp8IGBlbWVyZ2VuY3lfd2l0aGRyYXdgIHwgQWRtaW4gZHJhaW5lZCByZXNlcnZlcyBhbmQgYWNjcnVlZCBmZWVzOyBjcml0aWNhbCBpbmNpZGVudCB8CnwgYGFkbWluX25vbWluYXRlZGAgfCBBZG1pbiB0cmFuc2ZlciBpbml0aWF0ZWQ7IHZlcmlmeSBpdCBpcyBleHBlY3RlZCB8CnwgYGFkbWluX2NoYW5nZWRgIHwgQWRtaW4gdHJhbnNmZXIgY29tcGxldGVkIHwKCi0tLQoKIyMgMTAuIEVtZXJnZW5jeSBXaXRoZHJhd2FsCgpUaGUgZW1lcmdlbmN5IHBhdGggbW92ZXMgZXZlcnkgcmVzZXJ2ZSAqYW5kKiBhY2NydWVkIHByb3RvY29sIGZlZSBvdXQgb2YgdGhlIHBvb2wuIEl0IGlzIGd1YXJkZWQgYnkgdGhyZWUgaW5kZXBlbmRlbnQgbGF5ZXJzOgoKMSuKKlBhdXNlIHByZWNvbmRpdGlvbi4qKiBUaGUgcG9vbCBtdXN0IGJlIHBhdXNlZCBiZWZvcmUgYW4gZW1lcmdlbmN5IHdpdGhkcmF3YWwgY2FuIGV4ZWN1dGUuIFRoaXMgcHJldmVudHMgYSBjb21wcm9taXNlZCBhZG1pbiBmcm9tIGRyYWluaW5nIGEgbGl2ZSBwb29sIHdpdGhvdXQgYW4gb2JzZXJ2YWJsZSBzaWduYWwuCjIuKipBbm5vdW5jZWQgZGVsYXkuKiogVGhlIGFkbWluIG11c3QgZmlyc3QgY2FsbCBgYW5ub3VuY2VfZW1lcmdlbmN5X3dpdGhkcmF3KHRvKWAsIHdoaWNoIHJlY29yZHMgYCh0bywgYW5ub3VuY2VkX2F0KWAgYW5kIGVtaXRzIGFuIGV2ZW50LiBgZW1lcmdlbmN5X3dpdGhkcmF3YCBvbmx5IHN1Y2NlZWRzIGFmdGVyIGBFTUVSR0VOQ1lfREVMQVlfU0VDU2AgKGRlZmF1bHQgMjQgaCwgY2FwIDcgZGF5cywgY29uZmlndXJhYmxlIGF0IGluaXRpYWxpemUpLiBUaGUgYWRtaW4gY2FuIGNhbmNlbCB3aXRoIGBjYW5jZWxfZW1lcmdlbmN5X3dpdGhkcmF3YCwgYW5kIGEgcmUtYW5ub3VuY2UgcmVzdGFydHMgdGhlIGRlbGF5LgozLioqay1vZi1uIG11bHRpc2lnIGd1YXJkLioqIFdoZW4gYE11bHRpc2lnUXVvcnVtID4gMGAsIHRoZSBzaW5nbGUtYWRtaW4gcGF0aCBpcyBkaXNhYmxlZC4gVGhlIGd1YXJkIGl0c2VsZiBjYW4gb25seSBiZSBjaGFuZ2VkIHRocm91Z2ggdGhlIG11bHRpc2lnIGZsb3cgKGBwcm9wb3NlX211bHRpc2lnX2NoYW5nZWAgLyBgYXBwcm92ZV9tdWx0aXNpZ19jaGFuZ2VgIC8gYGV4ZWNfbXVsdGlzaWdfY2hhbmdlYCkg4oCUIGEgc2luZ2xlIGFkbWluIGtleSBjYW5ub3QgbG93ZXIgdGhlIHF1b3J1bSB0byAwIG9yIGluc3RhbGwgc2lnbmVycyBpdCBjb250cm9scy4gTXVsdGlzaWcgZW1lcmdlbmN5IHdpdGhkcmF3YWxzIGFsc28gb2JleSB0aGUgYW5ub3VuY2VkIGRlbGF5LCBtZWFzdXJlZCBmcm9tIHRoZSBtb21lbnQgcXVvcnVtIGlzIHJlYWNoZWQuCgoqKlNpbmdsZS1hZG1pbiBmbG93OioqCgpgYGBzaAojIDEuIFBhdXNlIHRoZSBwb29sIChyZXF1aXJlZCkKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPEFETUlOPiAtLSBwYXVzZQoKIyAyLiBBbm5vdW5jZSB0aGUgd2l0aGRyYXdhbCAoZW1pdHMgZW1lcmdlbmN5X3dpdGhkcmF3YWxfYW5ub3VuY2VkKQpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8QURNSU4+IFwKICAtLSBhbm5vdW5jZV9lbWVyZ2VuY3lfd2l0aGRyYXcgXAogIC0tdG8gPFJFQ0lQSUVOVD4KCiMgMy4gV2FpdCBhdCBsZWFzdCBFTUVSR0VOQ1lfREVMQVlfU0VDUyAoZGVmYXVsdCAyNCBoKQoKIyA0LiBFeGVjdXRlIChyZXNlcnZlcyArIGFjY3J1ZWQgZmVlcyByZWFjaCA8UkVDSVBJRU5UPikKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPEFETUlOPiBcCiAgLS0gZW1lcmdlbmN5X3dpdGhkcmF3IFwKICAtLXRvIDxSRUNJUElFTlQ+CgojIE9wdGlvbmFsOiBjYW5jZWwgYmVmb3JlIGV4ZWN1dGlvbiAoZW1pdHMgZW1lcmdlbmN5X3dpdGhkcmF3YWxfY2FuY2VsbGVkKQpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8QURNSU4+IFwKICAtLSBjYW5jZWxfZW1lcmdlbmN5X3dpdGhkcmF3CmBgYAoKKipNdWx0aXNpZyBmbG93OioqCgpgYGBzaAojIDEuIFBhdXNlIHRoZSBwb29sCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPFBPT0w+IC0tc291cmNlIDxBRE1JTj4gLS0gcGF1c2UKCiMgMi4gUHJvcG9zZSAocmVjb3JkcyB0aGUgcHJvcG9zYWwgYW5kIGl0cyBjcmVhdGlvbiB0aW1lKQpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8UFJPUE9TRVI+IFwKICAtLSBwcm9wb3NlX2VtZXJnZW5jeV93aXRoZHJhdyBcCiAgLS1wcm9wb3NlciA8UFJPUE9TRVJfQUREUkVTUz4gXAogIC0tdG8gPFJFQ0lQSUVOVD4KCiMgMy4gQ29sbGVjdCBxdW9ydW0gYXBwcm92YWxzCgkjICAgICh0aGUgZGVsYXkgY2xvY2sgc3RhcnRzIHdoZW4gcXVvcnVtIGlzIHJlYWNoZWQpCnN0ZWxsYXIgY29udHJhY3QgaW52b2tlIC0taWQgPFBPT0w+IC0tc291cmNlIDxTSUdORVI+IFwKICAtLSBhcHByb3ZlX2VtZXJnZW5jeV93aXRoZHJhdyBcCiAgLS1zaWduZXIgPFNJR05FUl9BRERSRVNTPgoKIyA0LiBBZnRlciBFTUVSR0VOQ1lfREVMQVlfU0VDUyBzaW5jZSBxdW9ydW0gd2FzIHJlYWNoZWQsIGV4ZWN1dGUKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPFNJR05FUj4gXAogIC0tIGV4ZWNfbXVsdGlzaXNfZW1lcmdlbmN5X3dkIFwKICAtLXNpZ25lciA8U0lHTkVSX0FERFJFU1M+CmBgYAoKKipDaGFuZ2luZyB0aGUgZ3VhcmQ6KiogV2hpbGUgYE11bHRpc2lzUXVvcnVtID4gMGAsIGBzZXRfbXVsdGlzaWAgcmVqZWN0cyBkaXJlY3QgYWRtaW4gY2FsbHMgd2l0aCBgTXVzdFVzZU11bHRpc2lnYC4gVG8gY2hhbmdlIHNpZ25lcnMgb3IgcXVvcnVtIChpbmNsdWRpbmcgbG93ZXJpbmcgdG8gMCksIHVzZSB0aGUgbXVsdGlzaWcgY2hhbmdlIGZsb3c6CgpgYGBzaApzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8UFJPUE9TRVI+IFwKICAtLSBwcm9wb3NlX211bHRpc2lnX2NoYW5nZSBcCiAgLS1wcm9wb3NlciA8UFJPUE9TRVJfQUREUkVTUz4gXAogIC0tc2lnbmVycyAnWyJHQURTQ0UiLCAiR0JSSUVGIiwgIkdDSEFSRiJdJyBcCiAgLS1xdW9ydW0gMgoKIyBFYWNoIHNpZ25lciBhcHByb3ZlcywgdGhlbiBhbnkgc2lnbmVyIGV4ZWN1dGVzIG9uY2UgcXVvcnVtIGlzIHJlYWNoZWQKc3RlbGxhciBjb250cmFjdCBpbnZva2UgLS1pZCA8UE9PTD4gLS1zb3VyY2UgPFNJR05FUj4gXAogIC0tIGFwcHJvdmVfbXVsdGlzaWdfY2hhbmdlIFwKICAtLXNpZ25lciA8U0lHTkVSX0FERFJFU1M+CgpzdGVsbGFyIGNvbnRyYWN0IGludm9rZSAtLWlkIDxQT09MPiAtLXNvdXJjZSA8U0lHTkVS PiBcCiAgLS0gZXhlY19tdWx0aXNpZ19jaGFuZ2UgXAogIC0tc2lnbmVyIDxTSUdORVJfQUREUkVTUz4KYGBgCgoqKlZhbGlkYXRpb24gcnVsZXM6KioKLSBgdG8gIT0gZW52LmN1cnJlbnRfY29udHJhY3RfYWRkcmVzc2AgYW5kIGB0byAhPSBscF90b2tlbmAgKG90aGVyd2lzZSBmdW5kcyBhcmUgc3RyYW5kZWQpLgotIFRoZSBwb29sIG11c3QgYmUgcGF1c2VkIGF0IGV4ZWN1dGlvbiB0aW1lLgotIFRoZSBkZWxheSBtdXN0IGhhdmUgZWxhcHNlZCBzaW5jZSB0aGUgYW5ub3VuY2VtZW50IChzaW5nbGUtYWRtaW4pIG9yIHNpbmNlIHF1b3J1bSB3YXMgcmVhY2hlZCAobXVsdGlzaWcpLgotIEFjY3J1ZWQgcHJvdG9jb2wgZmVlcyAoYEFjY3J1ZWRGZWVBIC8gYEFjY3J1ZWRGZWVCYCkgYXJlIHN3ZXB0IHRvIGB0b2AgYWxvbmcgd2l0aCB0aGUgcmVzZXJ2ZXMuCgoqKkdvdmVybmFuY2Utb3JpZ2luYXRlZCBjYWxscyoqIGFyZSBzdWJqZWN0IHRvIHRoZSBzYW1lIGFubm91bmNlbWVudCBhbmQgZGVsYXkgcnVsZXMuIEdvdmVybmFuY2UncyBvd24gYEVtZXJnZW5jeVdpdGhkcmF3YCB0aW1lbG9jayBpcyBhZGRpdGl2ZSwgbm90IGEgc3Vic3RpdHV0ZTogdGhlIGdvdmVybmFuY2UgZXhlY3V0aW9uIG11c3QgY2FsbCBgYW5ub3VuY2VfZW1lcmdlbmN5X3dpdGhkcmF3YCBhbmQgdGhlbiB3YWl0IG91dCBgRU1FUkdFTkNZX0RFTEFZX1NFQ1NgIGJlZm9yZSBjYWxsaW5nIGBlbWVyZ2VuY3lfd2l0aGRyYXdgLgoKLS0tCgojIyAxMS4gVXBncmFkZSBQcm9jZWR1cmUKCkNvbnRyYWN0IHVwZ3JhZGVzIHJlcGxhY2UgYnl0ZWNvZGUgd2hpbGUgcHJlc2VydmluZyBhbGwgc3RvcmFnZS4gRm9sbG93IHRoaXMgY2hlY2tsaXN0OgoKMS4gVXBsb2FkIHRoZSBuZXcgV0FTTTogYHN0ZWxsYXIgY29udHJhY3QgdXBsb2FkIC0td2FzbSBuZXdfYW1tLndhc21gCjIuIFZlcmlmeSB0aGUgaGFzaCBtYXRjaGVzIHRoZSBhdWRpdGVkIGJpbmFyeS4KMy4gVGVzdCBvbiB0ZXN0bmV0IHdpdGggdGhlIHNhbWUgc3RvcmFnZSBzdGF0ZS4KNC4gQ3JlYXRlIGEgZ292ZXJuYW5jZSBwcm9wb3NhbCAoYFRyYW5zZmVyQWRtaW5gIG9yIGRpcmVjdCBgdXBncmFkZWAgY2FsbCkuCjUuIEFmdGVyIHRoZSB0aW1lbG9jaywgZXhlY3V0ZSB0aGUgdXBncmFkZSBhbmQgcmUtdmVyaWZ5IHBvb2wgaW52YXJpYW50cy4K
+# AMM Pool Management Best Practices
+
+A comprehensive guide for deploying, configuring, and operating AMM pools on Soroban.
+
+---
+
+## 1. Fee Tier Selection
+
+Choosing the right fee tier is the single most impactful configuration decision. The pool fee (`fee_bps`) is set at initialization and can only be changed later via governance.
+
+| Fee (bps) | Fee (%) | Best for |
+|---|---|---|
+| 1 | 0.01% | Pegged pairs (e.g. USDC/USDT) — minimal slippage, high volume |
+| 5 | 0.05% | Highly correlated assets (e.g. stablecoin variants) |
+| 30 | 0.30% | Standard volatile pairs (e.g. XLM/USDC) — the most common choice |
+| 100 | 1.00% | Exotic or low-liquidity pairs with high price volatility |
+
+**Rules of thumb:**
+- Start with 30 bps for any new volatile pair. It matches the market expectation and attracts the most integrators.
+- Use 5 bps only when both tokens track the same underlying (e.g. two USD stablecoins). Higher fees will drive volume to competitors.
+- Use 100 bps when the pair has thin liquidity and large price swings. The higher fee compensates LPs for impermanent loss.
+- `protocol_fee_bps` must always be ≤ `fee_bps`. A common split is `fee_bps = 30`, `protocol_fee_bps = 5` (5 bps to the protocol, 25 bps to LPs).
+
+**Changing fees post-deployment:**
+
+Fees can be updated via `update_fee` (admin-only) or through a governance `UpdateFee` proposal. Always simulate the impact before executing:
+
+```sh
+# Read current fee
+stellar contract invoke --id <POOL> -- get_info
+
+# Propose a fee change via governance
+stellar contract invoke --id <GOVERNANCE> --source <PROPOSER> \
+  -- propose \
+  --proposer <PROPOSER_ADDRESS> \
+  --kind '{"UpdateFee": 20}'
+```
+
+---
+
+## 2. Pool Initialization Checklist
+
+Before calling `initialize`, verify:
+
+1. Both token contracts are deployed and SEP-41 compliant.
+2. The LP token contract is deployed with the AMM pool address as its admin.
+3. `token_a != token_b`.
+4. `fee_bps` is in `[0, 10_000]`.
+5. `protocol_fee_bps` is in `[0, fee_bps]`.
+6. The `fee_recipient` address is a multisig or a contract — not a single hot wallet.
+7. The `admin` address is a multisig or a governance contract for production deployments.
+8. The emergency delay is long enough for LPs to react (default 24 h, cap 7 days). To change it, initialize with `initialize_with_emergency_delay` instead of `initialize`.
+
+```sh
+# Initialize via factory (recommended)
+stellar contract invoke --id <FACTORY> --source <ADMIN> \
+  -- create_pool \
+  --token_a <TOKEN_A> \
+  --token_b <TOKEN_B> \
+  --fee_bps 30
+
+# Or manually
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- initialize \
+  --admin <ADMIN_ADDRESS> \
+  --token_a <TOKEN_A> \
+  --token_b <TOKEN_B> \
+  --lp_token <LP_TOKEN> \
+  --fee_bps 30 \
+  --fee_recipient <FEE_RECIPIENT> \
+  --protocol_fee_bps 5
+```
+
+---
+
+## 3. Liquidity Provisioning Strategies
+
+### 3.1 Initial Seeding
+
+The first deposit sets the pool price. Deposit tokens in the ratio that reflects the current market price. If XLM trades at 0.10 USDC, seed with 10 XLM per 1 USDC.
+
+```
+Initial shares = sqrt(amount_a * amount_b)
+```
+
+A seed of 1,000,000 XLM and 100,000 USDC yields `sqrt(1e6 * 1e5) ≈ 316,227` LP shares.
+
+Set `min_shares = 0` only for the initial deposit. For all subsequent deposits, compute the expected shares off-chain and set a tight `min_shares`.
+
+### 3.2 Subsequent Deposits
+
+The pool accepts any ratio but mints shares based on the *lesser* of the two proportional contributions:
+
+```
+shares = min(
+    amount_a * total_shares / reserve_a,
+    amount_b * total_shares / reserve_b
+)
+```
+
+Excess tokens beyond the pool ratio are accepted but do not earn additional shares. Always compute the optimal ratio before depositing:
+
+```typescript
+// Compute optimal amount_b given amount_a
+const optimalB = (amountA * reserveB) / reserveA;
+```
+
+### 3.3 Slippage Protection
+
+Always set non-zero `min_shares` for production deposits. A 0.5–1% tolerance is typical:
+
+```sh
+stellar contract invoke --id <POOL> --source <PROVIDER> \
+  -- add_liquidity \
+  --provider <PROVIDER_ADDRESS> \
+  --amount_a 1000000 \
+  --amount_b 1000000 \
+  --min_shares 990000 \
+  --deadline <NOW_PLUS_60_SECONDS>
+```
+
+### 3.4 Removing Liquidity
+
+Use `remove_liquidity` for proportional withdrawal. Use `remove_liquidity_one_sided` when you want to exit into a single token — it performs an internal swap and saves a separate transaction.
+
+```sh
+# Proportional removal
+stellar contract invoke --id <POOL> --source <PROVIDER> \
+  -- remove_liquidity \
+  --provider <PROVIDER_ADDRESS> \
+  --shares <LP_AMOUNT> \
+  --min_a 0 \
+  --min_b 0 \
+  --deadline <DEADLINE>
+
+# Single-token exit (receives only token_a)
+stellar contract invoke --id <POOL> --source <PROVIDER> \
+  -- remove_liquidity_one_sided \
+  --provider <PROVIDER_ADDRESS> \
+  --shares <LP_AMOUNT> \
+  --token_out <TOKEN_A> \
+  --min_out <MIN_AMOUNT> \
+  --deadline <DEADLINE>
+```
+
+---
+
+## 4. Risk Management for LPs
+
+Providing liquidity to an AMM pool exposes LPs to various risks, including impermanent loss, smart contract risk, and governance risk. Understanding and mitigating these risks is crucial for long-term profitability.
+
+### 4.1 Impermanent Loss
+
+Impermanent loss occurs when the price of the deposited tokens changes relative to when they were deposited. The loss is "impermanent" because if the price returns to the original level, the loss is recovered. However, if the LP withdraws at a different price, the loss becomes permanent.
+
+The impermanent loss can be estimated using the formula:
+
+```
+IL = 2 * sqrt(price_ratio) / (1 + price_ratio) - 1
+```
+
+where `price_ratio` is the ratio of the current price to the price at deposit.
+
+For example, if the price of token A doubles relative to token B (price_ratio = 2), the impermanent loss is approximately 5.7%.
+
+To mitigate impermanent loss:
+- Choose pairs with low volatility (e.g., stablecoin pairs).
+- Consider providing liquidity to pools with correlated assets.
+- Monitor the price ratio and withdraw if the impermanent loss exceeds your tolerance.
+
+### 4.2 Smart Contract Risk
+
+While the AMM contracts have been audited, there is always a risk of vulnerabilities in smart contracts. To mitigate this risk:
+- Only interact with contracts that have been audited by reputable firms.
+- Check the contract's upgradeability features and ensure that upgrades require governance approval.
+- Consider using a multisig wallet for large LP positions to require multiple approvals for transactions.
+
+### 4.3 Governance Risk
+
+LP token holders have governance rights over the pool, including the ability to change fees and upgrade the contract. However, this also means that malicious proposals could harm LPs. To mitigate governance risk:
+- Participate in governance votes to protect your interests.
+- Delegating your voting power to a trusted entity if you cannot participate actively.
+- Monitor governance proposals and vote against those that could negatively impact the pool.
+
+### 4.4 Mitigation Strategies
+
+Overall, LPs can adopt the following strategies to manage risk:
+- Diversify across multiple pools and asset pairs.
+- Start with small positions to test the pool's performance.
+- Regularly monitor pool metrics such as reserves, volume, and fee accruals.
+- Consider using insurance funds or hedging strategies if available.
+
+---
+
+## 5. Admin Key Management
+
+The pool admin can pause the pool, update fees, set the protocol fee, and initiate contract upgrades. Compromise of the admin key is a critical security event.
+
+**Best practices:**
+
+- Use a 2-of-3 multisig for the admin address on mainnet.
+- Transfer admin to a governance contract once the pool is established.
+- Use the two-step `propose_admin` / `accept_admin` pattern for all admin transfers — never transfer directly.
+
+```sh
+# Step 1: current admin nominates a new admin
+stellar contract invoke --id <POOL> --source <CURRENT_ADMIN> \
+  -- propose_admin \
+  --current_admin <CURRENT_ADMIN_ADDRESS> \
+  --new_admin <NEW_ADMIN_ADDRESS>
+
+# Step 2: new admin accepts
+stellar contract invoke --id <POOL> --source <NEW_ADMIN> \
+  -- accept_admin \
+  --new_admin <NEW_ADMIN_ADDRESS>
+```
+
+---
+
+## 6. Governance Participation
+
+LP token holders govern the pool through the governance contract. Participation protects your position from unilateral fee changes or parameter updates.
+
+### 6.1 Proposing a Change
+
+You need at least `min_proposer_stake_bps / 10_000 * total_supply` LP tokens to propose.
+
+```sh
+# Check your stake and the minimum required
+stellar contract invoke --id <GOVERNANCE> -- get_params
+stellar contract invoke --id <POOL> -- shares_of --provider <YOUR_ADDRESS>
+
+# Propose a fee reduction from 30 to 20 bps
+stellar contract invoke --id <GOVERNANCE> --source <PROPOSER> \
+  -- propose \
+  --proposer <PROPOSER_ADDRESS> \
+  --kind '{"UpdateFee": 20}'
+```
+
+### 6.2 Voting
+
+Voting power equals your LP token balance at the time you vote. Tokens are locked until the proposal resolves.
+
+```sh
+# Vote in favour
+stellar contract invoke --id <GOVERNANCE> --source <VOTER> \
+  -- vote \
+  --voter <VOTER_ADDRESS> \
+  --proposal_id 1 \
+  --support true
+
+# Check proposal status
+stellar contract invoke --id <GOVERNANCE> -- proposal_status --proposal_id 1
+```
+
+### 6.3 Executing and Unlocking
+
+After the voting period ends and the timelock elapses, anyone can execute a passing proposal.
+
+```sh
+# Execute
+stellar contract invoke --id <GOVERNANCE> -- execute --proposal_id 1
+
+# Unlock your LP tokens
+stellar contract invoke --id <GOVERNANCE> --source <VOTER> \
+  -- unlock_vote \
+  --voter <VOTER_ADDRESS> \
+  --proposal_id 1
+```
+
+---
+
+## 7. Circuit Breaker
+
+The pool has a built-in circuit breaker that auto-pauses when the spot price deviates more than `threshold_bps` (default 5,000 = 50%) within a single ledger sequence. This protects against flash-loan price manipulation.
+
+```sh
+# Read current circuit breaker config
+stellar contract invoke --id <POOL> -- get_circuit_breaker_config
+
+# Attempt automatic recovery after cooldown (default 600s)
+stellar contract invoke --id <POOL> -- try_circuit_breaker_recovery
+
+# Admin can also manually unpause
+stellar contract invoke --id <POOL> --source <ADMIN> -- unpause
+```
+
+To tune the circuit breaker for a more volatile pair:
+
+```sh
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- set_circuit_breaker_config \
+  --threshold_bps 8000 \
+  --cooldown_secs 300
+```
+
+---
+
+## 8. Protocol Fee Management
+
+Protocol fees accrue in the pool and must be explicitly withdrawn by the `fee_recipient`.
+
+```sh
+# Check pending fees without moving funds
+stellar contract invoke --id <POOL> -- get_accrued_fees
+
+# Withdraw to fee_recipient
+stellar contract invoke --id <POOL> --source <FEE_RECIPIENT> \
+  -- withdraw_protocol_fees
+```
+
+Set up a periodic keeper job (e.g. a cron script calling the Stellar RPC) to withdraw fees regularly. Fees left in the pool do not compound — they sit idle until withdrawn.
+
+---
+
+## 9. Monitoring and Alerting
+
+Key metrics to monitor for a healthy pool:
+
+| Metric | How to read | Alert threshold |
+|---|---|---|
+| Reserve ratio | `get_info().reserve_a / reserve_b` | > 10× drift from initial ratio |
+| Total shares | `get_info().total_shares` | Sudden drop > 20% in one block |
+| Accrued fees | `get_accrued_fees()` | Exceeds a configured USD threshold |
+| Paused state | `is_paused()` | Any `true` value |
+| Emergency announcement | `emergency_announce` event, `get_emergency_announcement()` | Any announcement |
+| Circuit breaker | `get_circuit_breaker_config().tripped` | Any `true` value |
+| TWAP vs spot | `price_ratio()` vs TWAP consumer | Deviation > 5% |
+
+Subscribe to on-chain events for real-time alerts:
+
+| Event | Meaning |
+|---|---|
+| `circuit_break` | Pool auto-paused; investigate immediately |
+| `emergency_announce` | Admin announced a drain; LPs have the emergency delay (24 h by default) to react |
+| `emergency_cancel` | Admin cancelled the announcement; no drain occurred |
+| `emergency_wd` | Admin drained reserves and accrued fees; critical incident |
+| `ms_ew` | A multisig drained reserves and accrued fees; critical incident |
+| `admin_nominated` | Admin transfer initiated; verify it is expected |
+| `admin_changed` | Admin transfer completed |
+
+---
+
+## 10. Emergency Withdrawal
+
+The emergency path moves every reserve *and* every accrued protocol fee out of the pool and leaves it in a terminal `Drained` state. Three independent layers constrain it:
+
+1. **Pause precondition.** The pool must be paused when the withdrawal executes (`Paused` error otherwise). A drain therefore always follows an observable `pause`.
+2. **Announced delay.** The admin first calls `announce_emergency_withdraw(admin, to)`, which records the recipient and the time and emits `emergency_announce`. `emergency_withdraw(admin, to)` only succeeds for that same recipient once the emergency delay has passed (24 h by default, at most 7 days, set with `initialize_with_emergency_delay`). `cancel_emergency_withdraw` clears the announcement, and announcing again restarts the delay.
+3. **k-of-n multisig guard.** While `MultisigQuorum > 0` the single-admin path is disabled (`Unauthorized`). The guard cannot be changed or disabled by the admin it constrains: `set_multisig` only installs the *initial* guard and returns `MultisigGuardActive` afterwards. Changing signers or quorum (including lowering the quorum to 0) goes through the multisig itself.
+
+**Single-admin flow:**
+
+```sh
+# 1. Announce the withdrawal (emits emergency_announce)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- announce_emergency_withdraw \
+  --admin <ADMIN_ADDRESS> \
+  --to <RECIPIENT>
+
+# 2. Pause the pool (required before executing)
+stellar contract invoke --id <POOL> --source <ADMIN> -- pause
+
+# 3. Wait out the emergency delay (default 24 h)
+
+# 4. Execute (reserves + accrued fees reach <RECIPIENT>; emits emergency_wd)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- emergency_withdraw \
+  --admin <ADMIN_ADDRESS> \
+  --to <RECIPIENT>
+
+# Optional: cancel before execution (emits emergency_cancel)
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- cancel_emergency_withdraw \
+  --admin <ADMIN_ADDRESS>
+```
+
+**Multisig flow.** Proposals are addressed by id; the proposer's approval is recorded automatically.
+
+```sh
+# 1. Propose; the result is the proposal id
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- propose_emergency_withdraw \
+  --signer <SIGNER_1_ADDRESS> \
+  --recipient <RECIPIENT>
+
+# 2. Other signers approve until the quorum is reached
+#    (the delay clock starts when the quorum is reached)
+stellar contract invoke --id <POOL> --source <SIGNER_2> \
+  -- approve_multisig_proposal \
+  --signer <SIGNER_2_ADDRESS> \
+  --proposal_id <ID>
+
+# 3. Pause the pool
+stellar contract invoke --id <POOL> --source <ADMIN> -- pause
+
+# 4. Once the delay has passed since quorum, any signer executes
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- exec_multisig_emergency_wd \
+  --signer <SIGNER_1_ADDRESS> \
+  --proposal_id <ID>
+```
+
+A proposal expires 7 days after it is created. Reaching the quorum extends that once so the delay cannot make it expire before it can run. Any change to the signer set invalidates proposals created under the old set (`ProposalExpired`).
+
+**Changing the guard:**
+
+```sh
+# Propose the new signer set and quorum (quorum 0 disables the guard)
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- propose_set_multisig \
+  --signer <SIGNER_1_ADDRESS> \
+  --new_signers '["<SIGNER_A>", "<SIGNER_B>", "<SIGNER_C>"]' \
+  --new_quorum 2
+
+# Signers approve with approve_multisig_proposal, then any signer executes
+# once the current quorum is reached. No delay applies to this step.
+stellar contract invoke --id <POOL> --source <SIGNER_1> \
+  -- exec_multisig_set_multisig \
+  --signer <SIGNER_1_ADDRESS> \
+  --proposal_id <ID>
+```
+
+Read the current guard with `get_multisig` and a proposal with `get_multisig_proposal`.
+
+**Validation rules:**
+- `to` may not be the pool or its LP token (`InvalidRecipient`); otherwise funds would be stranded.
+- The pool must be paused at execution time (`Paused`).
+- The delay must have elapsed since the announcement (single-admin) or since quorum was reached (multisig); otherwise `EmergencyDelayNotElapsed`.
+- A signer set must be unique and `quorum <= signers.len()` (`InvalidQuorum`).
+- Accrued protocol fees are swept to `to` along with the reserves.
+
+**Governance.** A governance `EmergencyWithdraw` proposal runs through the same rules. Proposing it makes governance (the pool admin) announce the withdrawal, so the pool's delay runs alongside the voting period and timelock; executing it pauses the pool and then withdraws. Governance's own timelock is additive, not a substitute. Because proposing re-announces, a newer `EmergencyWithdraw` proposal replaces the announced recipient of an earlier one that has not executed yet.
+
+---
+
+## 11. Upgrade Procedure
+
+Contract upgrades replace bytecode while preserving all storage. Follow this checklist:
+
+1. Upload the new WASM: `stellar contract upload --wasm new_amm.wasm`
+2. Verify the hash matches the audited binary.
+3. Test on testnet with the same storage state.
+4. Create a governance proposal (`TransferAdmin` or direct `upgrade` call).
+5. After the timelock elapses, execute the upgrade.
+6. Verify `get_info()` returns expected values post-upgrade.
+
+```sh
+stellar contract invoke --id <POOL> --source <ADMIN> \
+  -- upgrade \
+  --new_wasm_hash <NEW_WASM_HASH>
+```
+
+Storage keys (`DataKey` variants) must not be renamed or reordered across upgrades — doing so constitutes a breaking change requiring a migration.

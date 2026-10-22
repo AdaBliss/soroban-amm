@@ -417,26 +417,35 @@
             },
             {
               "void_v0": {
-                "doc": "Pending emergency-withdraw proposal: (recipient, `Vec<Address>` approvals).",
-                "name": "MultisigProposalRecipient"
+                "doc": "Monotonic counter of multisig proposals; the last id handed out.",
+                "name": "MultisigProposalCount"
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Multisig proposal by id (persistent storage).",
+                "name": "MultisigProposalById",
+                "type": [
+                  "u64"
+                ]
               }
             },
             {
               "void_v0": {
-                "doc": "",
-                "name": "MultisigProposalApprovals"
+                "doc": "Bumped whenever the signer set or quorum changes, so proposals created\\nunder an older configuration can no longer be approved or executed.",
+                "name": "MultisigEpoch"
               }
             },
             {
               "void_v0": {
-                "doc": "Expiration timestamp for the pending multisig proposal.",
-                "name": "MultisigProposalExpiresAt"
+                "doc": "Seconds that must pass between an announcement (or multisig quorum) and\\nthe withdrawal itself.",
+                "name": "EmergencyDelaySecs"
               }
             },
             {
               "void_v0": {
-                "doc": "Whether the pending multisig proposal has already been executed.",
-                "name": "MultisigProposalExecuted"
+                "doc": "The pending single-admin announcement: `EmergencyAnnouncement`.",
+                "name": "EmergencyAnnouncement"
               }
             },
             {
@@ -807,9 +816,39 @@
               "value": 23
             },
             {
-              "doc": "No emergency withdrawal proposal exists to execute.",
+              "doc": "No emergency withdrawal announcement or multisig proposal exists to act on.",
               "name": "NoPendingProposal",
               "value": 24
+            },
+            {
+              "doc": "`exec_multisig_emergency_wd` was called while the collected approvals\\nare below `MultisigQuorum`. Distinct from `QuorumNotMet`, which is the\\ngovernance vote quorum error, so tooling can tell the two apart.",
+              "name": "QuorumNotReached",
+              "value": 25
+            },
+            {
+              "doc": "`set_multisig` / `propose_set_multisig` was given a quorum greater than\\nthe signer count, or a signer set containing duplicates.",
+              "name": "InvalidQuorum",
+              "value": 26
+            },
+            {
+              "doc": "The emergency delay has not elapsed since the announcement (single\\nadmin path) or since quorum was reached (multisig path).",
+              "name": "EmergencyDelayNotElapsed",
+              "value": 27
+            },
+            {
+              "doc": "The emergency recipient is the pool itself or its LP token, or does not\\nmatch the announced recipient.",
+              "name": "InvalidRecipient",
+              "value": 28
+            },
+            {
+              "doc": "`set_multisig` was called while a multisig guard is active. An active\\nguard can only be changed through `propose_set_multisig`.",
+              "name": "MultisigGuardActive",
+              "value": 29
+            },
+            {
+              "doc": "The configured emergency delay exceeds `MAX_EMERGENCY_DELAY_SECS` (7 days).",
+              "name": "InvalidEmergencyDelay",
+              "value": 30
             }
           ],
           "doc": "",
@@ -990,7 +1029,28 @@
       },
       {
         "function_v0": {
-          "doc": "Configure the k-of-n multisig guard for emergency operations.\\n\\nOnce set, `emergency_withdraw` requires `quorum` approvals from `signers`\\nbefore funds can be moved. Admin-only.\\nSet `quorum` to 0 to disable the multisig guard (single-admin mode).",
+          "doc": "Return the current multisig signers and quorum.",
+          "inputs": [],
+          "name": "get_multisig",
+          "outputs": [
+            {
+              "tuple": {
+                "value_types": [
+                  {
+                    "vec": {
+                      "element_type": "address"
+                    }
+                  },
+                  "u32"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Install the initial k-of-n multisig guard for emergency operations.\\n\\nAdmin-only, and only while no guard is active (`quorum == 0`). Once a\\nguard exists, the admin it constrains can no longer change or disable it\\nalone: use `propose_set_multisig` / `approve_multisig_proposal` /\\n`exec_multisig_set_multisig` instead. `quorum` must be in\\n`0..=signers.len()` and `signers` must be unique; a quorum of 0 stores an\\nempty signer set (single-admin mode).",
           "inputs": [
             {
               "doc": "",
@@ -1452,6 +1512,38 @@
         }
       },
       {
+        "udt_union_v0": {
+          "cases": [
+            {
+              "tuple_v0": {
+                "doc": "Drain the pool to the given recipient.",
+                "name": "EmergencyWithdraw",
+                "type": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Replace the signer set and quorum. A quorum of 0 disables the guard.",
+                "name": "SetMultisig",
+                "type": [
+                  {
+                    "vec": {
+                      "element_type": "address"
+                    }
+                  },
+                  "u32"
+                ]
+              }
+            }
+          ],
+          "doc": "What a multisig proposal does once executed.",
+          "lib": "",
+          "name": "MultisigAction"
+        }
+      },
+      {
         "udt_struct_v0": {
           "doc": "Issue #293: multisig configuration returned by `get_multisig_config`.",
           "fields": [
@@ -1608,8 +1700,13 @@
       },
       {
         "function_v0": {
-          "doc": "Emergency withdraw of all pool reserves to a designated address.\\nAdmin-only, callable via a timed governance proposal.",
+          "doc": "Emergency withdraw of all pool reserves and accrued protocol fees to a\\ndesignated address.\\n\\nAdmin-only, and only on the single-admin path: it is rejected while a\\nmultisig guard is active. The pool must be paused, `to` must match a\\nprior `announce_emergency_withdraw`, and `EmergencyDelaySecs` must have\\nelapsed since that announcement. A governance `EmergencyWithdraw`\\nproposal executes through this same call, so it is subject to the same\\nrules.",
           "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
             {
               "doc": "",
               "name": "to",
@@ -1637,8 +1734,17 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Issue #293: pending emergency-withdraw proposal.",
+          "doc": "Issue #293: pending multisig proposal, addressed by id.",
           "fields": [
+            {
+              "doc": "",
+              "name": "action",
+              "type": {
+                "udt": {
+                  "name": "MultisigAction"
+                }
+              }
+            },
             {
               "doc": "",
               "name": "approvals",
@@ -1649,13 +1755,38 @@
               }
             },
             {
+              "doc": "Signer-set epoch the proposal was created under.",
+              "name": "epoch",
+              "type": "u32"
+            },
+            {
               "doc": "",
-              "name": "recipient",
-              "type": "address"
+              "name": "executed",
+              "type": "bool"
+            },
+            {
+              "doc": "Timestamp after which the proposal can no longer be approved/executed.",
+              "name": "expires_at",
+              "type": "u64"
+            },
+            {
+              "doc": "Timestamp at which approvals first reached the quorum; 0 until then.",
+              "name": "quorum_reached_at",
+              "type": "u64"
             }
           ],
           "lib": "",
           "name": "MultisigProposal"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return the configured emergency delay in seconds.",
+          "inputs": [],
+          "name": "get_emergency_delay",
+          "outputs": [
+            "u64"
+          ]
         }
       },
       {
@@ -1692,6 +1823,45 @@
       },
       {
         "function_v0": {
+          "doc": "Propose replacing the multisig signer set and quorum. A quorum of 0\\ndisables the guard. This is the only way to change an active guard.\\nReturns the proposal id.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "signer",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_signers",
+              "type": {
+                "vec": {
+                  "element_type": "address"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "new_quorum",
+              "type": "u32"
+            }
+          ],
+          "name": "propose_set_multisig",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": "u64"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Keeper entrypoint to trip the circuit breaker if the current spot price\\nhas deviated from the block baseline by at least threshold_bps.",
           "inputs": [],
           "name": "trip_circuit_breaker",
@@ -1711,8 +1881,14 @@
       },
       {
         "function_v0": {
-          "doc": "Return the current pending multisig proposal, if any.",
-          "inputs": [],
+          "doc": "Return a multisig proposal by id, if it exists.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "proposal_id",
+              "type": "u64"
+            }
+          ],
           "name": "get_multisig_proposal",
           "outputs": [
             {
@@ -1812,6 +1988,25 @@
         }
       },
       {
+        "udt_struct_v0": {
+          "doc": "A pending single-admin emergency withdrawal announcement.",
+          "fields": [
+            {
+              "doc": "",
+              "name": "announced_at",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "to",
+              "type": "address"
+            }
+          ],
+          "lib": "",
+          "name": "EmergencyAnnouncement"
+        }
+      },
+      {
         "function_v0": {
           "doc": "Returns the cumulative liquidity accumulator and the timestamp of the last update.",
           "inputs": [],
@@ -1830,15 +2025,117 @@
       },
       {
         "function_v0": {
-          "doc": "Execute the pending multisig emergency withdrawal once quorum is reached.\\n\\nAny signer may call this after enough approvals have been collected.",
+          "doc": "Add `signer`'s approval to multisig proposal `proposal_id`.\\n\\nRe-approving is a no-op. When the approvals first reach the quorum the\\nemergency delay clock starts and the proposal's lifetime is extended once\\nto cover it.",
           "inputs": [
             {
               "doc": "",
               "name": "signer",
               "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "proposal_id",
+              "type": "u64"
+            }
+          ],
+          "name": "approve_multisig_proposal",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Cancel a pending emergency withdrawal announcement. Admin-only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            }
+          ],
+          "name": "cancel_emergency_withdraw",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Execute multisig emergency-withdraw proposal `proposal_id`.\\n\\nAny signer may call this once the quorum is reached, the emergency delay\\nhas passed since it was reached, and the pool is paused. Sweeps reserves\\nand accrued protocol fees to the proposal's recipient.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "signer",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "proposal_id",
+              "type": "u64"
             }
           ],
           "name": "exec_multisig_emergency_wd",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Execute multisig proposal `proposal_id` that replaces the signer set and\\nquorum. Requires the current quorum of approvals; no delay applies.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "signer",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "proposal_id",
+              "type": "u64"
+            }
+          ],
+          "name": "exec_multisig_set_multisig",
           "outputs": [
             {
               "result": {
@@ -1873,7 +2170,25 @@
       },
       {
         "function_v0": {
-          "doc": "Propose an emergency withdrawal (multisig mode).\\n\\nAny configured signer may call this to initiate or co-sign a proposal.\\nOnce `quorum` approvals are collected the proposal can be executed via\\n`exec_multisig_emergency_wd`.",
+          "doc": "Return the pending single-admin emergency announcement, if any.",
+          "inputs": [],
+          "name": "get_emergency_announcement",
+          "outputs": [
+            {
+              "option": {
+                "value_type": {
+                  "udt": {
+                    "name": "EmergencyAnnouncement"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Propose an emergency withdrawal to `recipient` (multisig mode).\\n\\nAny configured signer may call this; the proposer's approval is recorded\\nautomatically. Other signers add theirs with `approve_multisig_proposal`.\\nOnce the quorum is reached and `EmergencyDelaySecs` have passed the\\nproposal can be executed via `exec_multisig_emergency_wd`. Returns the\\nproposal id.",
           "inputs": [
             {
               "doc": "",
@@ -1895,11 +2210,7 @@
                     "name": "AmmError"
                   }
                 },
-                "ok_type": {
-                  "tuple": {
-                    "value_types": []
-                  }
-                }
+                "ok_type": "u64"
               }
             }
           ]
@@ -1966,6 +2277,40 @@
             }
           ],
           "name": "set_circuit_breaker_config",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Announce an emergency withdrawal of all pool reserves to `to`.\\n\\nAdmin-only. Starts the emergency delay clock; `emergency_withdraw` only\\nsucceeds for the same recipient once `EmergencyDelaySecs` have passed and\\nwhile the pool is paused. Announcing again replaces the previous\\nannouncement and restarts the delay. `to` may not be the pool itself or\\nits LP token.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "to",
+              "type": "address"
+            }
+          ],
+          "name": "announce_emergency_withdraw",
           "outputs": [
             {
               "result": {
@@ -2083,6 +2428,70 @@
             }
           ],
           "name": "initialize_with_flash_loan_fee",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AmmError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Initialize the pool with a custom emergency-withdrawal delay.\\n\\nBehaves like `initialize`, and additionally sets the number of seconds\\nthat must pass between `announce_emergency_withdraw` (or multisig\\nquorum) and the withdrawal itself. `emergency_delay_secs` may not exceed\\n7 days; `initialize` uses the 24 hour default.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "lp_token",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_recipient",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "protocol_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "emergency_delay_secs",
+              "type": "u64"
+            }
+          ],
+          "name": "initialize_with_emergency_delay",
           "outputs": [
             {
               "result": {
@@ -14252,7 +14661,7 @@
       },
       {
         "function_v0": {
-          "doc": "Return the pool address for `(token_a, token_b)`, or `None` if it does\\nnot exist. Token pair order does not matter.",
+          "doc": "Return the **canonical** active AMM pool for `(token_a, token_b)`, or\\n`None` if the pair has none. Token pair order does not matter.\\n\\nCanonical rule: the active pool with the **lowest swap fee**. A pair can\\nhold one pool per fee (issue #1109), so this is deterministic and cannot be\\ninfluenced by creation order or by who created a pool first. When the\\ncanonical pool is deprecated, the next-lowest-fee pool takes over. Use\\n`get_pools_for_pair` to see every active pool.",
           "inputs": [
             {
               "doc": "",
@@ -14537,6 +14946,57 @@
                   "address"
                 ]
               }
+            },
+            {
+              "tuple_v0": {
+                "doc": "normalized (token_a, token_b, fee_bps) -> AMM pool Address. One active AMM\\npool per (pair, fee), mirroring the CL scheme. Cleared on deprecation so\\na replacement can be created at the same fee.",
+                "name": "PoolByFee",
+                "type": [
+                  "address",
+                  "address",
+                  "i128"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "normalized (token_a, token_b) -> Vec<Address> of active AMM pools, sorted\\nby ascending fee. The first entry is the pair's canonical pool.",
+                "name": "PairPools",
+                "type": [
+                  "address",
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "pool address -> swap fee in bps recorded at creation.",
+                "name": "PoolFee",
+                "type": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "pool address -> bool, true once the admin deprecated the pool.",
+                "name": "PoolDeprecated",
+                "type": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "i128 - lowest swap fee (bps) accepted for new AMM pools (default 1).",
+                "name": "MinFeeBps"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "i128 - highest swap fee (bps) accepted for new AMM pools (default 1_000).",
+                "name": "MaxFeeBps"
+              }
             }
           ],
           "doc": "",
@@ -14609,7 +15069,7 @@
       },
       {
         "function_v0": {
-          "doc": "Sweep accrued protocol fees from all factory-owned pools into the\\ntreasury. **Permissionless** \\xe2\\x80\\x94 callable by anyone.\\n\\nFor each registered pool that is not governance-controlled, calls\\n`withdraw_protocol_fees()` on the pool\\n(which succeeds because the factory is the `fee_recipient`) and then\\ntransfers the received tokens to the treasury.\\n\\nNo trust is required: regardless of who triggers the sweep, funds are\\ncryptographically guaranteed to route to the governance-configured\\ntreasury address stored in this contract.\\n\\nReturns the total amount of `token` collected.\\n\\n# Prerequisites\\n- `set_treasury` must have been called to configure the treasury and sync\\nthe factory as the `fee_recipient` on the target pools.",
+          "doc": "Sweep accrued protocol fees from all factory-owned pools into the\\ntreasury. **Permissionless** \\xe2\\x80\\x94 callable by anyone.\\n\\nFor each registered pool that is not governance-controlled, calls\\n`withdraw_protocol_fees()` on the pool\\n(which succeeds because the factory is the `fee_recipient`) and then\\ntransfers the received tokens to the treasury.\\n\\nNo trust is required: regardless of who triggers the sweep, funds are\\ncryptographically guaranteed to route to the governance-configured\\ntreasury address stored in this contract.\\n\\nPools whose `fee_recipient` is not this factory (or whose withdrawal\\nfails) are skipped rather than aborting the sweep; the `fees_swept` event\\nreports `(treasury, token, offset, swept, collected, skipped)`.\\n\\nReturns the total amount of `token` collected.\\n\\n# Prerequisites\\n- `set_treasury` must have been called to configure the treasury and sync\\nthe factory as the `fee_recipient` on the target pools.",
           "inputs": [
             {
               "doc": "",
@@ -14653,7 +15113,7 @@
       },
       {
         "function_v0": {
-          "doc": "Deploy a new AMM pool for `(token_a, token_b)` with the specified fee tier.\\n\\nToken pair order is normalised \\xe2\\x80\\x94 the pool is always stored with the\\nlexicographically smaller address as `token_a`, so callers do not need\\nto match the original order when looking up a pool.\\n\\n`caller` is the address initiating the call. In permissioned mode the\\nfactory admin must be the caller. In permissionless mode any address may\\ncreate a pool, but they must pay the configured `PoolCreationFee` in\\n`FeeToken` to the protocol treasury (factory admin), and are subject to\\na per-address rate limit.\\n\\nPanics if a pool for this pair already exists.",
+          "doc": "Deploy a new AMM pool for `(token_a, token_b)` with the specified fee tier.\\n\\nToken pair order is normalised \\xe2\\x80\\x94 the pool is always stored with the\\nlexicographically smaller address as `token_a`, so callers do not need\\nto match the original order when looking up a pool.\\n\\n`caller` is the address initiating the call. In permissioned mode the\\nfactory admin must be the caller. In permissionless mode any address may\\ncreate a pool, but they must pay the configured `PoolCreationFee` in\\n`FeeToken` to the protocol treasury (factory admin), and are subject to\\na per-address rate limit.\\n\\nOne AMM pool may exist per `(token_a, token_b, fee)`; a second pool for the\\npair at a different tier is allowed. Fails with `PoolAlreadyExists` if a\\npool already exists for the pair at this tier. Because `fee_tier` is mapped\\nthrough `fee_tier_to_bps`, this entrypoint only ever produces standard tiers\\nand is safe for permissionless callers.",
           "inputs": [
             {
               "doc": "",
@@ -14990,6 +15450,35 @@
       },
       {
         "function_v0": {
+          "doc": "Mark an AMM pool deprecated. Admin-only.\\n\\nThe pool contract is not touched and keeps working for anyone who holds its\\naddress (LPs can still withdraw, fees can still be swept). The factory\\nstops advertising it: it is removed from `get_pool`,\\n`get_pools_for_pair`, `get_pool_by_fee`, `get_pools` and `all_pools`, and\\nits `(pair, fee)` slot is released so a replacement can be created at the\\nsame tier. If it was the pair's canonical pool, the next-lowest-fee active\\npool becomes canonical. `get_pool_count` still counts it (it counts\\nregistration indexes, which also derive deploy salts).\\n\\nFails with `PoolNotFound` for an unknown pool and `PoolAlreadyDeprecated`\\non a repeat call. Emits `pool_deprecated` with\\n`(pool, token_a, token_b, fee_bps)`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "deprecate_pool",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "FactoryError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Return the governance address for the given pool, or `None` if unknown.",
           "inputs": [
             {
@@ -15049,7 +15538,7 @@
       },
       {
         "function_v0": {
-          "doc": "Set and propagate the global protocol fee configuration to all\\nfactory-administered pools. Admin-only.\\n\\nFor each registered pool whose admin is the factory admin (i.e. not\\ngovernance-controlled), calls `set_protocol_fee` on the pool with:\\n- `recipient` = this factory contract (so the factory can later sweep)\\n- `protocol_fee_bps` = `protocol_fee_bps`\\n\\nGovernance-controlled pools are skipped \\xe2\\x80\\x94 they must update fee settings\\nvia a governance proposal.\\n\\nReturns the number of pools successfully updated.",
+          "doc": "Set and propagate the global protocol fee configuration to all\\nfactory-administered pools. Admin-only.\\n\\nFor each registered pool whose admin is the factory admin (i.e. not\\ngovernance-controlled), calls `set_protocol_fee` on the pool with:\\n- `recipient` = this factory contract (so the factory can later sweep)\\n- `protocol_fee_bps` = `protocol_fee_bps`\\n\\nGovernance-controlled pools are skipped \\xe2\\x80\\x94 they must update fee settings\\nvia a governance proposal.\\n\\n**Clamp rule (issue #1108).** The AMM requires\\n`protocol_fee_bps < fee_bps`, so the rate pushed to each pool is\\n`min(global_bps, fee_bps - 1)`: a pool with a lower swap fee than the\\nglobal rate is *clamped*, not skipped, and still gets the factory as its\\n`fee_recipient`. A pool with a non-positive swap fee cannot carry a\\nprotocol fee and is skipped, as is any pool whose `set_protocol_fee` call\\nfails (`try_` call), so one bad pool never reverts the batch. The stored\\n`GlobalProtocolFeeBps` is the requested rate; `get_pool_fee_status` shows\\neach pool's effective rat",
           "inputs": [
             {
               "doc": "",
@@ -15168,11 +15657,56 @@
               "doc": "A function that reads factory configuration (admin, AMM/LP WASM\\nhashes) was called before `initialize`. Discriminant 2 is taken by\\n`InvalidFeeBps`, so this is appended rather than renumbered.",
               "name": "NotInitialized",
               "value": 12
+            },
+            {
+              "doc": "A requested AMM fee lies outside the admin-configured\\n`[min_fee_bps, max_fee_bps]` window (see `set_fee_bps_window`). Distinct\\nfrom `InvalidFeeBps`, which reports a value that is invalid outright.",
+              "name": "FeeOutOfRange",
+              "value": 13
+            },
+            {
+              "doc": "The pool is not an AMM pool registered by this factory (or is not\\ncurrently active in the pair registry).",
+              "name": "PoolNotFound",
+              "value": 14
+            },
+            {
+              "doc": "`deprecate_pool` was called on a pool that is already deprecated.",
+              "name": "PoolAlreadyDeprecated",
+              "value": 15
             }
           ],
           "doc": "",
           "lib": "",
           "name": "FactoryError"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return the active AMM pool for `(token_a, token_b, fee_bps)`, if any.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "fee_bps",
+              "type": "i128"
+            }
+          ],
+          "name": "get_pool_by_fee",
+          "outputs": [
+            {
+              "option": {
+                "value_type": "address"
+              }
+            }
+          ]
         }
       },
       {
@@ -15325,11 +15859,103 @@
       },
       {
         "function_v0": {
+          "doc": "Return the swap-fee window `(min_fee_bps, max_fee_bps)` enforced on new\\nAMM pools. Defaults to `(1, 1_000)`.",
+          "inputs": [],
+          "name": "get_fee_bps_window",
+          "outputs": [
+            {
+              "tuple": {
+                "value_types": [
+                  "i128",
+                  "i128"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return every active (non-deprecated) AMM pool for the pair, ordered by\\nascending swap fee. The first entry is the pair's canonical pool.\\nToken pair order does not matter.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            }
+          ],
+          "name": "get_pools_for_pair",
+          "outputs": [
+            {
+              "vec": {
+                "element_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Return whether new V2 and CL pool creation is currently paused.",
           "inputs": [],
           "name": "is_creation_paused",
           "outputs": [
             "bool"
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Whether `pool` has been deprecated via `deprecate_pool`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "is_pool_deprecated",
+          "outputs": [
+            "bool"
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Set the swap-fee window `[min_fee_bps, max_fee_bps]` that every new AMM pool\\nmust fall inside (default `[1, 1_000]`). Admin-only.\\n\\nRequires `0 <= min_fee_bps <= max_fee_bps < 10_000`, otherwise\\n`InvalidFeeBps`. Existing pools are unaffected. Emits `fee_window_set`\\nwith `(old_min, old_max, new_min, new_max)`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "min_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "max_fee_bps",
+              "type": "i128"
+            }
+          ],
+          "name": "set_fee_bps_window",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "FactoryError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
           ]
         }
       },
@@ -15376,6 +16002,33 @@
                 "ok_type": {
                   "tuple": {
                     "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Monitoring view for the protocol-fee plumbing of an AMM pool (issue #1108).\\n\\nReturns `Some((effective_protocol_bps, recipient_is_factory))`, where\\n`effective_protocol_bps` is the rate the pool currently applies (after the\\nclamp rule) and `recipient_is_factory` says whether `sweep_fees` can pull\\nfrom it. `None` if `pool` is not an AMM pool of this factory or cannot be\\nqueried.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "get_pool_fee_status",
+          "outputs": [
+            {
+              "option": {
+                "value_type": {
+                  "tuple": {
+                    "value_types": [
+                      "i128",
+                      "bool"
+                    ]
                   }
                 }
               }
@@ -15580,7 +16233,7 @@
       },
       {
         "function_v0": {
-          "doc": "Deploy a new AMM pool for `(token_a, token_b)` with a custom fee in basis points.\\n\\nThis allows pools to be created with custom fees outside the standard tiers.\\nFor most use cases, prefer `create_pool` with a standard fee tier.\\n\\nToken pair order is normalised. Panics if a pool for this pair already exists.\\n\\nValidations (fee_bps bounds, duplicate-pool check) are performed before\\nthe rate-limit check and fee charge so a caller is never charged for a\\nrequest that would be rejected (issue #520).",
+          "doc": "Deploy a new AMM pool for `(token_a, token_b)` with a custom fee in basis points.\\n\\nThis allows pools to be created with custom fees outside the standard tiers.\\nFor most use cases, prefer `create_pool` with a standard fee tier.\\n\\nToken pair order is normalised. Fails with `PoolAlreadyExists` if an active\\npool already exists for this `(pair, fee_bps)`.\\n\\nFee rules (issue #1109):\\n- `fee_bps` outside `0..10_000` is `InvalidFeeBps`.\\n- A non-admin caller in permissionless mode may only use a standard tier\\nbps (1, 5, 30, 100); any other value is `InvalidFeeBps`. Custom fees are\\nreserved for the admin path (permissioned mode, or the admin as caller).\\n- Every caller is bound to the admin-configured `[min_fee_bps, max_fee_bps]`\\nwindow (default `[1, 1_000]`); a violation is `FeeOutOfRange`.\\n\\nValidations (fee_bps bounds, duplicate-pool check) are performed before\\nthe rate-limit check and fee charge so a caller is never charged for a\\nrequest that would be rejected (issue #520).",
           "inputs": [
             {
               "doc": "",
@@ -17051,7 +17704,7 @@
       },
       {
         "function_v0": {
-          "doc": "Cast a vote on an active proposal.\\n\\nVoting power uses LP balances snapshotted at proposal creation (`snapshot_ledger`).\\nDelegators cannot vote directly; the terminal delegatee votes with aggregated power.",
+          "doc": "Cast a vote on an active proposal.\\n\\nVoting power uses LP balances snapshotted at proposal creation (`snapshot_ledger`).\\nDelegators cannot vote directly; the terminal delegatee votes with aggregated power.\\n\\nEach account contributes at most what it still holds (#1104): the voter's\\nown balance must not have fallen below its snapshot (otherwise\\n`InsufficientSnapshotBal`), while a delegator that moved tokens away after\\nthe snapshot contributes `min(snapshot, unlocked balance)` and can never\\nmake the delegatee's vote revert. The amount counted for an account is\\nexactly the amount locked and recorded in `LockedVote` for it.\\n`get_voting_power` returns the total this call would count.",
           "inputs": [
             {
               "doc": "",
@@ -18188,6 +18841,36 @@
         }
       },
       {
+        "function_v0": {
+          "doc": "The voting power `vote(voter, proposal_id, ..)` would count right now,\\nincluding every delegator that has not voted yet (#1104).\\n\\nIt runs the same computation as `vote`, so a delegatee can read their\\npower without sending a transaction. It does not check the voting window\\nor `AlreadyVoted`: a voter that has already voted simply reads 0 for\\ntheir own balance. Returns `HasDelegated` for an address that delegated\\n(such an address cannot vote) and `InsufficientSnapshotBal` when the\\nvoter's own balance fell below its snapshot, like `vote`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "doc": "",
+              "name": "voter",
+              "type": "address"
+            }
+          ],
+          "name": "get_voting_power",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "GovernanceError"
+                  }
+                },
+                "ok_type": "i128"
+              }
+            }
+          ]
+        }
+      },
+      {
         "udt_struct_v0": {
           "doc": "Proposal-specific parameters snapshotted at creation time (#1105).",
           "fields": [
@@ -18485,6 +19168,11 @@
               "doc": "Proposal parameters failed validation (e.g., invalid vesting schedule).",
               "name": "InvalidProposalParams",
               "value": 36
+            },
+            {
+              "doc": "A delegation would make a chain longer than `MAX_DELEGATION_DEPTH` (or a\\nstored chain was found to exceed it during aggregation). Rejected at write\\ntime so voting power is never silently dropped from a tally.",
+              "name": "DelegationDepthExceeded",
+              "value": 37
             }
           ],
           "doc": "",
@@ -19898,6 +20586,105 @@
     ],
     "incentive_campaigns": [
       {
+        "function_v0": {
+          "doc": "Stake LP tokens into a stake-based campaign (#1115).\\n\\nThe LP tokens move from `provider` into this contract and count towards\\nthe campaign's `total_staked` from this ledger on. Staking before\\n`start_time` is allowed (rewards only start flowing at `start_time`);\\nstaking at or after `end_time` is rejected because nothing could accrue.\\n\\nEverything accrued so far is settled against the *old* stake first, so\\nadding stake neither re-prices earlier seconds nor shares them with the\\nnew stake.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "provider",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "name": "stake",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Withdraw staked LP tokens from a stake-based campaign (#1115).\\n\\nAlways available, including after the campaign ended or was wound down by\\n`recover_leftover_funds`: principal is never held hostage. Rewards earned\\nup to now are kept on the position and stay claimable through\\n`claim_rewards` while the campaign is active.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "provider",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "amount",
+              "type": "i128"
+            }
+          ],
+          "name": "unstake",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "LP tokens `provider` currently has staked in `campaign_id` (0 if none).",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "provider",
+              "type": "address"
+            }
+          ],
+          "name": "get_stake",
+          "outputs": [
+            "i128"
+          ]
+        }
+      },
+      {
         "udt_union_v0": {
           "cases": [
             {
@@ -20012,6 +20799,34 @@
                 "doc": "Per provider: ids of every distribution record they received, in claim order.",
                 "name": "DistributionsByProvider",
                 "type": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Per campaign: marker present for stake-based campaigns (#1115). Campaigns\\ncreated before the upgrade have no marker and use the legacy accounting.",
+                "name": "StakeBased",
+                "type": [
+                  "u64"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Per campaign: LP tokens currently staked, i.e. the accumulator divisor.",
+                "name": "CampaignTotalStaked",
+                "type": [
+                  "u64"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Per (campaign_id, provider): the provider's stake position.",
+                "name": "StakePosition",
+                "type": [
+                  "u64",
                   "address"
                 ]
               }
@@ -20151,7 +20966,23 @@
       },
       {
         "function_v0": {
-          "doc": "Distribute accrued rewards to a provider proportional to their time-weighted\\nLP balance.\\n\\n## How the accumulator model prevents retroactive gaming (#425)\\n\\n`acc_reward_per_share` advances at `reward_rate / total_supply` per second.\\nEach provider stores the accumulator value at their last claim\\n(`acc_at_snapshot`).  Pending rewards are:\\n\\n`pending = lp_balance \\xc3\\x97 (acc_now \\xe2\\x88\\x92 acc_at_snapshot) / PRECISION`\\n\\nA provider who just deposited LP tokens has `acc_at_snapshot \\xe2\\x89\\x88 acc_now`\\n(set the moment they first claim, which is at the earliest the next ledger),\\nso they earn rewards only from the moment they hold LP tokens forward.\\nThey cannot reach back to the campaign start and claim rewards from a window\\nduring which they held nothing.",
+          "doc": "Whether `campaign_id` uses the stake-based model (`true`) or the legacy\\nlive-balance rules (`false`, including for ids that do not exist).",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ],
+          "name": "uses_staking",
+          "outputs": [
+            "bool"
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Pay a provider the rewards they have earned in a campaign.\\n\\n## Stake-based campaigns (#1115)\\n\\nThe payout is `position.pending + position.amount * (acc_now -\\nposition.acc_at_snapshot) / PRECISION`, where `acc_now` is the campaign\\naccumulator advanced to `min(now, end_time)` at the stake that existed over\\neach interval. The first claim of a position that was staked for the whole\\nwindow therefore pays its exact share, however late it is made, and no\\nother address can change that amount by touching the campaign.\\n\\nClaiming works after `end_time` for whatever accrued up to `end_time`.\\nA caller with no stake gets `NoStake`; a caller with nothing new to\\ncollect gets `NoPendingRewards`.\\n\\n## Campaigns created before the upgrade\\n\\nCampaigns without a stake marker keep the original live-balance rules: the\\nfirst call registers the provider and pays 0, later calls pay from the\\nprovider's live LP balance. See `docs/incentive-campaigns.md`.",
           "inputs": [
             {
               "doc": "",
@@ -20298,6 +21129,46 @@
         }
       },
       {
+        "udt_struct_v0": {
+          "doc": "A provider's position in a stake-based campaign (#1115).",
+          "fields": [
+            {
+              "doc": "Value of `acc_reward_per_share` when `pending` was last settled.",
+              "name": "acc_at_snapshot",
+              "type": "i128"
+            },
+            {
+              "doc": "LP tokens this provider currently has staked.",
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "doc": "Rewards already earned but not yet paid. Filled whenever the stake\\nchanges (so a change never forfeits or re-prices earlier seconds) and\\ncleared by `claim_rewards`.",
+              "name": "pending",
+              "type": "i128"
+            }
+          ],
+          "lib": "",
+          "name": "StakePosition"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Total LP tokens staked in `campaign_id`: the accumulator's divisor.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ],
+          "name": "get_total_staked",
+          "outputs": [
+            "i128"
+          ]
+        }
+      },
+      {
         "udt_error_enum_v0": {
           "cases": [
             {
@@ -20394,6 +21265,31 @@
               "doc": "No distribution record exists with the given id.",
               "name": "RecordNotFound",
               "value": 19
+            },
+            {
+              "doc": "The caller has no stake in the campaign.",
+              "name": "NoStake",
+              "value": 20
+            },
+            {
+              "doc": "`stake` / `unstake` was given a zero or negative amount.",
+              "name": "InvalidStakeAmount",
+              "value": 21
+            },
+            {
+              "doc": "`unstake` asked for more than the caller has staked.",
+              "name": "InsufficientStake",
+              "value": 22
+            },
+            {
+              "doc": "`stake` was called at or after the campaign's `end_time`.",
+              "name": "CampaignEnded",
+              "value": 23
+            },
+            {
+              "doc": "A stake operation was attempted on a campaign created before the\\nstake-based model; such campaigns keep the live-balance rules.",
+              "name": "LegacyCampaign",
+              "value": 24
             }
           ],
           "doc": "Typed failures for every caller-triggerable precondition in this contract.\\n\\nDiscriminants follow the workspace convention (`AlreadyInitialized = 1`,\\n`NotInitialized = 2`) and are part of the ABI: never renumber, only append.",
@@ -20575,6 +21471,36 @@
           ],
           "lib": "",
           "name": "ProviderSnapshot"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "What `claim_rewards` would pay `provider` right now, without sending a\\ntransaction. Returns 0 for a provider with no stake.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "provider",
+              "type": "address"
+            }
+          ],
+          "name": "get_pending_rewards",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": "i128"
+              }
+            }
+          ]
         }
       },
       {
@@ -21998,11 +22924,62 @@
                 "doc": "",
                 "name": "Paused"
               }
+            },
+            {
+              "void_v0": {
+                "doc": "",
+                "name": "Pairs"
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "",
+                "name": "PairSources",
+                "type": [
+                  {
+                    "udt": {
+                      "name": "PairKey"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "",
+                "name": "PairConfig",
+                "type": [
+                  {
+                    "udt": {
+                      "name": "PairKey"
+                    }
+                  }
+                ]
+              }
             }
           ],
           "doc": "",
           "lib": "",
           "name": "DataKey"
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "Canonically ordered token pair used as the persistent-storage key.",
+          "fields": [
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            }
+          ],
+          "lib": "",
+          "name": "PairKey"
         }
       },
       {
@@ -22030,6 +23007,58 @@
           "inputs": [
             {
               "doc": "",
+              "name": "cursor",
+              "type": "u32"
+            },
+            {
+              "doc": "",
+              "name": "limit",
+              "type": "u32"
+            }
+          ],
+          "name": "list_pairs",
+          "outputs": [
+            {
+              "vec": {
+                "element_type": {
+                  "udt": {
+                    "name": "PairKey"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Remove all configuration and sources for a pair in one explicit admin\\naction. This is the only non-force path that may remove the last source.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            }
+          ],
+          "name": "remove_pair",
+          "outputs": []
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
               "name": "new_admin",
               "type": "address"
             }
@@ -22041,7 +23070,27 @@
       {
         "function_v0": {
           "doc": "",
-          "inputs": [],
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "cursor",
+              "type": "u32"
+            },
+            {
+              "doc": "",
+              "name": "limit",
+              "type": "u32"
+            }
+          ],
           "name": "list_sources",
           "outputs": [
             {
@@ -22054,6 +23103,42 @@
               }
             }
           ]
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "Optional pair-specific policy. `None` fields inherit global defaults.",
+          "fields": [
+            {
+              "doc": "",
+              "name": "max_deviation_bps",
+              "type": {
+                "option": {
+                  "value_type": "u32"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "max_staleness_seconds",
+              "type": {
+                "option": {
+                  "value_type": "u64"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "min_valid_sources",
+              "type": {
+                "option": {
+                  "value_type": "u32"
+                }
+              }
+            }
+          ],
+          "lib": "",
+          "name": "PairConfig"
         }
       },
       {
@@ -22086,8 +23171,22 @@
             },
             {
               "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            },
+            {
+              "doc": "",
               "name": "source_contract",
               "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "force",
+              "type": "bool"
             }
           ],
           "name": "remove_source",
@@ -22161,6 +23260,26 @@
               "doc": "",
               "name": "Paused",
               "value": 13
+            },
+            {
+              "doc": "",
+              "name": "InvalidPair",
+              "value": 14
+            },
+            {
+              "doc": "",
+              "name": "TooManySources",
+              "value": 15
+            },
+            {
+              "doc": "",
+              "name": "InvalidPage",
+              "value": 16
+            },
+            {
+              "doc": "",
+              "name": "PairNotFound",
+              "value": 17
             }
           ],
           "doc": "",
@@ -22295,7 +23414,31 @@
       },
       {
         "function_v0": {
-          "doc": "Admin-only migration: rewrites all stored source records, defaulting\\nany pre-upgrade record missing a `weight` field to\\n`DEFAULT_SOURCE_WEIGHT` (10_000 = 1.0\\xc3\\x97).",
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            }
+          ],
+          "name": "get_pair_config",
+          "outputs": [
+            {
+              "udt": {
+                "name": "PairConfig"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Admin-only migration: rewrites legacy and pair-scoped source records,\\ndefaulting any pre-upgrade record missing a `weight` field to\\n`DEFAULT_SOURCE_WEIGHT` (10_000 = 1.0\\xc3\\x97).",
           "inputs": [
             {
               "doc": "",
@@ -22318,6 +23461,15 @@
             },
             {
               "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            },
+            {
+              "doc": "",
               "name": "source_contract",
               "type": "address"
             },
@@ -22337,6 +23489,56 @@
             }
           ],
           "name": "register_source",
+          "outputs": []
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "max_staleness_seconds",
+              "type": {
+                "option": {
+                  "value_type": "u64"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "max_deviation_bps",
+              "type": {
+                "option": {
+                  "value_type": "u32"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "min_valid_sources",
+              "type": {
+                "option": {
+                  "value_type": "u32"
+                }
+              }
+            }
+          ],
+          "name": "set_pair_config",
           "outputs": []
         }
       },
@@ -22409,6 +23611,15 @@
               "doc": "",
               "name": "admin",
               "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
             },
             {
               "doc": "",
@@ -22527,6 +23738,38 @@
           "outputs": [
             "u32"
           ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Move selected legacy global sources under a canonical pair. Reads fall\\nback to the legacy list only while a pair has no dedicated sources.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "pair",
+              "type": {
+                "udt": {
+                  "name": "PairKey"
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "selected",
+              "type": {
+                "vec": {
+                  "element_type": "address"
+                }
+              }
+            }
+          ],
+          "name": "assign_legacy_sources",
+          "outputs": []
         }
       },
       {
@@ -26943,6 +28186,63 @@
       },
       {
         "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "RouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [],
+          "name": "get_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "RouterError"
+                  }
+                },
+                "ok_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Whether swaps are currently halted.",
           "inputs": [],
           "name": "is_paused",
@@ -26964,6 +28264,12 @@
               "void_v0": {
                 "doc": "",
                 "name": "Admin"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "",
+                "name": "PendingAdmin"
               }
             },
             {
@@ -27026,6 +28332,69 @@
                   }
                 },
                 "ok_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_admin",
+              "type": "address"
+            }
+          ],
+          "name": "accept_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "RouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "current_admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_admin",
+              "type": "address"
+            }
+          ],
+          "name": "propose_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "RouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
               }
             }
           ]
@@ -27132,6 +28501,16 @@
               "doc": "`pause` / `unpause` was called with an address that is not the stored\\nadmin.",
               "name": "Unauthorized",
               "value": 10
+            },
+            {
+              "doc": "The supplied factory does not implement the factory interface.",
+              "name": "InvalidFactory",
+              "value": 11
+            },
+            {
+              "doc": "`accept_admin` was called without a pending nomination.",
+              "name": "NoPendingAdmin",
+              "value": 12
             }
           ],
           "doc": "Errors surfaced by the router.\\n\\nEvery caller-triggerable failure path returns one of these discriminants\\ninstead of trapping, so integrators can branch on the specific reason a\\nmulti-hop route failed. Discriminants 1 and 2 follow the workspace-wide\\nconvention (`AlreadyInitialized` / `NotInitialized`); see\\n`contracts/amm/src/lib.rs` `AmmError` for the reference enum.",
@@ -27210,7 +28589,21 @@
       },
       {
         "function_v0": {
-          "doc": "Quote the input required to receive exactly `amount_out` along `path`.\\n\\nThe exact-out mirror of [`Router::get_amount_out_path`]. Walks the path\\nin reverse through `AmmPoolClient::get_amount_in`, using the same helper\\n`swap_exact_out` executes with. Panics with `no pool for hop {i}` when a\\nhop has no deployed pool; use [`Router::is_path_routable`] to check\\nfirst.",
+          "doc": "",
+          "inputs": [],
+          "name": "get_pending_admin",
+          "outputs": [
+            {
+              "option": {
+                "value_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Quote the input required to receive exactly `amount_out` along `path`.\\n\\nThe exact-out mirror of [`Router::get_amount_out_path`]. Walks the path\\nin reverse through `AmmPoolClient::get_amount_in`, using the same helper\\n`swap_exact_out` executes with. Returns `RouterError::PoolNotFound` when\\nany hop has no deployed pool; use [`Router::is_path_routable`] to check first.",
           "inputs": [
             {
               "doc": "",
@@ -27244,7 +28637,7 @@
       },
       {
         "function_v0": {
-          "doc": "Resolve every adjacent pair in `path` to its pool address.\\n\\nReturns `path.len() - 1` addresses so integrators can inspect fee tiers\\nand reserves themselves. Panics with `no pool for hop {i}`, naming the\\nfailing hop index, when a pair has no deployed pool.",
+          "doc": "Resolve every adjacent pair in `path` to its pool address.\\n\\nReturns `path.len() - 1` addresses so integrators can inspect fee tiers\\nand reserves themselves. Returns `RouterError::PoolNotFound` when a\\npair has no deployed pool.",
           "inputs": [
             {
               "doc": "",
@@ -27349,7 +28742,7 @@
       },
       {
         "function_v0": {
-          "doc": "Per-hop breakdown of an exact-in quote.\\n\\nReturns `path.len()` amounts where element `i` is the amount of\\n`path[i]` moving through the route; element `0` is `amount_in` and the\\nlast element equals [`Router::get_amount_out_path`] for the same\\narguments. Panics with `no pool for hop {i}` when a hop has no pool,\\nrather than collapsing the route to the ambiguous `0` sentinel.",
+          "doc": "Per-hop breakdown of an exact-in quote.\\n\\nReturns `path.len()` amounts where element `i` is the amount of\\n`path[i]` moving through the route; element `0` is `amount_in` and the\\nlast element equals [`Router::get_amount_out_path`] for the same\\narguments. Returns `RouterError::PoolNotFound` when a hop has no pool,\\nrather than collapsing the route to the ambiguous `0` sentinel.",
           "inputs": [
             {
               "doc": "",
@@ -29166,14 +30559,73 @@
             },
             {
               "void_v0": {
-                "doc": "Registry of every address that has ever had a nonzero staked balance,\\nmaintained so keepers can enumerate stakers for `list_expired_boosts`\\n/ `settle_boost_batch` (#699). An address is added on its first stake\\nand removed once its balance returns to zero \\xe2\\x80\\x94 see\\n`_index_add`/`_index_remove`.",
+                "doc": "Registry of every address that has ever had a nonzero staked balance,\\nmaintained so keepers can enumerate stakers for `list_expired_boosts`\\n/ `settle_boost_batch` (#699). An address is added on its first stake\\nand removed once its balance returns to zero \\xe2\\x80\\x94 see\\n`_index_add`/`_index_remove`.\\n\\nLegacy layout (#1113): superseded by `StakerCount` / `StakerAt` /\\n`StakerSlot`. Only present on pools deployed before that change, until\\n`migrate_staker_index` has moved it over and deleted it.",
                 "name": "StakerIndex"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "Number of registered stakers (persistent, #1113).",
+                "name": "StakerCount"
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "The i-th registered staker, `i < StakerCount` (persistent, #1113).",
+                "name": "StakerAt",
+                "type": [
+                  "u32"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Position of a staker in `StakerAt` (persistent, #1113).",
+                "name": "StakerSlot",
+                "type": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "Next legacy position `migrate_staker_index` expects (instance, #1113).",
+                "name": "MigrationCursor"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "Id of the current `reconcile_reward_accounting` run (instance, #1113).\\n`ReconcileState` entries from an earlier run are ignored.",
+                "name": "ReconcileEpoch"
               }
             }
           ],
           "doc": "",
           "lib": "",
           "name": "DataKey"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "The configuration as stored on-chain: tokens, admin and the boost and\\nlock bounds. A deployer reads this back after `initialize` and compares\\nit with what was intended, since `initialize` cannot be authenticated\\n(the admin may be a contract that cannot sign for itself) (#1114).",
+          "inputs": [],
+          "name": "get_config",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "StakingError"
+                  }
+                },
+                "ok_type": {
+                  "udt": {
+                    "name": "StakingConfig"
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       {
@@ -29353,7 +30805,7 @@
       },
       {
         "function_v0": {
-          "doc": "Permissionlessly settle one staker's expired boost (#699).\\n\\nSafe by construction, not by access control: this can only ever\\nreduce a boost that has genuinely expired, and is a strict no-op for\\neveryone else \\xe2\\x80\\x94\\n- an address with no active lock at all (`lock_expiry == 0`),\\n- an address whose lock is still active (`now < lock_expiry`),\\n- an address already settled (`stored_boost <= MIN_BOOST`), and\\n- an address with nothing staked,\\nall return immediately without touching storage or emitting an\\nevent. There is no path by which calling this on someone else's\\nposition can move funds, change who can withdraw what, or shorten an\\nactive lock \\xe2\\x80\\x94 it only ever writes `MIN_BOOST` over a value that\\ndecay had already made obsolete.\\n\\n\"Settle before mutating\" (required in either option): pending\\nrewards are harvested at the pre-settlement rate *first*, exactly as\\n`stake_locked`/`extend_lock` already do before recomputing a\\nposition's effective amount, so no reward is silently reassigned.",
+          "doc": "Permissionlessly settle one staker's expired boost (#699).\\n\\nSafe by construction, not by access control: this can only ever\\nreduce a boost that has genuinely expired, and is a strict no-op for\\neveryone else \\xe2\\x80\\x94\\n- an address with no active lock at all (`lock_expiry == 0`),\\n- an address whose lock is still active (`now < lock_expiry`),\\n- an address already settled (`stored_boost <= MIN_BOOST`), and\\n- an address with nothing staked,\\nall return immediately without touching storage or emitting an\\nevent. There is no path by which calling this on someone else's\\nposition can move funds, change who can withdraw what, or shorten an\\nactive lock \\xe2\\x80\\x94 it only ever writes `MIN_BOOST` over a value that\\ndecay had already made obsolete.\\n\\n\"Settle before mutating\" (required in either option): pending\\nrewards are harvested at the pre-settlement rate *first*, exactly as\\n`stake_locked`/`extend_lock` already do before recomputing a\\nposition's effective amount, so no reward is silently reassigned.\\n\\nWhile the contract is paused the re",
           "inputs": [
             {
               "doc": "",
@@ -29652,6 +31104,16 @@
               "doc": "`accept_admin` called by an address other than the nominee.",
               "name": "WrongAdmin",
               "value": 21
+            },
+            {
+              "doc": "`initialize` was given the same token as LP token and reward token. The\\nreward accounting derives \"undistributed\" from the contract's whole\\nreward-token balance, which would then include stakers' LP principal.",
+              "name": "IdenticalTokens",
+              "value": 22
+            },
+            {
+              "doc": "`migrate_staker_index` was called with an `offset` that is not the next\\nunmigrated position of the legacy staker vector.",
+              "name": "MigrationOutOfOrder",
+              "value": 23
             }
           ],
           "doc": "Errors surfaced by the staking contract.\\n\\nEvery caller-triggerable failure path returns one of these discriminants\\ninstead of trapping, so callers can distinguish, for example, a still-locked\\nposition from an empty one. Discriminants 1 and 2 follow the workspace-wide\\nconvention (`AlreadyInitialized` / `NotInitialized`); see\\n`contracts/amm/src/lib.rs` `AmmError` for the reference enum.",
@@ -29693,6 +31155,50 @@
           "outputs": [
             "i128"
           ]
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "The configuration fixed at initialization, as stored on-chain (#1114).",
+          "fields": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "lp_token",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "max_boost",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "max_lock_duration",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "min_boost",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "min_lock_duration",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "reward_token",
+              "type": "address"
+            }
+          ],
+          "lib": "",
+          "name": "StakingConfig"
         }
       },
       {
@@ -29917,6 +31423,36 @@
             {
               "vec": {
                 "element_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Move the pre-#1113 staker vector into the indexed registry, one page at\\na time (#1113). Permissionless.\\n\\nPools deployed before the registry kept every staker in one `Vec` in\\ninstance storage (`DataKey::StakerIndex`). Until it is migrated that\\nvector stays readable by the keeper functions, so nothing breaks\\nmid-way. Call this with `offset = 0`, `limit <= MAX_BATCH_SIZE`, then\\nwith each previous `offset + limit` until it returns 0 (\"entries left\");\\nthe last page deletes the legacy vector.\\n\\nPages must be consecutive: an `offset` that is not the next unmigrated\\nposition fails with `MigrationOutOfOrder`. Without that, anyone could\\ncall the last page first and delete the vector before the earlier\\nentries were moved. Stakers who join or leave while the migration is\\nrunning go straight to or out of the new registry; an entry whose\\nbalance is already zero is skipped. Returns the number of legacy entries\\nnot yet processed (0 once finished or when there is nothing to migrate).",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "doc": "",
+              "name": "limit",
+              "type": "u32"
+            }
+          ],
+          "name": "migrate_staker_index",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "StakingError"
+                  }
+                },
+                "ok_type": "u32"
               }
             }
           ]
@@ -33191,6 +34727,11 @@
               "doc": "A CL TWAL query found a stored `LiquiditySnapshot` for the pool but no\\n`ClAccumulator` entry, so there is no running liquidity-cumulative to\\nextrapolate to the current ledger time. Call `save_cl_snapshot` for the\\npool (which writes both) before querying `get_cl_twal`.",
               "name": "MissingClAccumulator",
               "value": 12
+            },
+            {
+              "doc": "Reserve multiplication or cumulative extrapolation overflowed i128.",
+              "name": "ArithmeticOverflow",
+              "value": 13
             }
           ],
           "doc": "",
@@ -33235,6 +34776,25 @@
         }
       },
       {
+        "udt_struct_v0": {
+          "doc": "A TWAL value together with the ledger-time interval it actually covers.",
+          "fields": [
+            {
+              "doc": "",
+              "name": "twal",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "window_used",
+              "type": "u64"
+            }
+          ],
+          "lib": "",
+          "name": "TwalResult"
+        }
+      },
+      {
         "function_v0": {
           "doc": "",
           "inputs": [
@@ -33261,6 +34821,70 @@
               }
             }
           ]
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "",
+          "fields": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_recipient",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "flash_loan_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "lp_rebate_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "protocol_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "reserve_a",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "reserve_b",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "total_shares",
+              "type": "i128"
+            }
+          ],
+          "lib": "",
+          "name": "AmmPoolInfo"
         }
       },
       {
@@ -33630,6 +35254,40 @@
             {
               "vec": {
                 "element_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return AMM TWAL and the effective ledger-time window selected by the\\nnearest retained snapshot at or before the requested boundary.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ],
+          "name": "get_twal_liquidity_detailed",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwalError"
+                  }
+                },
+                "ok_type": {
+                  "udt": {
+                    "name": "TwalResult"
+                  }
+                }
               }
             }
           ]
@@ -34611,6 +36269,18 @@
             },
             {
               "void_v0": {
+                "doc": "",
+                "name": "Factory"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "",
+                "name": "MinSnapshotInterval"
+              }
+            },
+            {
+              "void_v0": {
                 "doc": "Typed tracked-pool list (`Vec<TrackedPool>`), replacing the untyped\\n`TrackedPoolsPersistent` (#964).",
                 "name": "TrackedPools"
               }
@@ -34820,6 +36490,16 @@
               "doc": "A cross-contract call into a pool's oracle interface failed: the pool\\ndoes not implement the function its tracked type implies\\n(`get_price_cumulative` for `Amm`, `get_tick_cumulative` for `Cl`),\\nthe address is not a contract, or the callee panicked. Reported\\ninstead of trapping so a caller can tell a bad pool from a broken\\nconsumer (#964).",
               "name": "CrossContractCallFailed",
               "value": 14
+            },
+            {
+              "doc": "",
+              "name": "SnapshotRateLimited",
+              "value": 15
+            },
+            {
+              "doc": "",
+              "name": "PoolNotRegistered",
+              "value": 16
             }
           ],
           "doc": "",
@@ -34858,6 +36538,30 @@
               }
             }
           ]
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "",
+          "fields": [
+            {
+              "doc": "",
+              "name": "snapshot_timestamp",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "twap",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "window_used",
+              "type": "u64"
+            }
+          ],
+          "lib": "",
+          "name": "TwapResult"
         }
       },
       {
@@ -34978,6 +36682,70 @@
           "fields": [
             {
               "doc": "",
+              "name": "admin",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_recipient",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "flash_loan_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "lp_rebate_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "protocol_fee_bps",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "reserve_a",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "reserve_b",
+              "type": "i128"
+            },
+            {
+              "doc": "",
+              "name": "token_a",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "token_b",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "total_shares",
+              "type": "i128"
+            }
+          ],
+          "lib": "",
+          "name": "AmmPoolInfo"
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "",
+          "fields": [
+            {
+              "doc": "",
               "name": "address",
               "type": "address"
             },
@@ -35062,6 +36830,30 @@
               }
             }
           ]
+        }
+      },
+      {
+        "udt_struct_v0": {
+          "doc": "",
+          "fields": [
+            {
+              "doc": "",
+              "name": "average_tick",
+              "type": "i64"
+            },
+            {
+              "doc": "",
+              "name": "snapshot_timestamp",
+              "type": "u64"
+            },
+            {
+              "doc": "",
+              "name": "window_used",
+              "type": "u64"
+            }
+          ],
+          "lib": "",
+          "name": "ClTwapResult"
         }
       },
       {
@@ -35257,6 +37049,40 @@
       },
       {
         "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ],
+          "name": "get_cl_twap_detailed",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "udt": {
+                    "name": "ClTwapResult"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Returns the active retention policy, or a default policy with\\n`max_age_seconds = 604_800` (7 days) and `max_snapshots_per_pool = 0` (unlimited).",
           "inputs": [],
           "name": "get_retention_policy",
@@ -35264,6 +37090,35 @@
             {
               "udt": {
                 "name": "RetentionPolicy"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Save an AMM snapshot without keeper authorization for a factory pool.\\nCalls are rate-limited by `configure_public_snapshots`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "save_snapshot_public",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
               }
             }
           ]
@@ -35318,6 +37173,69 @@
                 "element_type": {
                   "udt": {
                     "name": "TrackedPool"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ],
+          "name": "get_twap_price_detailed",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "udt": {
+                    "name": "TwapResult"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Save a CL snapshot without keeper authorization for a factory pool.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "save_cl_snapshot_public",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
                   }
                 }
               }
@@ -35402,6 +37320,40 @@
       },
       {
         "function_v0": {
+          "doc": "Configure the factory used to validate permissionless snapshot calls.\\nExisting keeper-authorized snapshot entrypoints are unchanged.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "factory",
+              "type": "address"
+            },
+            {
+              "doc": "",
+              "name": "min_interval_seconds",
+              "type": "u64"
+            }
+          ],
+          "name": "configure_public_snapshots",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "",
           "inputs": [
             {
@@ -35441,6 +37393,22 @@
                 }
               }
             }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Ledger timestamp of the newest retained snapshot, or zero when empty.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type": "address"
+            }
+          ],
+          "name": "get_latest_snapshot_timestamp",
+          "outputs": [
+            "u64"
           ]
         }
       },

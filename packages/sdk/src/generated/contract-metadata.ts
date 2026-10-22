@@ -22,7 +22,9 @@ export const CONTRACT_METADATA = {
       "18": "NoStakers",
       "19": "BatchTooLarge",
       "20": "NoPendingAdmin",
-      "21": "WrongAdmin"
+      "21": "WrongAdmin",
+      "22": "IdenticalTokens",
+      "23": "MigrationOutOfOrder"
     },
     "structs": {
       "LockedPosition": [
@@ -59,6 +61,36 @@ export const CONTRACT_METADATA = {
         {
           "name": "boost_multiplier",
           "type": "i128"
+        }
+      ],
+      "StakingConfig": [
+        {
+          "name": "lp_token",
+          "type": "Address"
+        },
+        {
+          "name": "reward_token",
+          "type": "Address"
+        },
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "min_boost",
+          "type": "i128"
+        },
+        {
+          "name": "max_boost",
+          "type": "i128"
+        },
+        {
+          "name": "min_lock_duration",
+          "type": "u64"
+        },
+        {
+          "name": "max_lock_duration",
+          "type": "u64"
         }
       ],
       "PoolInfo": [
@@ -109,7 +141,12 @@ export const CONTRACT_METADATA = {
       "16": "NoLpBalance",
       "17": "NoLpSupply",
       "18": "NoPendingRewards",
-      "19": "RecordNotFound"
+      "19": "RecordNotFound",
+      "20": "NoStake",
+      "21": "InvalidStakeAmount",
+      "22": "InsufficientStake",
+      "23": "CampaignEnded",
+      "24": "LegacyCampaign"
     },
     "structs": {
       "Campaign": [
@@ -165,6 +202,20 @@ export const CONTRACT_METADATA = {
       "ProviderSnapshot": [
         {
           "name": "acc_at_snapshot",
+          "type": "i128"
+        }
+      ],
+      "StakePosition": [
+        {
+          "name": "amount",
+          "type": "i128"
+        },
+        {
+          "name": "acc_at_snapshot",
+          "type": "i128"
+        },
+        {
+          "name": "pending",
           "type": "i128"
         }
       ],
@@ -248,6 +299,10 @@ export const CONTRACT_METADATA = {
         {
           "name": "beneficiary",
           "type": "Address"
+        },
+        {
+          "name": "revoked",
+          "type": "bool"
         }
       ]
     }
@@ -266,7 +321,11 @@ export const CONTRACT_METADATA = {
       "10": "WeightFloorNotMet",
       "11": "NoPendingAdmin",
       "12": "WrongAdmin",
-      "13": "Paused"
+      "13": "Paused",
+      "14": "InvalidPair",
+      "15": "TooManySources",
+      "16": "InvalidPage",
+      "17": "PairNotFound"
     },
     "structs": {
       "OracleSource": [
@@ -285,6 +344,30 @@ export const CONTRACT_METADATA = {
         {
           "name": "weight",
           "type": "u32"
+        }
+      ],
+      "PairKey": [
+        {
+          "name": "token_a",
+          "type": "Address"
+        },
+        {
+          "name": "token_b",
+          "type": "Address"
+        }
+      ],
+      "PairConfig": [
+        {
+          "name": "max_staleness_seconds",
+          "type": "Option<u64>"
+        },
+        {
+          "name": "max_deviation_bps",
+          "type": "Option<u32>"
+        },
+        {
+          "name": "min_valid_sources",
+          "type": "Option<u32>"
         }
       ],
       "SourceQuote": [
@@ -514,9 +597,56 @@ export const CONTRACT_METADATA = {
       "9": "WindowTooLarge",
       "10": "TooManyPools",
       "11": "CrossContractCallFailed",
-      "12": "MissingClAccumulator"
+      "12": "MissingClAccumulator",
+      "13": "ArithmeticOverflow"
     },
     "structs": {
+      "AmmPoolInfo": [
+        {
+          "name": "token_a",
+          "type": "Address"
+        },
+        {
+          "name": "token_b",
+          "type": "Address"
+        },
+        {
+          "name": "reserve_a",
+          "type": "i128"
+        },
+        {
+          "name": "reserve_b",
+          "type": "i128"
+        },
+        {
+          "name": "total_shares",
+          "type": "i128"
+        },
+        {
+          "name": "fee_bps",
+          "type": "i128"
+        },
+        {
+          "name": "flash_loan_fee_bps",
+          "type": "i128"
+        },
+        {
+          "name": "admin",
+          "type": "Address"
+        },
+        {
+          "name": "fee_recipient",
+          "type": "Address"
+        },
+        {
+          "name": "protocol_fee_bps",
+          "type": "i128"
+        },
+        {
+          "name": "lp_rebate_bps",
+          "type": "i128"
+        }
+      ],
       "TrackedPool": [
         {
           "name": "address",
@@ -553,6 +683,16 @@ export const CONTRACT_METADATA = {
         {
           "name": "error_code",
           "type": "u32"
+        }
+      ],
+      "TwalResult": [
+        {
+          "name": "twal",
+          "type": "i128"
+        },
+        {
+          "name": "window_used",
+          "type": "u64"
         }
       ],
       "ClLiquidityAccumulator": [

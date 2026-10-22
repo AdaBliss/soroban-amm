@@ -197,10 +197,14 @@ fn test_emergency_withdraw() {
     assert_eq!(info_before.reserve_b, 1_000_000);
 
     let recipient = Address::generate(&env);
+    env.ledger().set_timestamp(5_000);
+    amm.pause();
+    amm.announce_emergency_withdraw(&admin, &recipient);
+    // Past the default 24 h emergency delay.
     let expected_ts = 99999_u64;
     env.ledger().set_timestamp(expected_ts);
 
-    amm.emergency_withdraw(&recipient);
+    amm.emergency_withdraw(&admin, &recipient);
 
     let info_after = amm.get_info();
     assert_eq!(info_after.reserve_a, 0);
@@ -261,7 +265,11 @@ fn test_emergency_withdraw_zeros_total_shares_and_allows_redeposit() {
 
     // Emergency drain.
     let recipient = Address::generate(&env);
-    amm.emergency_withdraw(&recipient);
+    amm.pause();
+    amm.announce_emergency_withdraw(&admin, &recipient);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400);
+    amm.emergency_withdraw(&admin, &recipient);
 
     // After drain: reserves are 0, total_shares is preserved, and pool is in terminal drained state (#1095).
     let info_after = amm.get_info();
@@ -324,8 +332,11 @@ fn test_multisig_emergency_wd_zeros_total_shares_and_allows_redeposit() {
 
     // Propose + execute the multisig emergency withdrawal.
     let recipient = Address::generate(&env);
-    amm.propose_emergency_withdraw(&signer, &recipient);
-    amm.exec_multisig_emergency_wd(&signer);
+    let pid = amm.propose_emergency_withdraw(&signer, &recipient);
+    amm.pause();
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 86_400);
+    amm.exec_multisig_emergency_wd(&signer, &pid);
 
     // After drain: reserves are 0, total_shares is preserved, and pool is drained (#1095).
     let info_after = amm.get_info();
@@ -357,8 +368,9 @@ fn test_emergency_withdraw_requires_admin_auth() {
     let env = Env::default();
     let amm_addr = env.register_contract(None, AmmPool);
     let amm = AmmPoolClient::new(&env, &amm_addr);
+    let admin = Address::generate(&env);
     let recipient = Address::generate(&env);
-    amm.emergency_withdraw(&recipient);
+    amm.emergency_withdraw(&admin, &recipient);
 }
 
 #[test]

@@ -2580,7 +2580,7 @@ fn test_lock_released_after_emergency_withdraw_unauthorized_error() {
     // return Unauthorized.
     amm.set_multisig(&ts.admin, &soroban_sdk::vec![env, ts.admin.clone()], &1u32);
     let to = Address::generate(env);
-    assert!(amm.try_emergency_withdraw(&to).is_err());
+    assert!(amm.try_emergency_withdraw(&ts.admin, &to).is_err());
     assert!(!amm.is_locked());
 }
 
@@ -2713,19 +2713,19 @@ fn test_multisig_reproposal_by_approved_signer_does_not_extend_expiry() {
     env.ledger().set_timestamp(t0);
 
     // Signer `a` opens the proposal. Expiry = t0 + TTL, approvals = [a].
-    amm.propose_emergency_withdraw(&a, &recipient);
-    assert_eq!(amm.get_multisig_proposal().unwrap().approvals.len(), 1);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
+    assert_eq!(amm.get_multisig_proposal(&pid).unwrap().approvals.len(), 1);
 
-    // Six days later the *already-approved* signer `a` re-proposes the SAME
-    // recipient. This adds no new approval and, with the fix, must NOT extend
-    // the expiry beyond the original t0 + TTL.
+    // Six days later the *already-approved* signer `a` approves again. This
+    // adds no new approval and must NOT extend the expiry beyond the original
+    // t0 + TTL.
     let t1 = t0 + 6 * 24 * 60 * 60;
     env.ledger().set_timestamp(t1);
-    amm.propose_emergency_withdraw(&a, &recipient);
+    amm.approve_multisig_proposal(&a, &pid);
     assert_eq!(
-        amm.get_multisig_proposal().unwrap().approvals.len(),
+        amm.get_multisig_proposal(&pid).unwrap().approvals.len(),
         1,
-        "re-proposing signer must not be double-counted"
+        "re-approving signer must not be double-counted"
     );
 
     // Advance just past the ORIGINAL expiry (t0 + TTL). Note t2 < t1 + TTL, so if
@@ -2734,7 +2734,7 @@ fn test_multisig_reproposal_by_approved_signer_does_not_extend_expiry() {
     // NOT extended by the already-approved signer.
     let t2 = t0 + TTL + 1;
     env.ledger().set_timestamp(t2);
-    let result = amm.try_exec_multisig_emergency_wd(&b);
+    let result = amm.try_exec_multisig_emergency_wd(&b, &pid);
     assert_eq!(
         result,
         Err(Ok(AmmError::ProposalExpired)),
@@ -2776,20 +2776,23 @@ fn test_multisig_new_cosigner_refreshes_window_and_quorum_executes() {
     env.ledger().set_timestamp(t0);
 
     // Signer `a` opens the proposal: approvals = [a], expiry = t0 + TTL.
-    amm.propose_emergency_withdraw(&a, &recipient);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
 
-    // A genuinely NEW signer `b` co-signs six days later. This is real progress
-    // toward quorum and (preserved behavior) refreshes the window to t1 + TTL.
+    // A genuinely NEW signer `b` approves six days later. Reaching quorum is real
+    // progress, so the window is extended once to cover the emergency delay.
     let t1 = t0 + 6 * 24 * 60 * 60;
     env.ledger().set_timestamp(t1);
-    amm.propose_emergency_withdraw(&b, &recipient);
-    assert_eq!(amm.get_multisig_proposal().unwrap().approvals.len(), 2);
+    amm.approve_multisig_proposal(&b, &pid);
+    assert_eq!(amm.get_multisig_proposal(&pid).unwrap().approvals.len(), 2);
+    amm.pause();
 
-    // Past the ORIGINAL expiry but inside the refreshed window (t2 < t1 + TTL).
-    // Quorum (2) is met, so execution must succeed and drain reserves to recipient.
+    // Past the ORIGINAL expiry but inside the refreshed window, and more than
+    // the 24 h delay after quorum was reached. Execution must succeed and drain
+    // reserves to the recipient.
     let t2 = t0 + TTL + 1;
+    assert!(t2 >= t1 + 86_400);
     env.ledger().set_timestamp(t2);
-    amm.exec_multisig_emergency_wd(&a);
+    amm.exec_multisig_emergency_wd(&a, &pid);
 
     assert_eq!(
         token_a.balance(&ts.amm_addr),
@@ -3260,7 +3263,7 @@ fn test_post_drain_redeposit_and_old_lp_redemption_blocked_emergency_withdraw() 
     assert_eq!(old_shares, 999_999_000);
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
     assert!(amm.is_drained());
     assert_eq!(ta_client.balance(&rescue), 1_000_000_000);
     assert_eq!(tb_client.balance(&rescue), 1_000_000_000);
@@ -3314,9 +3317,7 @@ fn test_post_drain_redeposit_and_old_lp_redemption_blocked_multisig() {
     assert_eq!(old_shares, 999_999_000);
 
     let rescue = Address::generate(env);
-    amm.propose_emergency_withdraw(&signer1, &rescue);
-    amm.propose_emergency_withdraw(&signer2, &rescue);
-    amm.exec_multisig_emergency_wd(&signer2);
+    drain_via_multisig(&ts, &[&signer1, &signer2], &rescue);
     assert!(amm.is_drained());
 
     let new_depositor = Address::generate(env);
@@ -3357,7 +3358,7 @@ fn test_post_drain_minimum_liquidity_shares_cannot_redeem() {
     assert_eq!(amm.shares_of(&ts.amm_addr), 1_000);
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
 
     // Even if someone tries to redeem the pool's locked 1_000 shares, it fails with PoolDrained.
     let res = amm.try_remove_liquidity(&ts.amm_addr, &1_000_i128, &0_i128, &0_i128, &u64::MAX);
@@ -3391,7 +3392,7 @@ fn test_drained_view_and_total_shares_preserved() {
     assert_eq!(shares_before, 5_000_000);
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
 
     assert!(amm.is_drained());
     assert!(amm.is_paused());
@@ -3415,7 +3416,7 @@ fn test_drained_state_blocks_all_liquidity_and_swap_entrypoints() {
     AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
 
     assert_eq!(
         amm.try_add_liquidity(&provider, &1_000, &1_000, &0, &u64::MAX),
@@ -3465,21 +3466,26 @@ fn test_drained_state_blocks_unpause_and_recovery_and_second_drain() {
     AddLiquidity::new(&amm, &provider, 5_000_000, 5_000_000).execute();
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
 
     assert_eq!(amm.try_unpause(), Err(Ok(AmmError::PoolDrained)));
     assert_eq!(
         amm.try_try_circuit_breaker_recovery(),
         Err(Ok(AmmError::PoolDrained))
     );
+    // The announcement is consumed by the drain, and a new one is refused.
     assert_eq!(
-        amm.try_emergency_withdraw(&rescue),
+        amm.try_emergency_withdraw(&ts.admin, &rescue),
+        Err(Ok(AmmError::NoPendingProposal))
+    );
+    assert_eq!(
+        amm.try_announce_emergency_withdraw(&ts.admin, &rescue),
         Err(Ok(AmmError::PoolDrained))
     );
 }
 
 #[test]
-fn test_multisig_emergency_wd_below_quorum_returns_quorum_not_met() {
+fn test_multisig_emergency_wd_below_quorum_returns_quorum_not_reached() {
     let ts = setup_pool(30);
     let env = &ts.env;
     let amm = AmmPoolClient::new(env, &ts.amm_addr);
@@ -3494,10 +3500,10 @@ fn test_multisig_emergency_wd_below_quorum_returns_quorum_not_met() {
     amm.set_multisig(&ts.admin, &signers, &2_u32);
 
     let rescue = Address::generate(env);
-    amm.propose_emergency_withdraw(&s1, &rescue);
+    let pid = amm.propose_emergency_withdraw(&s1, &rescue);
 
-    let res = amm.try_exec_multisig_emergency_wd(&s1);
-    assert_eq!(res, Err(Ok(AmmError::QuorumNotMet)));
+    let res = amm.try_exec_multisig_emergency_wd(&s1, &pid);
+    assert_eq!(res, Err(Ok(AmmError::QuorumNotReached)));
 }
 
 #[test]
@@ -3513,7 +3519,7 @@ fn test_multisig_emergency_wd_missing_proposal_returns_no_pending_proposal() {
     signers.push_back(s2.clone());
     amm.set_multisig(&ts.admin, &signers, &2_u32);
 
-    let res = amm.try_exec_multisig_emergency_wd(&s1);
+    let res = amm.try_exec_multisig_emergency_wd(&s1, &1_u64);
     assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
 }
 
@@ -3543,7 +3549,7 @@ fn test_emergency_withdraw_clears_accrued_protocol_fees_and_blocks_fee_withdrawa
     assert_eq!(acc_b, 0);
 
     let rescue = Address::generate(env);
-    amm.emergency_withdraw(&rescue);
+    drain_via_admin(&ts, &rescue);
 
     // Accrued fees are cleared and the rescue address receives the full contract token balance.
     assert_eq!(amm.get_accrued_fees(), (0, 0));
@@ -3582,8 +3588,7 @@ fn test_multisig_emergency_wd_clears_accrued_protocol_fees_and_blocks_fee_withdr
     assert!(amm.get_accrued_fees().0 > 0);
 
     let rescue = Address::generate(env);
-    amm.propose_emergency_withdraw(&s1, &rescue);
-    amm.exec_multisig_emergency_wd(&s1);
+    drain_via_multisig(&ts, &[&s1], &rescue);
 
     assert_eq!(amm.get_accrued_fees(), (0, 0));
     assert_eq!(ta_client.balance(&ts.amm_addr), 0);
@@ -4465,6 +4470,36 @@ fn test_remove_liquidity_one_sided_zero_fee_exact_parity() {
 }
 
 // ── Emergency withdrawal: k-of-n guard + announced delay ─────────────────────
+//
+// Helpers that drive the full hardened flow with the default 24 h delay.
+
+/// Drain the pool through the single-admin path: pause, announce `to`, wait out
+/// the default delay, then withdraw.
+fn drain_via_admin(ts: &TestSetup, to: &Address) {
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    amm.pause();
+    amm.announce_emergency_withdraw(&ts.admin, to);
+    ts.env
+        .ledger()
+        .set_timestamp(ts.env.ledger().timestamp() + 86_400);
+    amm.emergency_withdraw(&ts.admin, to);
+}
+
+/// Drain the pool through the multisig path: the first signer proposes, the
+/// rest approve, then the pool is paused, the default delay passes and the
+/// first signer executes.
+fn drain_via_multisig(ts: &TestSetup, signers: &[&Address], to: &Address) {
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    let pid = amm.propose_emergency_withdraw(signers[0], to);
+    for signer in &signers[1..] {
+        amm.approve_multisig_proposal(signer, &pid);
+    }
+    amm.pause();
+    ts.env
+        .ledger()
+        .set_timestamp(ts.env.ledger().timestamp() + 86_400);
+    amm.exec_multisig_emergency_wd(signers[0], &pid);
+}
 //
 // These tests cover the tamper-resistant multisig guard, the announced
 // delayed single-admin emergency withdrawal, and the distinct error

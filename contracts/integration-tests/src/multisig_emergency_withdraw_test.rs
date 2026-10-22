@@ -1,11 +1,12 @@
 //! Integration tests for the AMM k-of-n multisig emergency withdrawal flow.
 //!
 //! Issue #391: covers set_multisig, propose_emergency_withdraw,
-//! exec_multisig_emergency_wd, and the unilateral emergency_withdraw guard.
+//! approve_multisig_proposal, exec_multisig_emergency_wd, and the unilateral
+//! emergency_withdraw guard.
 //!
-//! Updated for the guard-hardening issue: the multisig guard cannot be
-//! disabled by a single admin key, emergency withdrawals require a pause and
-//! an announced delay, and distinct error variants are returned.
+//! Updated for the guard-hardening issue: an active multisig guard cannot be
+//! changed or disabled by the admin it guards, emergency withdrawals require a
+//! pause and an announced delay, and distinct error variants are returned.
 
 use amm::{AmmError, AmmPool, AmmPoolClient};
 use soroban_sdk::{
@@ -17,6 +18,7 @@ use token::LpToken;
 
 const DEADLINE: u64 = u64::MAX;
 const EMERGENCY_DELAY_SECS: u64 = 24 * 60 * 60;
+const T0: u64 = 1_000;
 
 fn set_ledger_ts(env: &Env, ts: u64) {
     env.ledger().set(LedgerInfo {
@@ -34,18 +36,25 @@ fn set_ledger_ts(env: &Env, ts: u64) {
 struct Suite {
     env: Env,
     amm_addr: Address,
+    lp_addr: Address,
     token_a: Address,
     token_b: Address,
     admin: Address,
 }
 
-fn setup_suite() -> Suite {
-    let env = Env::default();
-    env.budget().reset_unlimited();
-    env.mock_all_auths();
-    set_ledger_ts(&env, 1_000);
+impl Suite {
+    fn amm(&self) -> AmmPoolClient<'_> {
+        AmmPoolClient::new(&self.env, &self.amm_addr)
+    }
+}
 
-    let admin = Address::generate(&env);
+/// Register a pool and its LP token, initialized with `emergency_delay_secs`,
+/// but with no liquidity.
+fn register_pool(
+    env: &Env,
+    emergency_delay_secs: u64,
+) -> (Address, Address, Address, Address, Address) {
+    let admin = Address::generate(env);
     let token_a = env
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
@@ -61,18 +70,35 @@ fn setup_suite() -> Suite {
     let amm_addr = env.register_contract(None, AmmPool);
 
     let lp_addr = env.register_contract(None, LpToken);
-    token::LpTokenClient::new(&env, &lp_addr).initialize(
+    token::LpTokenClient::new(env, &lp_addr).initialize(
         &amm_addr,
-        &soroban_sdk::String::from_str(&env, "AMM LP"),
-        &soroban_sdk::String::from_str(&env, "ALP"),
+        &soroban_sdk::String::from_str(env, "AMM LP"),
+        &soroban_sdk::String::from_str(env, "ALP"),
         &7u32,
     );
 
-    let amm = AmmPoolClient::new(&env, &amm_addr);
-    amm.initialize(
-        &admin, &token_a, &token_b, &lp_addr, &30_i128, &admin, &0_i128,
+    let amm = AmmPoolClient::new(env, &amm_addr);
+    amm.initialize_with_emergency_delay(
+        &admin,
+        &token_a,
+        &token_b,
+        &lp_addr,
+        &30_i128,
+        &admin,
+        &0_i128,
+        &emergency_delay_secs,
     );
-    amm.set_emergency_delay(&admin, &EMERGENCY_DELAY_SECS);
+    (amm_addr, lp_addr, token_a, token_b, admin)
+}
+
+fn setup_suite() -> Suite {
+    let env = Env::default();
+    env.budget().reset_unlimited();
+    env.mock_all_auths();
+    set_ledger_ts(&env, T0);
+
+    let (amm_addr, lp_addr, token_a, token_b, admin) = register_pool(&env, EMERGENCY_DELAY_SECS);
+    let amm = AmmPoolClient::new(&env, &amm_addr);
 
     // Seed the pool with reserves.
     let provider = Address::generate(&env);
@@ -83,6 +109,7 @@ fn setup_suite() -> Suite {
     Suite {
         env,
         amm_addr,
+        lp_addr,
         token_a,
         token_b,
         admin,
@@ -97,6 +124,12 @@ fn signer_vec(env: &Env, signers: &[Address]) -> Vec<Address> {
     v
 }
 
+/// Install a multisig guard with `signers` and `quorum`.
+fn install_multisig(s: &Suite, signers: &[Address], quorum: u32) {
+    s.amm()
+        .set_multisig(&s.admin, &signer_vec(&s.env, signers), &quorum);
+}
+
 #[test]
 fn scenario_multisig_non_signer_proposal_fails() {
     let s = setup_suite();
@@ -106,15 +139,16 @@ fn scenario_multisig_non_signer_proposal_fails() {
     let non_signer = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone(), c.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a, b, c], 2);
 
-    let result = amm.try_propose_emergency_withdraw(&non_signer, &recipient);
-    assert!(result.is_err(), "non-signer proposal should fail");
+    let result = s
+        .amm()
+        .try_propose_emergency_withdraw(&non_signer, &recipient);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::Unauthorized)),
+        "non-signer proposal should fail"
+    );
 }
 
 #[test]
@@ -125,17 +159,13 @@ fn scenario_multisig_single_approval_does_not_execute() {
     let c = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone(), c.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b, c], 2);
+    let amm = s.amm();
 
-    amm.propose_emergency_withdraw(&a, &recipient);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
 
-    // Only one approval collected; execution must fail with QuorumNotReached before quorum is reached.
-    let result = amm.try_exec_multisig_emergency_wd(&a);
+    // Only one approval collected; execution must fail with QuorumNotReached.
+    let result = amm.try_exec_multisig_emergency_wd(&a, &pid);
     assert_eq!(
         result,
         Err(Ok(AmmError::QuorumNotReached)),
@@ -149,14 +179,9 @@ fn scenario_multisig_exec_without_proposal_returns_no_pending_proposal() {
     let a = Address::generate(&s.env);
     let b = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b], 2);
 
-    let result = amm.try_exec_multisig_emergency_wd(&a);
+    let result = s.amm().try_exec_multisig_emergency_wd(&a, &1_u64);
     assert_eq!(
         result,
         Err(Ok(AmmError::NoPendingProposal)),
@@ -172,12 +197,8 @@ fn scenario_multisig_quorum_triggers_emergency_withdrawal() {
     let c = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone(), c.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b.clone(), c], 2);
+    let amm = s.amm();
 
     let pool_a_before = TokenClient::new(&s.env, &s.token_a).balance(&s.amm_addr);
     let pool_b_before = TokenClient::new(&s.env, &s.token_b).balance(&s.amm_addr);
@@ -186,18 +207,19 @@ fn scenario_multisig_quorum_triggers_emergency_withdrawal() {
     let shares_before = amm.get_info().total_shares;
 
     // Collect quorum (2 approvals) before executing.
-    amm.propose_emergency_withdraw(&a, &recipient);
-    amm.propose_emergency_withdraw(&b, &recipient);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
+    amm.approve_multisig_proposal(&b, &pid);
+    amm.pause();
 
     // The multisig path is also delayed from the moment quorum is reached.
-    let early = amm.try_exec_multisig_emergency_wd(&b);
+    let early = amm.try_exec_multisig_emergency_wd(&b, &pid);
     assert_eq!(
         early,
         Err(Ok(AmmError::EmergencyDelayNotElapsed)),
         "execution before the delay must fail"
     );
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-    amm.exec_multisig_emergency_wd(&b);
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+    amm.exec_multisig_emergency_wd(&b, &pid);
 
     assert!(amm.is_drained(), "pool should enter terminal Drained state");
     assert_eq!(
@@ -230,27 +252,46 @@ fn scenario_multisig_quorum_triggers_emergency_withdrawal() {
 }
 
 #[test]
+fn scenario_multisig_requires_pause() {
+    let s = setup_suite();
+    let a = Address::generate(&s.env);
+    let b = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
+
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
+    amm.approve_multisig_proposal(&b, &pid);
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+
+    let result = amm.try_exec_multisig_emergency_wd(&b, &pid);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::Paused)),
+        "the multisig path must also require a paused pool"
+    );
+}
+
+#[test]
 fn scenario_multisig_re_execution_returns_already_executed() {
     let s = setup_suite();
     let a = Address::generate(&s.env);
     let b = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
 
     // Collect quorum (2 approvals) so the first execution succeeds.
-    amm.propose_emergency_withdraw(&a, &recipient);
-    amm.propose_emergency_withdraw(&b, &recipient);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-    amm.exec_multisig_emergency_wd(&b);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
+    amm.approve_multisig_proposal(&b, &pid);
+    amm.pause();
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+    amm.exec_multisig_emergency_wd(&b, &pid);
 
     // Re-executing the same proposal must fail with AlreadyExecuted.
-    let result = amm.try_exec_multisig_emergency_wd(&a);
+    let result = amm.try_exec_multisig_emergency_wd(&a, &pid);
     assert_eq!(
         result,
         Err(Ok(AmmError::AlreadyExecuted)),
@@ -265,19 +306,15 @@ fn scenario_multisig_expired_proposal_cannot_execute() {
     let b = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
 
-    amm.propose_emergency_withdraw(&a, &recipient);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
 
     // Advance past the 7-day proposal TTL.
-    set_ledger_ts(&s.env, 1_000 + (7 * 24 * 60 * 60) + 1);
+    set_ledger_ts(&s.env, T0 + (7 * 24 * 60 * 60) + 1);
 
-    let result = amm.try_exec_multisig_emergency_wd(&b);
+    let result = amm.try_exec_multisig_emergency_wd(&b, &pid);
     assert_eq!(
         result,
         Err(Ok(AmmError::ProposalExpired)),
@@ -292,15 +329,15 @@ fn scenario_plain_emergency_withdraw_blocked_with_multisig() {
     let b = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    let amm = s.amm();
+    amm.announce_emergency_withdraw(&s.admin, &recipient);
+    amm.pause();
+    install_multisig(&s, &[a, b], 2);
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
 
-    // Even the admin must use the multisig flow when a quorum is configured.
-    let result = amm.try_emergency_withdraw(&recipient);
+    // Even a fully announced, delayed, paused withdrawal by the admin must use
+    // the multisig flow once a quorum is configured.
+    let result = amm.try_emergency_withdraw(&s.admin, &recipient);
     assert_eq!(
         result,
         Err(Ok(AmmError::Unauthorized)),
@@ -315,19 +352,72 @@ fn scenario_admin_cannot_disable_multisig_alone() {
     let b = Address::generate(&s.env);
     let c = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone(), c.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a, b, c], 2);
+    let amm = s.amm();
 
-    // A single admin key must not be able to turn the guard off.
+    // A single admin key must not be able to turn the guard off...
     let result = amm.try_set_multisig(&s.admin, &signer_vec(&s.env, &[]), &0u32);
     assert_eq!(
         result,
-        Err(Ok(AmmError::Unauthorized)),
+        Err(Ok(AmmError::MultisigGuardActive)),
         "admin alone must not disable the multisig guard"
+    );
+
+    // ...or swap in a signer set it controls.
+    let own_signer = Address::generate(&s.env);
+    let result = amm.try_set_multisig(&s.admin, &signer_vec(&s.env, &[own_signer]), &1u32);
+    assert_eq!(result, Err(Ok(AmmError::MultisigGuardActive)));
+}
+
+#[test]
+fn scenario_multisig_can_disable_itself() {
+    let s = setup_suite();
+    let a = Address::generate(&s.env);
+    let b = Address::generate(&s.env);
+
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
+
+    let pid = amm.propose_set_multisig(&a, &signer_vec(&s.env, &[]), &0u32);
+
+    // One of two approvals is not enough.
+    assert_eq!(
+        amm.try_exec_multisig_set_multisig(&a, &pid),
+        Err(Ok(AmmError::QuorumNotReached))
+    );
+
+    amm.approve_multisig_proposal(&b, &pid);
+    amm.exec_multisig_set_multisig(&a, &pid);
+
+    let (signers, quorum) = amm.get_multisig();
+    assert_eq!(quorum, 0);
+    assert_eq!(signers.len(), 0);
+}
+
+#[test]
+fn scenario_multisig_reconfiguration_invalidates_old_proposals() {
+    let s = setup_suite();
+    let a = Address::generate(&s.env);
+    let b = Address::generate(&s.env);
+    let recipient = Address::generate(&s.env);
+
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
+
+    // A drain is proposed under the 2-of-2 configuration...
+    let drain = amm.propose_emergency_withdraw(&a, &recipient);
+
+    // ...then the signers move to a 1-of-1 set.
+    let new_set = Address::generate(&s.env);
+    let reconfig = amm.propose_set_multisig(&a, &signer_vec(&s.env, &[new_set]), &1u32);
+    amm.approve_multisig_proposal(&b, &reconfig);
+    amm.exec_multisig_set_multisig(&a, &reconfig);
+
+    // The stale proposal cannot be approved or executed any more.
+    let new_signer = amm.get_multisig().0.get(0).unwrap();
+    assert_eq!(
+        amm.try_approve_multisig_proposal(&new_signer, &drain),
+        Err(Ok(AmmError::ProposalExpired))
     );
 }
 
@@ -338,12 +428,9 @@ fn scenario_set_multisig_invalid_quorum() {
     let b = Address::generate(&s.env);
     let c = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    let result = amm.try_set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone(), c.clone()]),
-        &4u32,
-    );
+    let result = s
+        .amm()
+        .try_set_multisig(&s.admin, &signer_vec(&s.env, &[a, b, c]), &4u32);
     assert_eq!(
         result,
         Err(Ok(AmmError::InvalidQuorum)),
@@ -352,24 +439,47 @@ fn scenario_set_multisig_invalid_quorum() {
 }
 
 #[test]
-fn scenario_emergency_withdraw_requires_pause_and_delay() {
+fn scenario_set_multisig_rejects_duplicate_signers() {
+    let s = setup_suite();
+    let a = Address::generate(&s.env);
+
+    let result = s
+        .amm()
+        .try_set_multisig(&s.admin, &signer_vec(&s.env, &[a.clone(), a]), &2u32);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::InvalidQuorum)),
+        "duplicate signers could make the quorum unreachable"
+    );
+}
+
+#[test]
+fn scenario_emergency_withdraw_requires_pause() {
     let s = setup_suite();
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-
-    // Announce, but the pool is not paused yet.
+    let amm = s.amm();
     amm.announce_emergency_withdraw(&s.admin, &recipient);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-    let unpaused = amm.try_emergency_withdraw(&recipient);
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+
+    let unpaused = amm.try_emergency_withdraw(&s.admin, &recipient);
     assert_eq!(
         unpaused,
-        Err(Ok(AmmError::PoolNotPaused)),
+        Err(Ok(AmmError::Paused)),
         "emergency_withdraw must require the pool to be paused"
     );
+}
 
-    amm.pause(&s.admin);
-    let early = amm.try_emergency_withdraw(&recipient);
+#[test]
+fn scenario_emergency_withdraw_requires_delay() {
+    let s = setup_suite();
+    let recipient = Address::generate(&s.env);
+
+    let amm = s.amm();
+    amm.announce_emergency_withdraw(&s.admin, &recipient);
+    amm.pause();
+
+    let early = amm.try_emergency_withdraw(&s.admin, &recipient);
     assert_eq!(
         early,
         Err(Ok(AmmError::EmergencyDelayNotElapsed)),
@@ -382,14 +492,14 @@ fn scenario_emergency_withdraw_after_delay_succeeds() {
     let s = setup_suite();
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
+    let amm = s.amm();
     let pool_a_before = TokenClient::new(&s.env, &s.token_a).balance(&s.amm_addr);
     let pool_b_before = TokenClient::new(&s.env, &s.token_b).balance(&s.amm_addr);
 
     amm.announce_emergency_withdraw(&s.admin, &recipient);
-    amm.pause(&s.admin);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-    amm.emergency_withdraw(&recipient);
+    amm.pause();
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+    amm.emergency_withdraw(&s.admin, &recipient);
 
     assert_eq!(
         TokenClient::new(&s.env, &s.token_a).balance(&recipient),
@@ -408,13 +518,13 @@ fn scenario_cancel_emergency_withdraw_resets_announcement() {
     let s = setup_suite();
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
+    let amm = s.amm();
     amm.announce_emergency_withdraw(&s.admin, &recipient);
     amm.cancel_emergency_withdraw(&s.admin);
-    amm.pause(&s.admin);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
+    amm.pause();
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
 
-    let result = amm.try_emergency_withdraw(&recipient);
+    let result = amm.try_emergency_withdraw(&s.admin, &recipient);
     assert_eq!(
         result,
         Err(Ok(AmmError::NoPendingProposal)),
@@ -427,13 +537,15 @@ fn scenario_reannounce_restarts_delay() {
     let s = setup_suite();
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
+    let amm = s.amm();
     amm.announce_emergency_withdraw(&s.admin, &recipient);
-    amm.pause(&s.admin);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS / 2);
+    amm.pause();
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS / 2);
     amm.announce_emergency_withdraw(&s.admin, &recipient);
+    // Past the first announcement's delay, but not the second's.
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
 
-    let result = amm.try_emergency_withdraw(&recipient);
+    let result = amm.try_emergency_withdraw(&s.admin, &recipient);
     assert_eq!(
         result,
         Err(Ok(AmmError::EmergencyDelayNotElapsed)),
@@ -444,16 +556,26 @@ fn scenario_reannounce_restarts_delay() {
 #[test]
 fn scenario_emergency_withdraw_rejects_pool_address() {
     let s = setup_suite();
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.announce_emergency_withdraw(&s.admin, &s.amm_addr);
-    amm.pause(&s.admin);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-
-    let result = amm.try_emergency_withdraw(&s.amm_addr);
+    let result = s
+        .amm()
+        .try_announce_emergency_withdraw(&s.admin, &s.amm_addr);
     assert_eq!(
         result,
         Err(Ok(AmmError::InvalidRecipient)),
         "withdrawing to the pool itself must be rejected"
+    );
+}
+
+#[test]
+fn scenario_emergency_withdraw_rejects_lp_token() {
+    let s = setup_suite();
+    let result = s
+        .amm()
+        .try_announce_emergency_withdraw(&s.admin, &s.lp_addr);
+    assert_eq!(
+        result,
+        Err(Ok(AmmError::InvalidRecipient)),
+        "withdrawing to the LP token must be rejected"
     );
 }
 
@@ -463,14 +585,9 @@ fn scenario_multisig_emergency_withdraw_rejects_pool_address() {
     let a = Address::generate(&s.env);
     let b = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b], 2);
 
-    let result = amm.try_propose_emergency_withdraw(&a, &s.amm_addr);
+    let result = s.amm().try_propose_emergency_withdraw(&a, &s.amm_addr);
     assert_eq!(
         result,
         Err(Ok(AmmError::InvalidRecipient)),
@@ -484,15 +601,9 @@ fn scenario_multisig_emergency_withdraw_rejects_lp_token() {
     let a = Address::generate(&s.env);
     let b = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b], 2);
 
-    let lp_addr = amm.get_info().lp_token;
-    let result = amm.try_propose_emergency_withdraw(&a, &lp_addr);
+    let result = s.amm().try_propose_emergency_withdraw(&a, &s.lp_addr);
     assert_eq!(
         result,
         Err(Ok(AmmError::InvalidRecipient)),
@@ -501,28 +612,31 @@ fn scenario_multisig_emergency_withdraw_rejects_lp_token() {
 }
 
 #[test]
-fn scenario_emergency_withdraw_rejects_lp_token() {
-    let s = setup_suite();
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    let lp_addr = amm.get_info().lp_token;
-    amm.announce_emergency_withdraw(&s.admin, &lp_addr);
-    amm.pause(&s.admin);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS + 1);
-
-    let result = amm.try_emergency_withdraw(&lp_addr);
-    assert_eq!(
-        result,
-        Err(Ok(AmmError::InvalidRecipient)),
-        "withdrawing to the LP token must be rejected"
-    );
-}
-
-#[test]
 fn scenario_emergency_delay_cap_enforced() {
-    let s = setup_suite();
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
+    let env = Env::default();
+    env.mock_all_auths();
+    set_ledger_ts(&env, T0);
+
+    let admin = Address::generate(&env);
+    let token_a = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "AMM LP"),
+        &soroban_sdk::String::from_str(&env, "ALP"),
+        &7u32,
+    );
+
     let too_long = 7 * 24 * 60 * 60 + 1;
-    let result = amm.try_set_emergency_delay(&s.admin, &too_long);
+    let result = AmmPoolClient::new(&env, &amm_addr).try_initialize_with_emergency_delay(
+        &admin, &token_a, &token_b, &lp_addr, &30_i128, &admin, &0_i128, &too_long,
+    );
     assert_eq!(
         result,
         Err(Ok(AmmError::InvalidEmergencyDelay)),
@@ -537,26 +651,27 @@ fn scenario_multisig_quorum_reached_then_delay() {
     let b = Address::generate(&s.env);
     let recipient = Address::generate(&s.env);
 
-    let amm = AmmPoolClient::new(&s.env, &s.amm_addr);
-    amm.set_multisig(
-        &s.admin,
-        &signer_vec(&s.env, &[a.clone(), b.clone()]),
-        &2u32,
-    );
+    install_multisig(&s, &[a.clone(), b.clone()], 2);
+    let amm = s.amm();
+    amm.pause();
 
-    amm.propose_emergency_withdraw(&a, &recipient);
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS / 2);
-    amm.propose_emergency_withdraw(&b, &recipient);
+    let pid = amm.propose_emergency_withdraw(&a, &recipient);
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS / 2);
+    amm.approve_multisig_proposal(&b, &pid);
 
-    let early = amm.try_exec_multisig_emergency_wd(&b);
+    // Past a full delay since the proposal, but not since quorum was reached.
+    set_ledger_ts(&s.env, T0 + EMERGENCY_DELAY_SECS + 1);
+    let early = amm.try_exec_multisig_emergency_wd(&b, &pid);
     assert_eq!(
         early,
         Err(Ok(AmmError::EmergencyDelayNotElapsed)),
         "delay is measured from quorum being reached"
     );
 
-    set_ledger_ts(&s.env, 1_000 + EMERGENCY_DELAY_SECS / 2 + EMERGENCY_DELAY_SECS + 1);
-    amm.exec_multisig_emergency_wd(&b);
+    set_ledger_ts(
+        &s.env,
+        T0 + EMERGENCY_DELAY_SECS / 2 + EMERGENCY_DELAY_SECS + 1,
+    );
+    amm.exec_multisig_emergency_wd(&b, &pid);
     assert!(amm.is_drained(), "pool should be drained after the delay");
-}
 }

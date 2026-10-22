@@ -942,38 +942,51 @@ mod contract_props {
                     }
                     Operation::EmergencyWithdraw => {
                         operation = "emergency_withdraw";
-                        succeeded = matches!(pool.client.try_emergency_withdraw(&pool.admin), Ok(Ok(_)));
+                        // The hardened path needs a pause, an announcement and the
+                        // default 24 h delay. None of these touch reserves or
+                        // supply, so a rejected attempt still leaves `State` intact.
+                        let _ = pool.client.try_pause();
+                        let _ = pool
+                            .client
+                            .try_announce_emergency_withdraw(&pool.admin, &pool.admin);
+                        env.ledger().with_mut(|ledger| {
+                            ledger.timestamp = ledger.timestamp.saturating_add(86_400);
+                        });
+                        succeeded = matches!(
+                            pool.client.try_emergency_withdraw(&pool.admin, &pool.admin),
+                            Ok(Ok(_))
+                        );
                         drained |= succeeded;
                     }
                 }
 
                 let after = state(&env, &pool);
                 if !succeeded {
-                    prop_assert_eq!(after, before, "failed {operation} changed observable state");
+                    prop_assert_eq!(after, before, "failed {} changed observable state", operation);
                     continue;
                 }
 
                 if !reserve_accounting_quarantined && !is_known_failure("reserve_accounting", operation) {
                     prop_assert_eq!(after.reserve_a + after.accrued_a, after.pool_balance_a,
-                        "token A reserve accounting diverged after {operation}");
+                        "token A reserve accounting diverged after {}", operation);
                     prop_assert_eq!(after.reserve_b + after.accrued_b, after.pool_balance_b,
-                        "token B reserve accounting diverged after {operation}");
+                        "token B reserve accounting diverged after {}", operation);
                 }
                 if !drained && !is_known_failure("lp_supply", operation) {
                     prop_assert_eq!(after.total_shares, after.lp_supply,
-                        "LP supply diverged after {operation}");
+                        "LP supply diverged after {}", operation);
                 }
                 prop_assert_eq!(tracked_token_total(&env, &pool.ta, &pool, &actor), total_a,
-                    "token A was created or destroyed after {operation}");
+                    "token A was created or destroyed after {}", operation);
                 prop_assert_eq!(tracked_token_total(&env, &pool.tb, &pool, &actor), total_b,
-                    "token B was created or destroyed after {operation}");
+                    "token B was created or destroyed after {}", operation);
 
                 if (operation == "swap" || operation == "swap_exact_out")
                     && !is_known_failure("exact_out_delivery", operation)
                 {
                     let k_before = before.reserve_a.saturating_mul(before.reserve_b);
                     let k_after = after.reserve_a.saturating_mul(after.reserve_b);
-                    prop_assert!(k_after >= k_before, "k decreased after {operation}");
+                    prop_assert!(k_after >= k_before, "k decreased after {}", operation);
                 }
 
                 if let Some((spent, received, quoted_max, expected_out)) = exact_out_observation {

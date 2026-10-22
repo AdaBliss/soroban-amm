@@ -100,23 +100,33 @@ ledger. The same admin could instead install signers it controlled with
 protocol fees were left behind by both paths, and several failures returned
 misleading error variants (`InsufficientShares`, `NoPendingAdmin`,
 `InvalidFeeBps`).
-**Fix:** The guard is now tamper-resistant. While `MultisigQuorum > 0`,
-`set_multisig` may only be changed through the multisig itself (propose,
-approve, execute at the same quorum) or after a timelock; lowering `quorum` to
-0 is never a single-key action. Single-admin emergency withdrawals are
-announced with `announce_emergency_withdraw(to)` and succeed only after
-`EMERGENCY_DELAY_SECS` (configurable at `initialize`, default 24 h, capped at
-7 days) and only while the pool is paused; `cancel_emergency_withdraw` clears
-the announcement and a second `announce` restarts the delay. The same delay
-applies to `exec_multisig_emergency_wd`, measured from quorum being reached.
-Both paths reject `to == env.current_contract_address()` and `to == lp_token`
-and sweep accrued fees to `to`. New `QuorumNotReached`, `NoPendingProposal` and
-`InvalidQuorum` error variants replace the misleading ones (appended, not
-renumbered). Versioned announce/cancel/execute events include the amounts
-moved. Governance's `EmergencyWithdraw` proposal kind still works: its
-execution calls `emergency_withdraw` after its own timelock, and that call must
-also satisfy the new announcement delay (governance-originated calls do not
-skip the announcement).
+**Fix:** The guard is now tamper-resistant. `set_multisig` only installs the
+initial guard: while `MultisigQuorum > 0` it returns `MultisigGuardActive`, and
+the signer set or quorum (including lowering `quorum` to 0) can only change
+through the multisig itself (`propose_set_multisig`, `approve_multisig_proposal`,
+`exec_multisig_set_multisig` at the current quorum). Multisig proposals are
+addressed by id, and a signer-set change invalidates proposals created under the
+old set. Single-admin emergency withdrawals are announced with
+`announce_emergency_withdraw(admin, to)` and succeed only after
+`EmergencyDelaySecs` (configurable with `initialize_with_emergency_delay`,
+default 24 h, capped at 7 days), only for the announced recipient, and only
+while the pool is paused; `cancel_emergency_withdraw` clears the announcement
+and a second `announce` restarts the delay. `exec_multisig_emergency_wd` applies
+the same delay, measured from quorum being reached, and the same pause
+precondition. Both paths reject `to == env.current_contract_address()` and
+`to == lp_token` and sweep accrued fees to `to`. New `QuorumNotReached`,
+`InvalidQuorum`, `EmergencyDelayNotElapsed`, `InvalidRecipient`,
+`MultisigGuardActive` and `InvalidEmergencyDelay` error variants (appended, not
+renumbered) replace the misleading ones; a missing announcement or proposal
+returns the existing `NoPendingProposal`, and a withdrawal on an unpaused pool
+returns `Paused`. Versioned `emergency_announce`, `emergency_cancel` and
+`emergency_wd` events include the amounts moved. Governance's
+`EmergencyWithdraw` proposal kind still works and is subject to the same rules:
+proposing it makes governance (the pool admin) announce the withdrawal so the
+pool's delay runs alongside the voting period and timelock, and executing it
+pauses the pool and then withdraws. Because the announcement is made at
+proposal time, a newer `EmergencyWithdraw` proposal replaces the announced
+recipient of an earlier one that has not executed.
 **Status:** Fixed.
 
 ---
@@ -206,13 +216,14 @@ pool in the same ledger. `emergency_withdraw` had no pause precondition and no
 delay, and `exec_multisig_emergency_wd` executed as soon as quorum was reached.
 Accrued protocol fees were left behind, and several failures returned
 misleading error variants.
-**Fix:** The guard can only be changed through the multisig (or after a
-timelock) while `MultisigQuorum > 0`. Single-admin withdrawals require a prior
-`announce_emergency_withdraw` and a paused pool, and wait
-`EMERGENCY_DELAY_SECS` (default 24 h, capped at 7 days). The multisig path
-waits the same delay from quorum. Both paths sweep accrued fees and reject
-`to == pool` and `to == lp_token`. New `QuorumNotReached`,
-`NoPendingProposal` and `InvalidQuorum` variants were appended.
+**Fix:** While `MultisigQuorum > 0` the guard can only be changed through the
+multisig. Single-admin withdrawals require a prior
+`announce_emergency_withdraw` and a paused pool, and wait the emergency delay
+(default 24 h, capped at 7 days). The multisig path waits the same delay from
+quorum and also requires a paused pool. Both paths sweep accrued fees and reject
+`to == pool` and `to == lp_token`. New `QuorumNotReached`, `InvalidQuorum`,
+`EmergencyDelayNotElapsed`, `InvalidRecipient`, `MultisigGuardActive` and
+`InvalidEmergencyDelay` variants were appended.
 **Status:** Fixed.
 
 #### L-01 — `withdraw_protocol_fees` missing closing brace causes dead code — **Fixed**

@@ -15,12 +15,37 @@
             ]
           }
         ],
-        "emergency_withdraw": [
+        "emergency_announce": [
           {
             "version": 1,
-            "topics": 2,
+            "topics": 1,
             "shape": "tuple",
             "fields": [
+              "admin",
+              "to",
+              "announced_at",
+              "delay_secs"
+            ]
+          }
+        ],
+        "emergency_cancel": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin",
+              "to"
+            ]
+          }
+        ],
+        "emergency_wd": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin",
               "to",
               "reserve_a",
               "reserve_b"
@@ -108,7 +133,29 @@
             "topics": 2,
             "shape": "tuple",
             "fields": [
-              "recipient",
+              "id",
+              "recipient"
+            ]
+          }
+        ],
+        "ms_set_proposed": [
+          {
+            "version": 1,
+            "topics": 2,
+            "shape": "tuple",
+            "fields": [
+              "id",
+              "new_quorum"
+            ]
+          }
+        ],
+        "ms_approved": [
+          {
+            "version": 1,
+            "topics": 2,
+            "shape": "tuple",
+            "fields": [
+              "proposal_id",
               "approvals"
             ]
           }

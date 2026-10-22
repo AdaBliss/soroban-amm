@@ -391,7 +391,8 @@ pub trait AmmPoolInterface {
     fn set_protocol_fee(env: Env, admin: Address, recipient: Address, protocol_fee_bps: i128);
     fn pause(env: Env);
     fn unpause(env: Env);
-    fn emergency_withdraw(env: Env, to: Address);
+    fn announce_emergency_withdraw(env: Env, admin: Address, to: Address);
+    fn emergency_withdraw(env: Env, admin: Address, to: Address);
     fn propose_admin(env: Env, current_admin: Address, new_admin: Address);
     fn set_lp_locker(env: Env, locker: Address);
 }
@@ -949,6 +950,15 @@ impl Governance {
             .instance()
             .set(&DataKey::ProposalCount, &(id + 1));
 
+        // The AMM requires emergency withdrawals to be announced and to wait out
+        // its own delay, even when governance is the admin. Start that clock now
+        // so it runs concurrently with the voting period and timelock.
+        if let ProposalKind::EmergencyWithdraw(to) = &kind {
+            let amm_pool = Self::read_amm_pool(&env)?;
+            AmmPoolClient::new(&env, &amm_pool)
+                .announce_emergency_withdraw(&env.current_contract_address(), to);
+        }
+
         soroban_amm_sdk::emit_versioned_event!(
             env,
             (Symbol::new(&env, "proposed"),),
@@ -1146,7 +1156,13 @@ impl Governance {
                 amm_client.unpause();
             }
             ProposalKind::EmergencyWithdraw(to) => {
-                amm_client.emergency_withdraw(to);
+                // The pool only drains while paused and after the announced
+                // delay (announced when the proposal was created). Pausing is
+                // idempotent and has already been voted on as part of this
+                // proposal.
+                let self_addr = env.current_contract_address();
+                amm_client.pause();
+                amm_client.emergency_withdraw(&self_addr, to);
             }
             ProposalKind::UpdateFactoryTreasury(params) => {
                 let self_addr = env.current_contract_address();

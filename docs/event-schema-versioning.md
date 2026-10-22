@@ -164,11 +164,15 @@ contract.
 
 | `cb_config` | — | `(threshold_bps: i128, cooldown_secs: u64)` |
 | `circuit_break` | — | `(baseline_price: i128, current_price: i128, deviation_bps: i128, threshold_bps: i128)` |
-| `emergency_withdraw` | `admin` | `(to: Address, reserve_a: i128, reserve_b: i128)` |
+| `emergency_announce` | — | `(admin: Address, to: Address, announced_at: u64, delay_secs: u64)` |
+| `emergency_cancel` | — | `(admin: Address, to: Address)` |
+| `emergency_wd` | — | `(admin: Address, to: Address, reserve_a: i128, reserve_b: i128)` |
 | `flash_fee_upd` | `admin` | `(new_fee_bps: i128)` |
 | `lp_rebate_set` | `admin` | `(lp_rebate_bps: i128)` |
 | `multisig_set` | `admin` | `(quorum: u32)` |
-| `ms_proposed` | `signer` | `(recipient: Address, approvals: u32)` |
+| `ms_proposed` | `signer` | `(id: u64, recipient: Address)` |
+| `ms_set_proposed` | `signer` | `(id: u64, new_quorum: u32)` |
+| `ms_approved` | `signer` | `(proposal_id: u64, approvals: u32)` |
 | `ms_ew` | `signer` | `(to: Address, reserve_a: i128, reserve_b: i128)` |
 | `force_unlock` | — | `(timestamp: u64)` |
 | `fee_upd` | `admin` | `(new_fee_bps: i128)` |
@@ -606,7 +610,9 @@ count. Events marked unversioned carry their payload without the
 | Event | Topics | Payload fields | Envelope |
 |---|---|---|---|
 | `lp_locker_set` | 1 | `lp_token`, `locker` | v1 |
-| `emergency_withdraw` | 2 | `to`, `reserve_a`, `reserve_b` | v1 |
+| `emergency_announce` | 1 | `admin`, `to`, `announced_at`, `delay_secs` | v1 |
+| `emergency_cancel` | 1 | `admin`, `to` | v1 |
+| `emergency_wd` | 1 | `admin`, `to`, `reserve_a`, `reserve_b` | v1 |
 | `force_unlock` | 1 | `timestamp` | v1 |
 | `cb_config` | 1 | `threshold_bps`, `cooldown_secs` | v1 |
 | `cb_recovered` | 1 | `timestamp` | v1 |
@@ -614,7 +620,9 @@ count. Events marked unversioned carry their payload without the
 | `protocol_fee_set` | 1 | `protocol_fee_bps`, `recipient` | v1 |
 | `lp_rebate_set` | 2 | `lp_rebate_bps` | v1 |
 | `multisig_set` | 2 | `quorum` | v1 |
-| `ms_proposed` | 2 | `recipient`, `approvals` | v1 |
+| `ms_proposed` | 2 | `id`, `recipient` | v1 |
+| `ms_set_proposed` | 2 | `id`, `new_quorum` | v1 |
+| `ms_approved` | 2 | `proposal_id`, `approvals` | v1 |
 | `ms_ew` | 2 | `to`, `reserve_a`, `reserve_b` | v1 |
 | `fee_upd` | 2 | `new_fee_bps` | v1 |
 | `flash_fee_upd` | 2 | `new_fee_bps` | v1 |
