@@ -68,6 +68,7 @@ COPY contracts/governance/Cargo.toml            contracts/governance/Cargo.toml
 COPY contracts/staking/Cargo.toml               contracts/staking/Cargo.toml
 COPY contracts/integration-tests/Cargo.toml     contracts/integration-tests/Cargo.toml
 COPY contracts/oracle_aggregator/Cargo.toml     contracts/oracle_aggregator/Cargo.toml
+COPY contracts/oracle_adapters/Cargo.toml       contracts/oracle_adapters/Cargo.toml
 COPY contracts/cl_position_nft/Cargo.toml       contracts/cl_position_nft/Cargo.toml
 COPY contracts/v2_to_v3_migration/Cargo.toml    contracts/v2_to_v3_migration/Cargo.toml
 COPY contracts/pol_vesting/Cargo.toml           contracts/pol_vesting/Cargo.toml
