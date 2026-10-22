@@ -559,4 +559,3 @@ fn scenario_multisig_quorum_reached_then_delay() {
     amm.exec_multisig_emergency_wd(&b);
     assert!(amm.is_drained(), "pool should be drained after the delay");
 }
-}
