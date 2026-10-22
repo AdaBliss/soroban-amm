@@ -6,6 +6,8 @@
 # wasm build. It is called by .github/workflows/ci.yml, .github/workflows/
 # release.yml, and the Makefile's `build` target, so the three can no longer
 # drift apart.
+# The ABI generator intentionally uses the narrower explicit contract list in
+# scripts/abi_contracts.sh rather than every artifact this build produces.
 #
 # Cargo always builds against the checked-in lockfile. Any extra arguments
 # are forwarded to cargo; a repeated --locked is removed below.

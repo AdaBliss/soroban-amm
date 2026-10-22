@@ -136,6 +136,8 @@ make test-all   # run tests for the whole workspace
 make fmt        # cargo fmt --all
 make lint       # cargo clippy --all -- -D warnings
 make check-docs # verify docs/error-codes.md matches #[contracterror] enums
+make abi       # regenerate docs/abi.json from deployable contract WASM
+make check-abi # check docs/abi.json against committed contract interfaces
 make check-deploy-scripts # fail if a contract has no scripts/deploy/ module
 make size       # print a WASM size report for all built contracts
 make size-check # fail if any contract WASM exceeds the size limit
@@ -147,6 +149,12 @@ make deploy     # deploy contracts via scripts/deploy.sh
 make e2e        # run the end-to-end test suite
 make clean      # cargo clean
 ```
+
+### Contract interfaces and ABI
+
+When changing a public contract interface, regenerate `docs/abi.json` with
+`make abi` and include the updated file in the same pull request. CI runs
+`make check-abi` to catch stale ABI documentation.
 
 Before opening a PR, run:
 

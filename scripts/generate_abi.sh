@@ -1,56 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script generates the ABI for all deployable contracts and outputs it as JSON.
-# It expects the contracts to be built first.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WASM_DIR="$ROOT_DIR/target/wasm32v1-none/release"
-ABI_FILE="$ROOT_DIR/docs/abi.json"
-TEMP_FILE="$ROOT_DIR/docs/abi.tmp.json"
+source "$SCRIPT_DIR/abi_contracts.sh"
 
-if ! command -v stellar >/dev/null 2>&1; then
-    echo "ERROR: 'stellar' CLI not found. Please install it (e.g., cargo install --locked stellar-cli)." >&2
+WASM_DIR="${ABI_WASM_DIR:-$ROOT_DIR/target/wasm32v1-none/release}"
+OUTPUT_FILE="${1:-${ABI_OUTPUT_FILE:-$ROOT_DIR/docs/abi.json}}"
+STELLAR_BIN="${STELLAR_BIN:-stellar}"
+
+if ! command -v "$STELLAR_BIN" >/dev/null 2>&1; then
+    echo "ERROR: Stellar CLI '$STELLAR_BIN' was not found. Install the pinned version from .stellar-version." >&2
     exit 1
 fi
 
-if ! command -v jq >/dev/null 2>&1; then
-    echo "ERROR: 'jq' is required but not installed." >&2
+if python3 -c 'import sys' >/dev/null 2>&1; then
+    PYTHON_BIN=python3
+elif python -c 'import sys' >/dev/null 2>&1; then
+    PYTHON_BIN=python
+else
+    echo "ERROR: Python 3 is required to assemble the ABI JSON." >&2
     exit 1
 fi
 
-shopt -s nullglob
-wasms=("$WASM_DIR"/*.wasm)
-if [ ${#wasms[@]} -eq 0 ]; then
-    echo "ERROR: No WASM artifacts found in $WASM_DIR." >&2
-    echo "Did you run 'make build' first?" >&2
-    exit 1
-fi
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
-echo '{"contracts": {}}' > "$TEMP_FILE"
-
-for wasm_path in "${wasms[@]}"; do
-    contract_name=$(basename "$wasm_path" .wasm)
-    
-    echo "Generating ABI for $contract_name..."
-    abi_json=$(stellar contract info interface --wasm "$wasm_path" --output json)
-    
-    # Check if the output is valid JSON
-    if ! echo "$abi_json" | jq . >/dev/null 2>&1; then
-        echo "ERROR: 'stellar contract info interface' failed for $contract_name" >&2
-        rm -f "$TEMP_FILE"
+for contract in "${ABI_CONTRACTS[@]}"; do
+    wasm_path="$WASM_DIR/$contract.wasm"
+    if [[ ! -f "$wasm_path" ]]; then
+        echo "ERROR: Missing WASM artifact for '$contract': $wasm_path" >&2
+        echo "Build contract artifacts with 'make build' first." >&2
         exit 1
     fi
-    
-    # Merge into temp file
-    jq --arg name "$contract_name" --argjson abi "$abi_json" \
-       '.contracts[$name] = $abi' "$TEMP_FILE" > "${TEMP_FILE}.new"
-    mv "${TEMP_FILE}.new" "$TEMP_FILE"
+
+    echo "Generating ABI for $contract..." >&2
+    if ! "$STELLAR_BIN" -q contract info interface --wasm "$wasm_path" --output json > "$TEMP_DIR/$contract.json"; then
+        echo "ERROR: Stellar CLI could not read the interface for '$contract'." >&2
+        exit 1
+    fi
 done
 
-# Format using jq for consistent spacing
-jq . "$TEMP_FILE" > "$ABI_FILE"
-rm -f "$TEMP_FILE"
+"$PYTHON_BIN" - "$TEMP_DIR" "$OUTPUT_FILE" "${ABI_CONTRACTS[@]}" <<'PY'
+import json
+import os
+import sys
 
-echo "Successfully generated $ABI_FILE"
+temp_dir, output_path, *contracts = sys.argv[1:]
+interfaces = {}
+for name in contracts:
+    try:
+        with open(os.path.join(temp_dir, f"{name}.json"), encoding="utf-8") as stream:
+            interfaces[name] = json.load(stream)
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"ERROR: Invalid interface JSON for '{name}': {error}", file=sys.stderr)
+        sys.exit(1)
+
+os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+with open(output_path, "w", encoding="utf-8", newline="\n") as stream:
+    json.dump({"contracts": interfaces}, stream, indent=2, sort_keys=True, ensure_ascii=False)
+    stream.write("\n")
+PY
+
+echo "Successfully generated $OUTPUT_FILE" >&2

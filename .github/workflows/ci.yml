@@ -55,6 +55,10 @@ jobs:
             # locked dependency tree the way `cargo install` would.
             - name: Install Stellar CLI
               uses: stellar/stellar-cli@v27.1.0
+            - name: Check committed ABI against contract interfaces
+              run: make check-abi
+            - name: Test ABI generator and checker
+              run: make test-abi
             - name: Optimize WASM artifacts
               shell: bash
               run: |

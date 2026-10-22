@@ -110,7 +110,28 @@ The V2 AMM contract depends on the token contract — adding or removing liquidi
 
 ## Contracts
 
-The protocol consists of modular, composable smart contracts. Detailed machine-readable specifications of all public contract functions, argument types, return values, and events are maintained in **[`docs/abi.json`](docs/abi.json)**.
+The protocol consists of modular, composable smart contracts. **[`docs/abi.json`](docs/abi.json)** contains Stellar `SCSpecEntry` JSON interfaces generated from every deployable contract WASM. The complete contract-to-key index is:
+
+| Contract | ABI key |
+|---|---|
+| AMM Pool | `amm` |
+| Batch Auction | `batch_auction` |
+| Batch Router | `batch_router` |
+| CL Position NFT | `cl_position_nft` |
+| Concentrated Liquidity | `concentrated_liquidity` |
+| DEX Aggregator | `dex_aggregator` |
+| Factory | `factory` |
+| Governance | `governance` |
+| Incentive Campaigns | `incentive_campaigns` |
+| Oracle Aggregator | `oracle_aggregator` |
+| POL Vesting | `pol_vesting` |
+| Reserve Manager | `reserve_manager` |
+| Router | `router` |
+| Staking | `staking` |
+| LP Token | `token` |
+| TWAL Consumer | `twal_consumer` |
+| TWAP Consumer | `twap_consumer` |
+| V2 to V3 Migration | `v2_to_v3_migration` |
 
 ### AMM Pool Contract
 

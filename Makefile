@@ -6,7 +6,7 @@ WASM_DIR := target/wasm32v1-none/release
 
 SHELL := bash
 
-.PHONY: all help build release-build optimize test test-all fmt lint lint-js check-node-versions check check-docs check-storage-keys check-deploy-scripts \
+.PHONY: all help build release-build optimize abi check-abi test-abi test test-all fmt lint lint-js check-node-versions check check-docs check-storage-keys check-deploy-scripts \
         size size-check doc audit bench deploy e2e clean fuzz-amm fuzz-amm-nightly fuzz-cl
 
 # Bare `make` explains itself instead of building.
@@ -37,6 +37,15 @@ optimize: build ## Optimize every WASM artifact produced by `make build`
 		echo "optimizing $$f"; \
 		stellar contract optimize --wasm "$$f"; \
 	done
+
+abi: build ## Regenerate docs/abi.json from deployable contract WASM
+	bash scripts/generate_abi.sh
+
+check-abi: build ## Verify docs/abi.json matches committed contract WASM interfaces
+	bash scripts/check_abi.sh
+
+test-abi: ## Run ABI generator/checker script tests
+	node --test scripts/check_abi.test.mjs
 
 test: build ## Build, then run the full workspace test suite
 	cargo test --workspace
