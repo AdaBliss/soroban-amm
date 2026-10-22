@@ -422,6 +422,7 @@ Defined in [contracts/pol_vesting/src/lib.rs](../contracts/pol_vesting/src/lib.r
 | 10 | `NotTreasury` | Action called by non-treasury address. | Call from stored treasury address. |
 | 11 | `InsufficientFunding` | `create_vesting` for more tokens than the contract holds outside existing schedules. | Transfer the LP tokens to the contract before creating the schedule. |
 | 12 | `TooManySchedules` | Beneficiary already holds the maximum number of live schedules. | Revoke or move a schedule, or vest to a different beneficiary. |
+| 13 | `LpTokenMismatch` | `lp_token` is not administered by the given `pool`, or is not a token contract. | Pass the pool that issued the LP token. |
 
 ---
 

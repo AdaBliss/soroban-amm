@@ -27,8 +27,18 @@ run_pol_vesting_flow() {
   local end_ledger=4294967295
 
   # ── initialize ──────────────────────────────────────────────────────────
-  local lp vest
-  lp=$(e2e_new_token VLP)
+  # create_vesting checks that the LP token is administered by `pool`, so the
+  # flow uses a real factory pool. Seeding it mints the LP shares to the source
+  # account, which is both governance and the beneficiary here.
+  local factory tx ty pool lp vest
+  factory=$(e2e_new_factory)
+  tx=$(e2e_new_token VTA)
+  ty=$(e2e_new_token VTB)
+  pool=$(e2e_new_seeded_pool "$factory" "$tx" "$ty" "$(( total * 2 ))")
+  lp=$(invoke "$factory" get_lp_token --pool "$pool" | extract_contract_id)
+  if [[ -z "$lp" ]]; then
+    die "pol_vesting: factory returned no LP token for the seeded pool"
+  fi
   vest=$(e2e_deploy pol_vesting)
   invoke "$vest" initialize --governance "$governance" --treasury "$treasury" >/dev/null
   assert_eq "pol_vesting: governance reads back" "$(invoke "$vest" get_governance | parse_address)" "$governance"
@@ -37,27 +47,30 @@ run_pol_vesting_flow() {
     invoke "$vest" initialize --governance "$outsider" --treasury "$outsider"
 
   # ── fund the vesting contract (create_vesting expects tokens in place) ──
-  invoke "$lp" mint --to "$governance" --amount "$total" >/dev/null
   invoke "$lp" transfer --from "$governance" --to "$vest" --amount "$total" >/dev/null
   assert_eq "pol_vesting: contract holds the vesting total" "$(balance_of "$lp" "$vest")" "$total"
 
   # ── create_vesting ──────────────────────────────────────────────────────
   expect_fail "pol_vesting: schedule with end <= cliff is rejected" \
     invoke "$vest" create_vesting \
-      --governance "$governance" --beneficiary "$beneficiary" --lp_token "$lp" --pool "$lp" \
+      --governance "$governance" --beneficiary "$beneficiary" --lp_token "$lp" --pool "$pool" \
       --total "$total" --start_ledger 0 --cliff_ledger 100 --end_ledger 100
   expect_fail "pol_vesting: non-governance caller cannot create a schedule" \
     invoke_as "$outsider_key" "$vest" create_vesting \
-      --governance "$outsider" --beneficiary "$outsider" --lp_token "$lp" --pool "$lp" \
+      --governance "$outsider" --beneficiary "$outsider" --lp_token "$lp" --pool "$pool" \
+      --total "$total" --start_ledger 0 --cliff_ledger 0 --end_ledger "$end_ledger"
+  # `tx` is a token the pool did not issue, so it is not the pool's LP token.
+  expect_fail "pol_vesting: pool that did not issue the LP token is rejected" \
+    invoke "$vest" create_vesting \
+      --governance "$governance" --beneficiary "$beneficiary" --lp_token "$lp" --pool "$tx" \
       --total "$total" --start_ledger 0 --cliff_ledger 0 --end_ledger "$end_ledger"
 
-  # `pool` is recorded metadata only; the LP token address stands in for it.
   local schedule_id
   schedule_id=$(invoke "$vest" create_vesting \
     --governance "$governance" \
     --beneficiary "$beneficiary" \
     --lp_token "$lp" \
-    --pool "$lp" \
+    --pool "$pool" \
     --total "$total" \
     --start_ledger 0 \
     --cliff_ledger 0 \
