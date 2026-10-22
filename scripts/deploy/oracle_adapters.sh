@@ -31,7 +31,7 @@ deploy_oracle_adapters() {
     invoke "$CL_TWAP_ADAPTER_CONTRACT_ID" initialize \
       --admin "$ADMIN_ADDRESS" --factory "$FACTORY_CONTRACT_ID" \
       --consumer "$TWAP_CONSUMER_CONTRACT_ID" --mode ConcentratedLiquidity \
-      --window_seconds 1800 --max_age_seconds 3600 --fee_tiers '[1,5,30,100]' >/dev/null
+      --window_seconds 1800 --max_age_seconds 3600 --fee_tiers '["1","5","30","100"]' >/dev/null
     persist_var "CL_TWAP_ADAPTER_CONTRACT_ID" "$CL_TWAP_ADAPTER_CONTRACT_ID"
   else
     CL_TWAP_ADAPTER_CONTRACT_ID=$(get_persisted CL_TWAP_ADAPTER_CONTRACT_ID)
