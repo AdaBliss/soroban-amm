@@ -17,7 +17,7 @@ use soroban_sdk::testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke};
 use soroban_sdk::token::StellarAssetClient;
 use soroban_sdk::{Address, BytesN, Env, IntoVal, Val, Vec};
 
-use amm::AmmPoolClient;
+use amm::{AmmError, AmmPoolClient};
 use factory::FactoryClient;
 use governance::{GovernanceClient, ProposalKind, ProposalStatus, Vote};
 use token::LpTokenClient;
@@ -352,4 +352,50 @@ fn claim_lp_locker_is_idempotent() {
     // Anyone may call it; it can only ever point the locker at governance.
     gov.claim_lp_locker();
     assert_eq!(pool.lp().locker(), gov.address);
+}
+
+/// #1107: a governance `UpdateFee` that would make the swap fee equal to the
+/// pool's protocol fee is refused when it executes, and the fee stays as it was.
+#[test]
+fn update_fee_proposal_reaching_the_equal_fee_state_fails_at_execute() {
+    let env = new_env();
+    let gov_hash: BytesN<32> = env.deployer().upload_contract_wasm(governance::WASM);
+    let (pool, gov) = create_pool(&env, Some(gov_hash));
+    let gov = GovernanceClient::new(&env, &gov.expect("governance deployed"));
+
+    let voter = Address::generate(&env);
+    pool.provide_liquidity(&voter);
+
+    // What follows is about the pool's fee rules, not signatures.
+    env.mock_all_auths();
+    let fee_before = pool.amm().get_info().fee_bps;
+    assert_eq!(fee_before, 30);
+
+    // Governance is the pool admin; it turns on a 20 bps protocol cut.
+    pool.amm()
+        .set_protocol_fee(&gov.address, &pool.admin, &20_i128);
+
+    // A proposal to make the swap fee 20 bps would hand LPs nothing.
+    let kind = ProposalKind::UpdateFee(20);
+    let proposal_id = gov.propose(&voter, &kind);
+    gov.vote(&voter, &proposal_id, &Vote::For);
+    let proposal = gov.get_proposal(&proposal_id);
+    env.ledger()
+        .with_mut(|l| l.timestamp = proposal.execute_after + 1);
+
+    assert!(gov.try_execute(&proposal_id).is_err());
+    assert_ne!(
+        gov.proposal_status(&proposal_id),
+        ProposalStatus::Executed,
+        "a failed execution must not mark the proposal executed"
+    );
+    let info = pool.amm().get_info();
+    assert_eq!(info.fee_bps, fee_before, "pool fee must be unchanged");
+    assert_eq!(info.protocol_fee_bps, 20);
+
+    // The pool itself names the reason.
+    assert_eq!(
+        pool.amm().try_update_fee(&20_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
 }

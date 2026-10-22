@@ -120,6 +120,13 @@ pub enum IncentiveError {
     /// A stake operation was attempted on a campaign created before the
     /// stake-based model; such campaigns keep the live-balance rules.
     LegacyCampaign = 24,
+    /// `claim_grace_secs` is outside `[MIN_CLAIM_GRACE_SECS, MAX_CLAIM_GRACE_SECS]`.
+    InvalidClaimGrace = 25,
+    /// `recover_leftover_funds` was called before `end_time + claim_grace_secs`
+    /// had passed, so providers may still be claiming.
+    ClaimGraceActive = 26,
+    /// `migrate_indexes` was given a `kind` other than 0, 1 or 2.
+    InvalidIndexKind = 27,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +178,24 @@ pub enum DataKey {
     CampaignTotalStaked(u64),
     /// Per (campaign_id, provider): the provider's stake position.
     StakePosition(u64, Address),
+    // ---- Appended in #1116 / #1117. Never reorder or insert above this line. ----
+    /// Per campaign: seconds after `end_time` during which recovery is blocked.
+    /// Absent for campaigns created before #1117, which read back as 0.
+    ClaimGraceSecs(u64),
+    /// Per campaign: the address that created it (recorded for new campaigns).
+    CampaignCreator(u64),
+    /// Indexed layout, per campaign: number of distribution records.
+    DistCampaignCount(u64),
+    /// Indexed layout, per (campaign, n): the n-th distribution record id.
+    DistCampaignItem(u64, u32),
+    /// Indexed layout, per provider: number of distribution records.
+    DistProviderCount(Address),
+    /// Indexed layout, per (provider, n): the n-th distribution record id.
+    DistProviderItem(Address, u32),
+    /// Indexed layout, per creator: number of campaigns created.
+    CreatorCount(Address),
+    /// Indexed layout, per (creator, n): the n-th campaign id.
+    CreatorItem(Address, u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +214,18 @@ const PRECISION: i128 = 1_000_000_000_000; // 1e12
 /// single read within the per-transaction resource limit however many campaigns
 /// or distribution records exist.
 pub const MAX_PAGE: u32 = 50;
+
+/// Shortest allowed claim grace period: one hour.
+pub const MIN_CLAIM_GRACE_SECS: u64 = 3_600;
+/// Longest allowed claim grace period: 90 days.
+pub const MAX_CLAIM_GRACE_SECS: u64 = 7_776_000;
+/// Grace period applied by `create_campaign`, which takes no explicit value: 7 days.
+pub const DEFAULT_CLAIM_GRACE_SECS: u64 = 604_800;
+
+/// `migrate_indexes` kinds.
+pub const INDEX_KIND_BY_CAMPAIGN: u32 = 0;
+pub const INDEX_KIND_BY_PROVIDER: u32 = 1;
+pub const INDEX_KIND_BY_CREATOR: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -314,6 +351,130 @@ fn advance_staked_accumulator(
 }
 
 // ---------------------------------------------------------------------------
+// Append-only indexes (#1116)
+//
+// Each index is a `Count` entry plus one entry per element, so appending is
+// O(1) however long the index already is. The previous layout stored one
+// `Vec<u64>` per owner and rewrote the whole vector on every append, which made
+// the cost of a claim grow with the number of prior claims.
+//
+// An owner whose index still lives in the legacy `Vec` (no `Count` entry yet)
+// is read from that vector until it is migrated, either by `migrate_indexes` or
+// by the first append, so every view returns the same answer before and after.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+#[allow(clippy::enum_variant_names)]
+enum Index {
+    ByCampaign(u64),
+    ByProvider(Address),
+    ByCreator(Address),
+}
+
+impl Index {
+    fn count_key(&self) -> DataKey {
+        match self {
+            Index::ByCampaign(c) => DataKey::DistCampaignCount(*c),
+            Index::ByProvider(a) => DataKey::DistProviderCount(a.clone()),
+            Index::ByCreator(a) => DataKey::CreatorCount(a.clone()),
+        }
+    }
+
+    fn item_key(&self, n: u32) -> DataKey {
+        match self {
+            Index::ByCampaign(c) => DataKey::DistCampaignItem(*c, n),
+            Index::ByProvider(a) => DataKey::DistProviderItem(a.clone(), n),
+            Index::ByCreator(a) => DataKey::CreatorItem(a.clone(), n),
+        }
+    }
+
+    fn legacy_key(&self) -> DataKey {
+        match self {
+            Index::ByCampaign(c) => DataKey::DistributionsByCampaign(*c),
+            Index::ByProvider(a) => DataKey::DistributionsByProvider(a.clone()),
+            Index::ByCreator(a) => DataKey::CampaignsByCreator(a.clone()),
+        }
+    }
+}
+
+fn legacy_vec(env: &Env, index: &Index) -> Option<Vec<u64>> {
+    let key = index.legacy_key();
+    let v = env.storage().persistent().get::<DataKey, Vec<u64>>(&key)?;
+    extend_persistent_ttl(env, &key);
+    Some(v)
+}
+
+/// Number of elements in `index`, from whichever layout currently holds it.
+fn index_len(env: &Env, index: &Index) -> u32 {
+    let ck = index.count_key();
+    if let Some(n) = env.storage().persistent().get::<DataKey, u32>(&ck) {
+        extend_persistent_ttl(env, &ck);
+        return n;
+    }
+    legacy_vec(env, index).map(|v| v.len()).unwrap_or(0)
+}
+
+/// Elements `[start, end)` of `index`, in append order.
+fn index_slice(env: &Env, index: &Index, start: u32, end: u32) -> Vec<u64> {
+    let mut out = Vec::new(env);
+    let ck = index.count_key();
+    if env.storage().persistent().has(&ck) {
+        extend_persistent_ttl(env, &ck);
+        for n in start..end {
+            let key = index.item_key(n);
+            if let Some(id) = env.storage().persistent().get::<DataKey, u64>(&key) {
+                extend_persistent_ttl(env, &key);
+                out.push_back(id);
+            }
+        }
+    } else if let Some(v) = legacy_vec(env, index) {
+        for n in start..end {
+            if let Some(id) = v.get(n) {
+                out.push_back(id);
+            }
+        }
+    }
+    out
+}
+
+/// Move `index` from the legacy vector into the indexed layout. Returns whether
+/// anything was moved; an already-migrated or never-written owner is a no-op.
+fn migrate_index(env: &Env, index: &Index) -> bool {
+    let ck = index.count_key();
+    if env.storage().persistent().has(&ck) {
+        return false;
+    }
+    let lk = index.legacy_key();
+    let Some(v) = env.storage().persistent().get::<DataKey, Vec<u64>>(&lk) else {
+        return false;
+    };
+    for n in 0..v.len() {
+        let key = index.item_key(n);
+        env.storage().persistent().set(&key, &v.get(n).unwrap());
+        extend_persistent_ttl(env, &key);
+    }
+    env.storage().persistent().set(&ck, &v.len());
+    extend_persistent_ttl(env, &ck);
+    env.storage().persistent().remove(&lk);
+    true
+}
+
+/// Append `id` to `index` in O(1).
+fn index_push(env: &Env, index: &Index, id: u64) {
+    let ck = index.count_key();
+    let mut count: Option<u32> = env.storage().persistent().get(&ck);
+    if count.is_none() && migrate_index(env, index) {
+        count = env.storage().persistent().get(&ck);
+    }
+    let n = count.unwrap_or(0);
+    let key = index.item_key(n);
+    env.storage().persistent().set(&key, &id);
+    extend_persistent_ttl(env, &key);
+    env.storage().persistent().set(&ck, &(n + 1));
+    extend_persistent_ttl(env, &ck);
+}
+
+// ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
 
@@ -322,6 +483,13 @@ pub struct IncentiveCampaigns;
 
 #[contractimpl]
 impl IncentiveCampaigns {
+    /// Set the governance address. Callable once.
+    ///
+    /// Deliberately does **not** `require_auth` on `governance`: the address is
+    /// typically a governance contract that cannot sign a deploy transaction.
+    /// Initialization is verified instead of authenticated: the `initialized`
+    /// event and `get_governance` report what was stored, and the deploy script
+    /// reads it back and aborts on a mismatch, which exposes a front-run.
     pub fn initialize(env: Env, governance: Address) -> Result<(), IncentiveError> {
         if env.storage().instance().has(&DataKey::Governance) {
             return Err(IncentiveError::AlreadyInitialized);
@@ -336,6 +504,14 @@ impl IncentiveCampaigns {
             .instance()
             .set(&DataKey::NextDistributionId, &1u64);
         extend_instance_ttl(&env);
+
+        // The payload is exactly what was just written to instance storage, so
+        // a deploy script can compare it (or the getters) with what it intended.
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "initialized"),),
+            (governance, 1u64, 1u64)
+        );
         Ok(())
     }
 
@@ -407,7 +583,10 @@ impl IncentiveCampaigns {
             .unwrap_or(None)
     }
 
-    /// Create a time-based incentive campaign. Governance only.
+    /// Create a time-based incentive campaign with the default claim grace
+    /// period ([`DEFAULT_CLAIM_GRACE_SECS`]). Governance only.
+    ///
+    /// See [`IncentiveCampaigns::create_campaign_with_grace`].
     #[allow(clippy::too_many_arguments)]
     pub fn create_campaign(
         env: Env,
@@ -419,6 +598,44 @@ impl IncentiveCampaigns {
         end_time: u64,
         reward_rate: i128,
         funding_amount: i128,
+    ) -> Result<u64, IncentiveError> {
+        Self::create_campaign_with_grace(
+            env,
+            caller,
+            pool,
+            lp_token,
+            reward_token,
+            start_time,
+            end_time,
+            reward_rate,
+            funding_amount,
+            DEFAULT_CLAIM_GRACE_SECS,
+        )
+    }
+
+    /// Create a time-based incentive campaign. Governance only.
+    ///
+    /// `claim_grace_secs` is how long after `end_time` providers can keep
+    /// claiming before `recover_leftover_funds` may sweep the leftover. It must
+    /// lie in `[MIN_CLAIM_GRACE_SECS, MAX_CLAIM_GRACE_SECS]`.
+    ///
+    /// The contract measures what it actually receives (balance after minus
+    /// balance before the transfer), requires it to cover
+    /// `reward_rate * (end_time - start_time)` and stores it as
+    /// `funding_amount`. A fee-on-transfer reward token therefore cannot leave
+    /// the campaign under-funded relative to its payout promise.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_campaign_with_grace(
+        env: Env,
+        caller: Address,
+        pool: Address,
+        lp_token: Address,
+        reward_token: Address,
+        start_time: u64,
+        end_time: u64,
+        reward_rate: i128,
+        funding_amount: i128,
+        claim_grace_secs: u64,
     ) -> Result<u64, IncentiveError> {
         extend_instance_ttl(&env);
         caller.require_auth();
@@ -432,8 +649,13 @@ impl IncentiveCampaigns {
         if funding_amount <= 0 {
             return Err(IncentiveError::InvalidFundingAmount);
         }
+        if !(MIN_CLAIM_GRACE_SECS..=MAX_CLAIM_GRACE_SECS).contains(&claim_grace_secs) {
+            return Err(IncentiveError::InvalidClaimGrace);
+        }
         let duration = (end_time - start_time) as i128;
-        let max_payout = reward_rate * duration;
+        let max_payout = reward_rate
+            .checked_mul(duration)
+            .ok_or(IncentiveError::InvalidRewardRate)?;
         if funding_amount < max_payout {
             return Err(IncentiveError::InsufficientFunding);
         }
@@ -449,6 +671,20 @@ impl IncentiveCampaigns {
             .get(&DataKey::NextCampaignId)
             .ok_or(IncentiveError::NotInitialized)?;
 
+        // Pull the funding first and measure what arrived. A failure below
+        // reverts the whole invocation, transfer included.
+        let contract = env.current_contract_address();
+        let token = TokenClient::new(&env, &reward_token);
+        let balance_before = token.balance(&contract);
+        token.transfer(&caller, &contract, &funding_amount);
+        let received = token
+            .balance(&contract)
+            .checked_sub(balance_before)
+            .ok_or(IncentiveError::InsufficientFunding)?;
+        if received < max_payout {
+            return Err(IncentiveError::InsufficientFunding);
+        }
+
         let campaign = Campaign {
             id,
             pool: pool.clone(),
@@ -459,7 +695,7 @@ impl IncentiveCampaigns {
             reward_rate,
             active: true,
             total_distributed: 0,
-            funding_amount,
+            funding_amount: received,
             // Accumulator starts at zero; last_update_time is set to start_time so
             // that the first call to advance_accumulator uses the correct origin.
             acc_reward_per_share: 0,
@@ -478,6 +714,14 @@ impl IncentiveCampaigns {
             .set(&last_accrual_key, &start_time);
         extend_persistent_ttl(&env, &last_accrual_key);
 
+        let grace_key = DataKey::ClaimGraceSecs(id);
+        env.storage()
+            .persistent()
+            .set(&grace_key, &claim_grace_secs);
+        extend_persistent_ttl(&env, &grace_key);
+        let creator_key = DataKey::CampaignCreator(id);
+        env.storage().persistent().set(&creator_key, &caller);
+        extend_persistent_ttl(&env, &creator_key);
         // New campaigns are stake-based (#1115).
         let stake_marker_key = DataKey::StakeBased(id);
         env.storage().persistent().set(&stake_marker_key, &true);
@@ -492,18 +736,7 @@ impl IncentiveCampaigns {
         env.storage().persistent().set(&index_key, &id);
         extend_persistent_ttl(&env, &index_key);
 
-        let creator_key = DataKey::CampaignsByCreator(caller.clone());
-        let mut by_creator: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&creator_key)
-            .unwrap_or_else(|| Vec::new(&env));
-        by_creator.push_back(id);
-        env.storage().persistent().set(&creator_key, &by_creator);
-        extend_persistent_ttl(&env, &creator_key);
-
-        let contract = env.current_contract_address();
-        TokenClient::new(&env, &reward_token).transfer(&caller, &contract, &funding_amount);
+        index_push(&env, &Index::ByCreator(caller.clone()), id);
 
         soroban_amm_sdk::emit_versioned_event!(
             &env,
@@ -579,8 +812,10 @@ impl IncentiveCampaigns {
     /// actually distributed (`total_distributed`) back to `recipient`. After recovery
     /// the campaign is marked **inactive** so no further LP claims can be made.
     ///
-    /// Governance should allow a reasonable grace period after `end_time` before
-    /// calling this function so that LPs have an opportunity to claim first.
+    /// Recovery is rejected with `ClaimGraceActive` until the ledger time is
+    /// strictly past `end_time + claim_grace_secs`, so providers always get that
+    /// window to claim first. Campaigns created before the grace period existed
+    /// have no stored value and read back as 0, so they behave as they did.
     pub fn recover_leftover_funds(
         env: Env,
         caller: Address,
@@ -610,6 +845,10 @@ impl IncentiveCampaigns {
         let now = env.ledger().timestamp();
         if now <= campaign.end_time {
             return Err(IncentiveError::CampaignNotEnded);
+        }
+        let grace = Self::claim_grace(&env, campaign_id);
+        if now <= campaign.end_time.saturating_add(grace) {
+            return Err(IncentiveError::ClaimGraceActive);
         }
         Self::checkpoint_campaign_rewards(&env, campaign_id, &campaign, now);
 
@@ -1232,13 +1471,7 @@ impl IncentiveCampaigns {
         limit: u32,
     ) -> Vec<u64> {
         extend_instance_ttl(&env);
-        let key = DataKey::CampaignsByCreator(creator);
-        let ids: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(&env));
-        Self::page_u64(&env, &ids, offset, limit)
+        Self::page_index(&env, &Index::ByCreator(creator), offset, limit)
     }
 
     /// Whether `campaign_id` is active right now, without pulling the struct.
@@ -1256,7 +1489,7 @@ impl IncentiveCampaigns {
     /// Number of distribution records a campaign has produced.
     pub fn get_distribution_count(env: Env, campaign_id: u64) -> u32 {
         extend_instance_ttl(&env);
-        Self::distribution_ids_by_campaign(&env, campaign_id).len()
+        index_len(&env, &Index::ByCampaign(campaign_id))
     }
 
     /// Page through a campaign's distribution records, oldest claim first.
@@ -1267,8 +1500,8 @@ impl IncentiveCampaigns {
         limit: u32,
     ) -> Vec<DistributionRecord> {
         extend_instance_ttl(&env);
-        let ids = Self::distribution_ids_by_campaign(&env, campaign_id);
-        Self::page_records(&env, &ids, offset, limit)
+        let ids = Self::page_index(&env, &Index::ByCampaign(campaign_id), offset, limit);
+        Self::resolve_records(&env, &ids)
     }
 
     /// Page through everything `provider` has ever claimed, in chronological
@@ -1282,13 +1515,86 @@ impl IncentiveCampaigns {
         limit: u32,
     ) -> Vec<DistributionRecord> {
         extend_instance_ttl(&env);
-        let key = DataKey::DistributionsByProvider(provider);
-        let ids: Vec<u64> = env
+        let ids = Self::page_index(&env, &Index::ByProvider(provider), offset, limit);
+        Self::resolve_records(&env, &ids)
+    }
+
+    /// Seconds after `end_time` during which `recover_leftover_funds` is blocked
+    /// for `campaign_id`. Campaigns created before #1117 report 0.
+    pub fn get_claim_grace(env: Env, campaign_id: u64) -> Result<u64, IncentiveError> {
+        extend_instance_ttl(&env);
+        if !env
             .storage()
             .persistent()
-            .get(&key)
-            .unwrap_or_else(|| Vec::new(&env));
-        Self::page_records(&env, &ids, offset, limit)
+            .has(&DataKey::Campaign(campaign_id))
+        {
+            return Err(IncentiveError::CampaignNotFound);
+        }
+        Ok(Self::claim_grace(&env, campaign_id))
+    }
+
+    /// Move legacy `Vec`-based indexes into the indexed layout. Permissionless.
+    ///
+    /// `kind` selects the index: `0` distributions by campaign, `1` by provider,
+    /// `2` campaigns by creator. `offset`/`limit` page over the owners to visit
+    /// (campaign index for kinds 0 and 2, distribution record id for kind 1) and
+    /// `limit` is clamped to [`MAX_PAGE`]. Returns how many owners were moved.
+    ///
+    /// Safe to call repeatedly and in any order: an owner that is already
+    /// migrated, or never had a legacy vector, is skipped. Until an owner is
+    /// migrated its views keep reading the legacy vector, and its next append
+    /// migrates it. Legacy creator vectors are located through the recorded
+    /// creator of each campaign, falling back to the current governance for
+    /// campaigns created before creators were recorded; any other legacy creator
+    /// is migrated lazily on its next append and is served correctly meanwhile.
+    pub fn migrate_indexes(
+        env: Env,
+        kind: u32,
+        offset: u32,
+        limit: u32,
+    ) -> Result<u32, IncentiveError> {
+        extend_instance_ttl(&env);
+        if kind > INDEX_KIND_BY_CREATOR {
+            return Err(IncentiveError::InvalidIndexKind);
+        }
+        let total = if kind == INDEX_KIND_BY_PROVIDER {
+            env.storage()
+                .instance()
+                .get::<DataKey, u64>(&DataKey::NextDistributionId)
+                .unwrap_or(1)
+                .saturating_sub(1)
+        } else {
+            Self::campaign_count(&env)
+        };
+        let Some((start, end)) = Self::page_bounds(offset, limit, total) else {
+            return Ok(0);
+        };
+        let mut moved: u32 = 0;
+        for p in start..end {
+            let index = match kind {
+                INDEX_KIND_BY_CAMPAIGN => Self::campaign_id_at(&env, p).map(Index::ByCampaign),
+                INDEX_KIND_BY_PROVIDER => {
+                    let key = DataKey::DistributionRecord(p + 1);
+                    env.storage()
+                        .persistent()
+                        .get::<DataKey, DistributionRecord>(&key)
+                        .map(|r| Index::ByProvider(r.provider))
+                }
+                _ => Self::campaign_id_at(&env, p).and_then(|id| {
+                    env.storage()
+                        .persistent()
+                        .get::<DataKey, Address>(&DataKey::CampaignCreator(id))
+                        .or_else(|| Self::read_governance(&env).ok())
+                        .map(Index::ByCreator)
+                }),
+            };
+            if let Some(index) = index {
+                if migrate_index(&env, &index) {
+                    moved += 1;
+                }
+            }
+        }
+        Ok(moved)
     }
 
     // -------------------------------------------------------------------------
@@ -1337,34 +1643,31 @@ impl IncentiveCampaigns {
         campaign.active && now >= campaign.start_time && now <= campaign.end_time
     }
 
-    fn distribution_ids_by_campaign(env: &Env, campaign_id: u64) -> Vec<u64> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::DistributionsByCampaign(campaign_id))
-            .unwrap_or_else(|| Vec::new(env))
-    }
-
-    /// Slice an id list with the shared pagination rules.
-    fn page_u64(env: &Env, ids: &Vec<u64>, offset: u32, limit: u32) -> Vec<u64> {
-        let mut page = Vec::new(env);
-        let Some((start, end)) = Self::page_bounds(offset, limit, ids.len() as u64) else {
-            return page;
-        };
-        for i in start..end {
-            page.push_back(ids.get(i as u32).unwrap());
+    fn claim_grace(env: &Env, campaign_id: u64) -> u64 {
+        let key = DataKey::ClaimGraceSecs(campaign_id);
+        match env.storage().persistent().get::<DataKey, u64>(&key) {
+            Some(g) => {
+                extend_persistent_ttl(env, &key);
+                g
+            }
+            None => 0,
         }
-        page
     }
 
-    /// Slice a record-id list and resolve each id to its stored record.
-    fn page_records(env: &Env, ids: &Vec<u64>, offset: u32, limit: u32) -> Vec<DistributionRecord> {
-        let mut page: Vec<DistributionRecord> = Vec::new(env);
-        let Some((start, end)) = Self::page_bounds(offset, limit, ids.len() as u64) else {
-            return page;
+    /// Page through an index with the shared pagination rules.
+    fn page_index(env: &Env, index: &Index, offset: u32, limit: u32) -> Vec<u64> {
+        let count = index_len(env, index) as u64;
+        let Some((start, end)) = Self::page_bounds(offset, limit, count) else {
+            return Vec::new(env);
         };
-        for i in start..end {
-            let record_id = ids.get(i as u32).unwrap();
-            let key = DataKey::DistributionRecord(record_id);
+        index_slice(env, index, start as u32, end as u32)
+    }
+
+    /// Resolve a page of record ids to their stored records.
+    fn resolve_records(env: &Env, ids: &Vec<u64>) -> Vec<DistributionRecord> {
+        let mut page: Vec<DistributionRecord> = Vec::new(env);
+        for i in 0..ids.len() {
+            let key = DataKey::DistributionRecord(ids.get(i).unwrap());
             if let Some(record) = env
                 .storage()
                 .persistent()
@@ -1451,30 +1754,9 @@ impl IncentiveCampaigns {
             .set(&DataKey::NextDistributionId, &(dist_id + 1));
 
         // Index the record both ways so it can be found without already knowing
-        // its id. Both lists are append-only, so they stay in claim order.
-        let by_campaign_key = DataKey::DistributionsByCampaign(campaign_id);
-        let mut by_campaign: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&by_campaign_key)
-            .unwrap_or_else(|| Vec::new(env));
-        by_campaign.push_back(dist_id);
-        env.storage()
-            .persistent()
-            .set(&by_campaign_key, &by_campaign);
-        extend_persistent_ttl(env, &by_campaign_key);
-
-        let by_provider_key = DataKey::DistributionsByProvider(provider.clone());
-        let mut by_provider: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&by_provider_key)
-            .unwrap_or_else(|| Vec::new(env));
-        by_provider.push_back(dist_id);
-        env.storage()
-            .persistent()
-            .set(&by_provider_key, &by_provider);
-        extend_persistent_ttl(env, &by_provider_key);
+        // its id. Both indexes are append-only and O(1) per claim.
+        index_push(env, &Index::ByCampaign(campaign_id), dist_id);
+        index_push(env, &Index::ByProvider(provider.clone()), dist_id);
 
         soroban_amm_sdk::emit_versioned_event!(
             env,
@@ -1617,6 +1899,8 @@ impl IncentiveCampaigns {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use amm::{AmmPool, AmmPoolClient};
     use soroban_sdk::{
@@ -2015,7 +2299,8 @@ mod tests {
         assert_eq!(claimed, 99_900);
 
         // Advance past end_time and recover leftover.
-        env.ledger().with_mut(|l| l.timestamp = 8_000);
+        // The default claim grace is 7 days, so recovery opens at 609_801.
+        env.ledger().with_mut(|l| l.timestamp = 700_000);
         let recovered = client.recover_leftover_funds(&gov_addr, &id, &treasury);
         assert_eq!(
             recovered,
@@ -2035,7 +2320,7 @@ mod tests {
             &gov_addr, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000,
         );
         make_legacy(&env, &incentives, id2);
-        env.ledger().with_mut(|l| l.timestamp = 9_000);
+        env.ledger().with_mut(|l| l.timestamp = 710_000);
         let full_recovery = client.recover_leftover_funds(&gov_addr, &id2, &treasury);
         assert_eq!(full_recovery, 1_000_000);
 
@@ -2757,7 +3042,7 @@ mod tests {
         client.claim_rewards(&provider, &id);
 
         let treasury = Address::generate(&env);
-        env.ledger().with_mut(|l| l.timestamp = 9_000);
+        env.ledger().with_mut(|l| l.timestamp = 700_000);
         assert!(client.recover_leftover_funds(&gov, &id, &treasury) > 0);
 
         // Inactive campaign, but the audit trail is intact and capped at end.
@@ -2867,7 +3152,7 @@ mod tests {
         // Campaign runs 1_000..5_000 at rate 100, funded 1_000_000; no claims.
         let id =
             client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
-        env.ledger().with_mut(|l| l.timestamp = 9_000);
+        env.ledger().with_mut(|l| l.timestamp = 700_000);
         let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
 
         let (version, data): (u32, (u64, Address, i128)) =
@@ -3036,7 +3321,7 @@ mod tests {
         );
 
         // Nothing is ever claimed, so after the end every unit is left over.
-        env.ledger().set_timestamp(7_000);
+        env.ledger().set_timestamp(700_000);
         assert_eq!(client.recover_leftover_funds(&gov, &id, &gov), 1_000);
     }
 
@@ -3057,7 +3342,7 @@ mod tests {
         client.create_campaign(&gov, &amm, &lp, &reward, &1_000, &9_000, &1, &8_000);
         assert_eq!(reward_client.balance(&incentives), 9_000);
 
-        env.ledger().set_timestamp(3_000);
+        env.ledger().set_timestamp(700_000);
         assert_eq!(
             client.recover_leftover_funds(&gov, &first, &treasury),
             1_000
@@ -3070,6 +3355,851 @@ mod tests {
         // The other campaign's funding is untouched.
         assert_eq!(reward_client.balance(&treasury), 1_000);
         assert_eq!(reward_client.balance(&incentives), 8_000);
+    }
+
+    // -------------------------------------------------------------------------
+    // #1117: claim grace period, funding measurement, initialization
+    // -------------------------------------------------------------------------
+
+    /// Token that burns 2% of every transfer, to model a fee-on-transfer asset.
+    mod fee_token {
+        use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+
+        #[contracttype]
+        enum Key {
+            Bal(Address),
+        }
+
+        #[contract]
+        pub struct FeeToken;
+
+        fn bal(env: &Env, a: &Address) -> i128 {
+            env.storage()
+                .persistent()
+                .get(&Key::Bal(a.clone()))
+                .unwrap_or(0)
+        }
+
+        fn put(env: &Env, a: &Address, v: i128) {
+            env.storage().persistent().set(&Key::Bal(a.clone()), &v);
+        }
+
+        #[contractimpl]
+        impl FeeToken {
+            pub fn mint(env: Env, to: Address, amount: i128) {
+                let b = bal(&env, &to);
+                put(&env, &to, b + amount);
+            }
+
+            pub fn balance(env: Env, id: Address) -> i128 {
+                bal(&env, &id)
+            }
+
+            pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+                from.require_auth();
+                let fee = amount * 2 / 100;
+                let f = bal(&env, &from);
+                assert!(f >= amount, "insufficient balance");
+                put(&env, &from, f - amount);
+                let t = bal(&env, &to);
+                put(&env, &to, t + amount - fee);
+            }
+        }
+    }
+    use fee_token::{FeeToken, FeeTokenClient};
+
+    const DAY: u64 = 86_400;
+
+    #[test]
+    fn test_create_campaign_uses_the_documented_default_grace() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000);
+        assert_eq!(client.get_claim_grace(&id), DEFAULT_CLAIM_GRACE_SECS);
+        assert_eq!(DEFAULT_CLAIM_GRACE_SECS, 7 * DAY);
+    }
+
+    #[test]
+    fn test_create_campaign_with_grace_stores_the_requested_value() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = client.create_campaign_with_grace(
+            &gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000, &7_200,
+        );
+        assert_eq!(client.get_claim_grace(&id), 7_200);
+        assert_eq!(
+            client.try_get_claim_grace(&99),
+            Err(Ok(IncentiveError::CampaignNotFound))
+        );
+    }
+
+    #[test]
+    fn test_out_of_range_grace_is_rejected_and_boundaries_accepted() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let try_with = |g: u64| {
+            client.try_create_campaign_with_grace(
+                &gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000, &g,
+            )
+        };
+        assert_eq!(
+            try_with(MIN_CLAIM_GRACE_SECS - 1),
+            Err(Ok(IncentiveError::InvalidClaimGrace))
+        );
+        assert_eq!(try_with(0), Err(Ok(IncentiveError::InvalidClaimGrace)));
+        assert_eq!(
+            try_with(MAX_CLAIM_GRACE_SECS + 1),
+            Err(Ok(IncentiveError::InvalidClaimGrace))
+        );
+        assert_eq!(client.get_campaign_count(), 0);
+        assert!(try_with(MIN_CLAIM_GRACE_SECS).is_ok());
+        assert!(try_with(MAX_CLAIM_GRACE_SECS).is_ok());
+    }
+
+    #[test]
+    fn test_recovery_is_blocked_until_end_plus_grace() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let treasury = Address::generate(&env);
+        let id = client.create_campaign_with_grace(
+            &gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000, &10_000,
+        );
+
+        env.ledger().set_timestamp(5_000);
+        assert_eq!(
+            client.try_recover_leftover_funds(&gov, &id, &treasury),
+            Err(Ok(IncentiveError::CampaignNotEnded))
+        );
+        env.ledger().set_timestamp(5_001);
+        assert_eq!(
+            client.try_recover_leftover_funds(&gov, &id, &treasury),
+            Err(Ok(IncentiveError::ClaimGraceActive))
+        );
+        env.ledger().set_timestamp(15_000);
+        assert_eq!(
+            client.try_recover_leftover_funds(&gov, &id, &treasury),
+            Err(Ok(IncentiveError::ClaimGraceActive)),
+            "end_time + grace itself is still inside the window"
+        );
+        assert!(
+            client.get_campaign(&id).active,
+            "a rejected recovery changes nothing"
+        );
+
+        env.ledger().set_timestamp(15_001);
+        assert_eq!(client.recover_leftover_funds(&gov, &id, &treasury), 400_000);
+        assert!(!client.get_campaign(&id).active);
+    }
+
+    #[test]
+    fn test_providers_can_claim_during_the_grace_window() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let treasury = Address::generate(&env);
+        let id = client.create_campaign_with_grace(
+            &gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000, &10_000,
+        );
+        make_legacy(&env, &incentives, id);
+        assert_eq!(client.claim_rewards(&provider, &id), 0); // snapshot at t=1_000
+
+        // The campaign has ended; recovery is blocked but the claim goes through.
+        env.ledger().set_timestamp(9_000);
+        assert_eq!(
+            client.try_recover_leftover_funds(&gov, &id, &treasury),
+            Err(Ok(IncentiveError::ClaimGraceActive))
+        );
+        let paid = client.claim_rewards(&provider, &id);
+        assert!(paid > 0, "a claim inside the grace window pays out");
+
+        env.ledger().set_timestamp(15_001);
+        let left = client.recover_leftover_funds(&gov, &id, &treasury);
+        assert_eq!(left, 400_000 - paid);
+        assert_eq!(
+            client.try_claim_rewards(&provider, &id),
+            Err(Ok(IncentiveError::CampaignInactive)),
+            "recovery after the grace window deactivates the campaign as before"
+        );
+    }
+
+    #[test]
+    fn test_legacy_campaign_without_a_stored_grace_recovers_as_before() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let treasury = Address::generate(&env);
+        let id = client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &400_000);
+        // A campaign written before #1117 has no ClaimGraceSecs entry.
+        env.as_contract(&incentives, || {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::ClaimGraceSecs(id));
+        });
+        assert_eq!(client.get_claim_grace(&id), 0);
+
+        env.ledger().set_timestamp(5_000);
+        assert_eq!(
+            client.try_recover_leftover_funds(&gov, &id, &treasury),
+            Err(Ok(IncentiveError::CampaignNotEnded))
+        );
+        env.ledger().set_timestamp(5_001);
+        assert_eq!(client.recover_leftover_funds(&gov, &id, &treasury), 400_000);
+    }
+
+    #[test]
+    fn test_fee_on_transfer_funding_at_exactly_the_payout_is_rejected() {
+        let (env, incentives, pool, lp, _reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let fee = env.register_contract(None, FeeToken);
+        FeeTokenClient::new(&env, &fee).mint(&gov, &1_000_000);
+
+        // 100/s over 4_000 s needs 400_000; the 2% fee leaves only 392_000.
+        assert_eq!(
+            client.try_create_campaign(&gov, &pool, &lp, &fee, &1_000, &5_000, &100, &400_000),
+            Err(Ok(IncentiveError::InsufficientFunding))
+        );
+        assert_eq!(client.get_campaign_count(), 0);
+        assert_eq!(FeeTokenClient::new(&env, &fee).balance(&gov), 1_000_000);
+        assert_eq!(FeeTokenClient::new(&env, &fee).balance(&incentives), 0);
+    }
+
+    #[test]
+    fn test_fee_on_transfer_funding_with_headroom_stores_the_received_amount() {
+        let (env, incentives, pool, lp, _reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let fee = env.register_contract(None, FeeToken);
+        FeeTokenClient::new(&env, &fee).mint(&gov, &1_000_000);
+
+        // 3% extra: 412_000 sent, 2% (8_240) burned, 403_760 received >= 400_000.
+        let id = client.create_campaign(&gov, &pool, &lp, &fee, &1_000, &5_000, &100, &412_000);
+        let received = FeeTokenClient::new(&env, &fee).balance(&incentives);
+        assert_eq!(received, 403_760);
+        assert_eq!(client.get_campaign(&id).funding_amount, received);
+    }
+
+    #[test]
+    fn test_plain_token_funding_amount_equals_what_was_sent() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &450_000);
+        assert_eq!(client.get_campaign(&id).funding_amount, 450_000);
+    }
+
+    #[test]
+    fn test_initialize_does_not_require_authorization() {
+        let env = Env::default(); // deliberately no mock_all_auths
+        let gov = Address::generate(&env);
+        let id = env.register_contract(None, IncentiveCampaigns);
+        let client = IncentiveCampaignsClient::new(&env, &id);
+        client.initialize(&gov);
+        assert!(
+            env.auths().is_empty(),
+            "initialize must not demand any signature"
+        );
+        assert_eq!(client.get_governance(), gov);
+    }
+
+    #[test]
+    fn test_initialized_event_payload_equals_the_stored_config() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let gov = Address::generate(&env);
+        let id = env.register_contract(None, IncentiveCampaigns);
+        let client = IncentiveCampaignsClient::new(&env, &id);
+        client.initialize(&gov);
+
+        let (version, data): (u32, (Address, u64, u64)) =
+            last_versioned_event(&env, &id, "initialized");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(version, 1);
+        let (g, next_campaign, next_distribution) = data;
+        assert_eq!(g, client.get_governance());
+        env.as_contract(&id, || {
+            let s = env.storage().instance();
+            assert_eq!(
+                s.get::<DataKey, u64>(&DataKey::NextCampaignId),
+                Some(next_campaign)
+            );
+            assert_eq!(
+                s.get::<DataKey, u64>(&DataKey::NextDistributionId),
+                Some(next_distribution)
+            );
+        });
+    }
+
+    #[test]
+    fn test_get_governance_before_init_and_double_init_are_typed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let gov = Address::generate(&env);
+        let id = env.register_contract(None, IncentiveCampaigns);
+        let client = IncentiveCampaignsClient::new(&env, &id);
+        assert_eq!(
+            client.try_get_governance(),
+            Err(Ok(IncentiveError::NotInitialized))
+        );
+        client.initialize(&gov);
+        assert_eq!(
+            client.try_initialize(&Address::generate(&env)),
+            Err(Ok(IncentiveError::AlreadyInitialized))
+        );
+        assert_eq!(
+            client.get_governance(),
+            gov,
+            "a second initialize cannot replace governance"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // #1116: append-only indexes, legacy fallback, migration
+    // -------------------------------------------------------------------------
+
+    type Views = (
+        u32,
+        soroban_sdk::Vec<DistributionRecord>,
+        soroban_sdk::Vec<DistributionRecord>,
+        soroban_sdk::Vec<DistributionRecord>,
+        soroban_sdk::Vec<u64>,
+        soroban_sdk::Vec<u64>,
+    );
+
+    fn views(
+        client: &IncentiveCampaignsClient,
+        id: u64,
+        provider: &Address,
+        creator: &Address,
+    ) -> Views {
+        (
+            client.get_distribution_count(&id),
+            client.list_distribution_records(&id, &0, &MAX_PAGE),
+            client.list_distribution_records(&id, &1, &2),
+            client.get_claim_history(provider, &0, &MAX_PAGE),
+            client.get_campaigns_by_creator(creator, &0, &MAX_PAGE),
+            client.get_campaigns_by_creator(creator, &1, &1),
+        )
+    }
+
+    fn has_key(env: &Env, contract: &Address, key: &DataKey) -> bool {
+        env.as_contract(contract, || env.storage().persistent().has(key))
+    }
+
+    /// Rewrite one index into the pre-#1116 `Vec` layout.
+    fn to_legacy(env: &Env, contract: &Address, index: &Index) {
+        env.as_contract(contract, || {
+            let ck = index.count_key();
+            let n: u32 = env.storage().persistent().get(&ck).unwrap();
+            let mut v = soroban_sdk::Vec::<u64>::new(env);
+            for i in 0..n {
+                let k = index.item_key(i);
+                v.push_back(env.storage().persistent().get::<DataKey, u64>(&k).unwrap());
+                env.storage().persistent().remove(&k);
+            }
+            env.storage().persistent().remove(&ck);
+            env.storage().persistent().set(&index.legacy_key(), &v);
+        });
+    }
+
+    fn claim_at(
+        env: &Env,
+        client: &IncentiveCampaignsClient,
+        provider: &Address,
+        id: u64,
+        t: u64,
+    ) -> i128 {
+        env.ledger().set_timestamp(t);
+        client.claim_rewards(provider, &id)
+    }
+
+    /// Two campaigns, one provider, an interleaved claim history.
+    /// Returns (id1, id2).
+    fn interleaved_history(
+        env: &Env,
+        client: &IncentiveCampaignsClient,
+        pool: &Address,
+        lp: &Address,
+        reward: &Address,
+        provider: &Address,
+        gov: &Address,
+    ) -> (u64, u64) {
+        let id1 = client.create_campaign(gov, pool, lp, reward, &1_000, &11_000, &100, &1_000_000);
+        let id2 = client.create_campaign(gov, pool, lp, reward, &1_000, &11_000, &100, &1_000_000);
+        make_legacy(env, &client.address, id1);
+        make_legacy(env, &client.address, id2);
+        claim_at(env, client, provider, id1, 1_000);
+        claim_at(env, client, provider, id2, 1_000);
+        assert!(claim_at(env, client, provider, id1, 2_000) > 0);
+        assert!(claim_at(env, client, provider, id2, 2_500) > 0);
+        assert!(claim_at(env, client, provider, id1, 3_000) > 0);
+        assert!(claim_at(env, client, provider, id2, 3_500) > 0);
+        assert!(claim_at(env, client, provider, id1, 4_000) > 0);
+        (id1, id2)
+    }
+
+    #[test]
+    fn test_claims_use_the_indexed_layout_and_leave_no_legacy_vectors() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, _id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+
+        assert!(has_key(&env, &incentives, &DataKey::DistCampaignCount(id1)));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::DistCampaignItem(id1, 2)
+        ));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::DistProviderCount(provider.clone())
+        ));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::CreatorCount(gov.clone())
+        ));
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id1)
+        ));
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByProvider(provider.clone())
+        ));
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::CampaignsByCreator(gov.clone())
+        ));
+        assert_eq!(client.get_distribution_count(&id1), 3);
+    }
+
+    #[test]
+    fn test_views_are_identical_before_legacy_and_after_migration() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+
+        let golden1 = views(&client, id1, &provider, &gov);
+        let golden2 = views(&client, id2, &provider, &gov);
+        assert_eq!(golden1.0, 3);
+        assert_eq!(golden2.0, 2);
+        assert_eq!(golden1.3.len(), 5, "provider history spans both campaigns");
+        assert_eq!(golden1.4.len(), 2);
+
+        // Rewind every index to the legacy layout: views must not change.
+        to_legacy(&env, &incentives, &Index::ByCampaign(id1));
+        to_legacy(&env, &incentives, &Index::ByCampaign(id2));
+        to_legacy(&env, &incentives, &Index::ByProvider(provider.clone()));
+        to_legacy(&env, &incentives, &Index::ByCreator(gov.clone()));
+        assert_eq!(views(&client, id1, &provider, &gov), golden1);
+        assert_eq!(views(&client, id2, &provider, &gov), golden2);
+
+        // Migrate everything: views still must not change.
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &MAX_PAGE),
+            2
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_PROVIDER, &0, &MAX_PAGE),
+            1
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CREATOR, &0, &MAX_PAGE),
+            1
+        );
+        assert_eq!(views(&client, id1, &provider, &gov), golden1);
+        assert_eq!(views(&client, id2, &provider, &gov), golden2);
+    }
+
+    #[test]
+    fn test_migration_moves_legacy_vectors_into_the_indexed_layout() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        for idx in [
+            Index::ByCampaign(id1),
+            Index::ByCampaign(id2),
+            Index::ByProvider(provider.clone()),
+            Index::ByCreator(gov.clone()),
+        ] {
+            to_legacy(&env, &incentives, &idx);
+        }
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id1)
+        ));
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistCampaignCount(id1)
+        ));
+
+        // Page through campaigns one at a time.
+        assert_eq!(client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &1), 1);
+        assert!(has_key(&env, &incentives, &DataKey::DistCampaignCount(id1)));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::DistCampaignItem(id1, 2)
+        ));
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id1)
+        ));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id2)
+        ));
+        assert_eq!(client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &1, &1), 1);
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id2)
+        ));
+
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_PROVIDER, &0, &MAX_PAGE),
+            1
+        );
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByProvider(provider.clone())
+        ));
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CREATOR, &0, &MAX_PAGE),
+            1
+        );
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::CampaignsByCreator(gov.clone())
+        ));
+        assert!(has_key(
+            &env,
+            &incentives,
+            &DataKey::CreatorItem(gov.clone(), 1)
+        ));
+    }
+
+    #[test]
+    fn test_migration_is_idempotent() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        let golden = views(&client, id1, &provider, &gov);
+
+        // Already indexed: nothing to move.
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &MAX_PAGE),
+            0
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_PROVIDER, &0, &MAX_PAGE),
+            0
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CREATOR, &0, &MAX_PAGE),
+            0
+        );
+
+        to_legacy(&env, &incentives, &Index::ByCampaign(id1));
+        to_legacy(&env, &incentives, &Index::ByCampaign(id2));
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &MAX_PAGE),
+            2
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &MAX_PAGE),
+            0
+        );
+        assert_eq!(views(&client, id1, &provider, &gov), golden);
+    }
+
+    #[test]
+    fn test_append_to_a_legacy_index_migrates_it_and_keeps_order() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        let before = client.list_distribution_records(&id1, &0, &MAX_PAGE);
+        let history_before = client.get_claim_history(&provider, &0, &MAX_PAGE);
+        to_legacy(&env, &incentives, &Index::ByCampaign(id1));
+        to_legacy(&env, &incentives, &Index::ByProvider(provider.clone()));
+        let _ = id2;
+
+        assert!(claim_at(&env, &client, &provider, id1, 5_000) > 0);
+
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::DistributionsByCampaign(id1)
+        ));
+        assert!(has_key(&env, &incentives, &DataKey::DistCampaignCount(id1)));
+        let after = client.list_distribution_records(&id1, &0, &MAX_PAGE);
+        assert_eq!(after.len(), before.len() + 1);
+        for i in 0..before.len() {
+            assert_eq!(after.get(i), before.get(i), "existing order is preserved");
+        }
+        let history_after = client.get_claim_history(&provider, &0, &MAX_PAGE);
+        assert_eq!(history_after.len(), history_before.len() + 1);
+        assert_eq!(
+            history_after
+                .get(history_after.len() - 1)
+                .unwrap()
+                .timestamp,
+            5_000
+        );
+    }
+
+    #[test]
+    fn test_migrate_indexes_rejects_an_unknown_kind() {
+        let (env, incentives, _pool, _lp, _reward, _p, _gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        assert_eq!(
+            client.try_migrate_indexes(&3, &0, &10),
+            Err(Ok(IncentiveError::InvalidIndexKind))
+        );
+        assert_eq!(
+            client.try_migrate_indexes(&u32::MAX, &0, &10),
+            Err(Ok(IncentiveError::InvalidIndexKind))
+        );
+    }
+
+    #[test]
+    fn test_migrate_indexes_pagination_bounds() {
+        let (env, incentives, pool, lp, reward, _p, gov) = setup();
+        env.budget().reset_unlimited();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let ids = seed_campaigns(&client, &gov, &pool, &lp, &reward, 55);
+        env.as_contract(&incentives, || {
+            for id in ids.iter() {
+                let mut v = soroban_sdk::Vec::<u64>::new(&env);
+                v.push_back(id);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::DistributionsByCampaign(id), &v);
+            }
+        });
+
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &0),
+            0,
+            "limit 0"
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &55, &10),
+            0,
+            "offset at end"
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &999, &10),
+            0,
+            "offset past end"
+        );
+        // A huge limit is clamped to MAX_PAGE owners per call.
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &u32::MAX),
+            MAX_PAGE
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &MAX_PAGE, &u32::MAX),
+            5
+        );
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &u32::MAX),
+            0
+        );
+        assert_eq!(client.get_distribution_count(&1), 1);
+        assert_eq!(client.get_distribution_count(&55), 1);
+    }
+
+    #[test]
+    fn test_migrate_indexes_is_permissionless() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, _) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        to_legacy(&env, &incentives, &Index::ByCampaign(id1));
+        assert_eq!(client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &10), 1);
+        assert!(
+            env.auths().is_empty(),
+            "migration must not require any signature"
+        );
+    }
+
+    #[test]
+    fn test_kind_one_finds_a_provider_through_its_records() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        let golden = views(&client, id1, &provider, &gov);
+        to_legacy(&env, &incentives, &Index::ByProvider(provider.clone()));
+
+        // 5 records, all by one provider: one owner moved however many are scanned.
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_PROVIDER, &0, &MAX_PAGE),
+            1
+        );
+        assert_eq!(views(&client, id1, &provider, &gov), golden);
+        let _ = id2;
+    }
+
+    #[test]
+    fn test_kind_two_falls_back_to_governance_for_unrecorded_creators() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+        let golden = views(&client, id1, &provider, &gov);
+        to_legacy(&env, &incentives, &Index::ByCreator(gov.clone()));
+        // Campaigns created before #1117 have no recorded creator.
+        env.as_contract(&incentives, || {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::CampaignCreator(id1));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::CampaignCreator(id2));
+        });
+
+        assert_eq!(
+            client.migrate_indexes(&INDEX_KIND_BY_CREATOR, &0, &MAX_PAGE),
+            1
+        );
+        assert!(!has_key(
+            &env,
+            &incentives,
+            &DataKey::CampaignsByCreator(gov.clone())
+        ));
+        assert_eq!(views(&client, id1, &provider, &gov), golden);
+    }
+
+    #[test]
+    fn test_index_entries_are_ttl_bumped_on_write_and_after_migration() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let (id1, _id2) = interleaved_history(&env, &client, &pool, &lp, &reward, &provider, &gov);
+
+        let keys = [
+            DataKey::DistCampaignCount(id1),
+            DataKey::DistCampaignItem(id1, 0),
+            DataKey::DistCampaignItem(id1, 2),
+            DataKey::DistProviderCount(provider.clone()),
+            DataKey::DistProviderItem(provider.clone(), 4),
+            DataKey::CreatorCount(gov.clone()),
+            DataKey::CreatorItem(gov.clone(), 1),
+            DataKey::CampaignCreator(id1),
+            DataKey::ClaimGraceSecs(id1),
+        ];
+        env.as_contract(&incentives, || {
+            for k in keys.iter() {
+                let ttl = env.storage().persistent().get_ttl(k);
+                assert!(
+                    ttl >= BUMP_TO - 1,
+                    "index entry TTL {ttl} should be bumped to BUMP_TO"
+                );
+            }
+        });
+
+        // Views read the entries, which also refreshes them.
+        let _ = client.list_distribution_records(&id1, &0, &10);
+        let _ = client.get_claim_history(&provider, &0, &10);
+        let _ = client.get_campaigns_by_creator(&gov, &0, &10);
+        env.as_contract(&incentives, || {
+            assert!(
+                env.storage()
+                    .persistent()
+                    .get_ttl(&DataKey::DistCampaignItem(id1, 2))
+                    >= BUMP_TO - 1
+            );
+        });
+
+        // Entries written by a migration are bumped too.
+        to_legacy(&env, &incentives, &Index::ByCampaign(id1));
+        client.migrate_indexes(&INDEX_KIND_BY_CAMPAIGN, &0, &1);
+        env.as_contract(&incentives, || {
+            for k in [
+                DataKey::DistCampaignCount(id1),
+                DataKey::DistCampaignItem(id1, 2),
+            ] {
+                assert!(env.storage().persistent().get_ttl(&k) >= BUMP_TO - 1);
+            }
+        });
+    }
+
+    /// Cost of one claim at timestamp `t`, in CPU instructions.
+    fn claim_cost(
+        env: &Env,
+        client: &IncentiveCampaignsClient,
+        provider: &Address,
+        id: u64,
+        t: u64,
+    ) -> u64 {
+        env.ledger().set_timestamp(t);
+        env.budget().reset_default();
+        client.claim_rewards(provider, &id);
+        env.budget().cpu_instruction_cost()
+    }
+
+    fn long_campaign(
+        client: &IncentiveCampaignsClient,
+        pool: &Address,
+        lp: &Address,
+        reward: &Address,
+        gov: &Address,
+        provider: &Address,
+    ) -> u64 {
+        // 100/s for 20_000 s, funded 2_000_000; the provider earns about 99/s.
+        let id = client.create_campaign(gov, pool, lp, reward, &1_000, &21_000, &100, &2_000_000);
+        make_legacy(&client.env, &client.address, id);
+        client.claim_rewards(provider, &id); // snapshot at t=1_000, pays 0
+        id
+    }
+
+    #[test]
+    fn test_claim_cost_stays_flat_across_claims() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = long_campaign(&client, &pool, &lp, &reward, &gov, &provider);
+
+        let first = claim_cost(&env, &client, &provider, id, 1_001);
+        let mut last = first;
+        for k in 2..=20u64 {
+            let c = claim_cost(&env, &client, &provider, id, 1_000 + k);
+            if k == 20 {
+                last = c;
+            }
+        }
+        assert_eq!(client.get_distribution_count(&id), 20);
+        let diff = last.abs_diff(first);
+        assert!(
+            diff <= first / 2,
+            "claim cost must stay relatively flat across claims (got {first} vs {last})"
+        );
+    }
+
+    /// Prints the claim cost with 10 and with 5,000 prior claims.
+    /// Run: cargo test -p incentive_campaigns report_claim_cost -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn report_claim_cost_at_10_and_5000_prior_claims() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = long_campaign(&client, &pool, &lp, &reward, &gov, &provider);
+        let mut at_10 = 0;
+        let mut at_5000 = 0;
+        for k in 1..=5_001u64 {
+            let c = claim_cost(&env, &client, &provider, id, 1_000 + k);
+            if k == 11 {
+                at_10 = c;
+            }
+            if k == 5_001 {
+                at_5000 = c;
+            }
+        }
+        std::println!("claim cost with 10 prior claims:    {at_10} cpu instructions");
+        std::println!("claim cost with 5000 prior claims:  {at_5000} cpu instructions");
     }
     // =========================================================================
     // #1115: stake-based campaigns
@@ -3180,7 +4310,7 @@ mod tests {
         set_time(&env, 11_000);
         assert_eq!(client.claim_rewards(&provider, &id), 250_000);
 
-        set_time(&env, 12_000);
+        set_time(&env, 700_000);
         assert_eq!(
             client.recover_leftover_funds(&gov, &id, &treasury),
             750_000,
@@ -3207,7 +4337,7 @@ mod tests {
         set_time(&env, 9_000);
         assert_eq!(client.claim_rewards(&provider, &id), 200_000);
 
-        set_time(&env, 12_000);
+        set_time(&env, 700_000);
         assert_eq!(client.recover_leftover_funds(&gov, &id, &treasury), 800_000);
     }
 
@@ -3341,7 +4471,7 @@ mod tests {
         );
 
         // Once recovered, a campaign is inactive and takes no new stake.
-        set_time(&env, 12_000);
+        set_time(&env, 700_000);
         client.recover_leftover_funds(&gov, &modern, &treasury);
         assert_eq!(
             client.try_stake(&provider, &modern, &1),
@@ -3359,7 +4489,7 @@ mod tests {
         let treasury = Address::generate(&env);
 
         client.stake(&provider, &id, &100_000);
-        set_time(&env, 12_000);
+        set_time(&env, 700_000);
         client.recover_leftover_funds(&gov, &id, &treasury);
 
         assert_eq!(
@@ -3497,6 +4627,8 @@ mod tests {
             "lost more than rounding dust: {paid}"
         );
 
+        // Recovery opens once the claim grace period has passed.
+        set_time(&env, 700_000);
         let treasury = Address::generate(&env);
         let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
         assert_eq!(paid + recovered, 1_000_000);
@@ -3556,6 +4688,8 @@ mod tests {
                 paid += v;
             }
         }
+        // Recovery opens once the claim grace period has passed.
+        set_time(&env, 700_000);
         let treasury = Address::generate(&env);
         let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
         assert_eq!(paid + recovered, 2_000_000);
@@ -3639,8 +4773,9 @@ mod tests {
             assert!(client.get_campaign_accrual(&id).0 >= campaign.total_distributed);
         }
 
-        // Wind down: everyone claims and exits, then governance recovers the rest.
-        set_time(&env, 12_000);
+        // Wind down: everyone claims and exits, then governance recovers the rest
+        // once the claim grace period has passed.
+        set_time(&env, 700_000);
         for who in users.iter() {
             if let Ok(Ok(v)) = client.try_claim_rewards(who, &id) {
                 paid += v;

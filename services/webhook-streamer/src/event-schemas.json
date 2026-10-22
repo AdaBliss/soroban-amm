@@ -475,6 +475,17 @@
               "new_admin"
             ]
           }
+        ],
+        "window_bounds_updated": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "min_secs",
+              "max_secs"
+            ]
+          }
         ]
       }
     },
@@ -1321,6 +1332,18 @@
     },
     "incentive_campaigns": {
       "events": {
+        "initialized": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "governance",
+              "next_campaign_id",
+              "next_distribution_id"
+            ]
+          }
+        ],
         "governance_proposed": [
           {
             "version": 1,

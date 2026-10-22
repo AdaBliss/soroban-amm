@@ -358,7 +358,7 @@ TWAP is `(cum_a_now - cum_a_then) / window` scaled by `1_000_000`. CL path uses 
 |  | `factory` | `FACTORY_CONTRACT_ID` |  |
 |  | `max_hops` | `4` (default) | 4-hop paths are exhaustive enough without excessive gas. |
 | **Batch Auction** | `admin` | `ADMIN_ADDRESS` |  |
-|  | `batch_window_secs` | `60` | Orders collected for 60s, then `settle_batch` executes atomically. Lower = more latency-sensitive, higher = more orders per batch but slower fills. Max orders default `50`, ceiling `200`. |
+|  | `batch_window_secs` | `60` | Orders collected for 60s, then `settle_batch` executes atomically. Lower = more latency-sensitive, higher = more orders per batch but slower fills. Max orders default `50`, ceiling `200`. The window must lie within the contract's bounds (default 5 s to 1 day, admin-settable up to 30 days with `set_window_bounds`); `initialize` and `set_batch_window` reject anything else with `InvalidBatchWindow`. |
 
 ### 3.13 CL Position NFT (`cl_position_nft`)
 

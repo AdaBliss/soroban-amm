@@ -563,7 +563,7 @@
       },
       {
         "function_v0": {
-          "doc": "Initialize the AMM pool with two tokens, an LP token, and a swap fee.\\n\\nMust be called exactly once after deployment. The LP token contract must\\nalready be deployed with this contract set as its admin so it can mint\\nand burn shares on behalf of liquidity providers.\\n\\n# Parameters\\n- `token_a` \\xe2\\x80\\x93 Address of the first pool token (SEP-41 compliant).\\n- `token_b` \\xe2\\x80\\x93 Address of the second pool token (SEP-41 compliant).\\n- `lp_token` \\xe2\\x80\\x93 Address of the LP token contract used to represent pool shares.\\n- `fee_bps` \\xe2\\x80\\x93 Swap fee in basis points (e.g. `30` = 0.30 %). Must be in `[0, 10_000)`.\\n\\n`lp_token` must already be deployed and its admin set to this contract.\\n`admin` is stored as the contract administrator and is the only address\\npermitted to call `set_protocol_fee` after deployment.\\n`fee_recipient` receives accrued protocol fees via `withdraw_protocol_fees`.\\n`protocol_fee_bps` must be \\xe2\\x89\\xa4 `fee_bps`; set to 0 to disable protocol fees.\\n# Panics\\n- If the pool has already been initialized.\\n- If `token_a == token_b`.\\n- If",
+          "doc": "Initialize the AMM pool with two tokens, an LP token, and a swap fee.\\n\\nMust be called exactly once after deployment. The LP token contract must\\nalready be deployed with this contract set as its admin so it can mint\\nand burn shares on behalf of liquidity providers.\\n\\n# Parameters\\n- `token_a` \\xe2\\x80\\x93 Address of the first pool token (SEP-41 compliant).\\n- `token_b` \\xe2\\x80\\x93 Address of the second pool token (SEP-41 compliant).\\n- `lp_token` \\xe2\\x80\\x93 Address of the LP token contract used to represent pool shares.\\n- `fee_bps` \\xe2\\x80\\x93 Swap fee in basis points (e.g. `30` = 0.30 %). Must be in `[0, 10_000)`.\\n\\n`lp_token` must already be deployed and its admin set to this contract.\\n`admin` is stored as the contract administrator and is the only address\\npermitted to call `set_protocol_fee` after deployment.\\n`fee_recipient` receives accrued protocol fees via `withdraw_protocol_fees`.\\n`protocol_fee_bps` must be strictly below `fee_bps` (or both 0); set to 0 to disable protocol fees.\\n# Panics\\n- If the pool has already been initialized.\\n- If `to",
           "inputs": [
             {
               "doc": "",
@@ -670,7 +670,7 @@
       },
       {
         "function_v0": {
-          "doc": "Update the swap fee post-deployment. Admin-only.\\n\\nThe new fee takes effect on the very next swap.\\nEmits a `fee_upd` event on every successful call.\\n\\n# Parameters\\n- `admin` - must match the stored admin address.\\n- `new_fee_bps` - new swap fee in basis points; must be in [0, 10_000).\\n\\n# Panics\\n- If `admin` auth fails.\\n- If `new_fee_bps` is outside [0, 10_000).\\n- If `new_fee_bps` is less than the current `protocol_fee_bps`.",
+          "doc": "Update the swap fee post-deployment. Admin-only.\\n\\nThe new fee takes effect on the very next swap.\\nEmits a `fee_upd` event on every successful call.\\n\\n# Parameters\\n- `admin` - must match the stored admin address.\\n- `new_fee_bps` - new swap fee in basis points; must be in [0, 10_000).\\n\\n# Errors\\n- `InvalidFeeBps` if `new_fee_bps` is outside [0, 10_000).\\n- `InvalidFeeBps` if the new fee and the current `protocol_fee_bps` would\\nbreak the invariant (`protocol_fee_bps < fee_bps`, or both 0). The\\ncall is rejected as a whole: the protocol fee is never silently\\nclamped, so lowering the fee below the protocol cut means lowering\\n`set_protocol_fee` first.\\n\\n# Panics\\n- If `admin` auth fails.",
           "inputs": [
             {
               "doc": "",
@@ -1474,7 +1474,7 @@
       },
       {
         "function_v0": {
-          "doc": "Update the protocol fee configuration. Admin-only.\\n\\nSet `protocol_fee_bps` to 0 to disable protocol fee collection.\\n`protocol_fee_bps` must be \\xe2\\x89\\xa4 the pool's `fee_bps`.",
+          "doc": "Update the protocol fee configuration. Admin-only.\\n\\nSet `protocol_fee_bps` to 0 to disable protocol fee collection.\\n`protocol_fee_bps` must be strictly below the pool's `fee_bps` (or both\\nmust be 0); see `validate_fee_pair`.",
           "inputs": [
             {
               "doc": "",
@@ -3565,11 +3565,20 @@
       },
       {
         "function_v0": {
-          "doc": "Return the active admin address.",
+          "doc": "Return the active admin address, or `NotInitialized` before `initialize`.",
           "inputs": [],
           "name": "get_admin",
           "outputs": [
-            "address"
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AuctionError"
+                  }
+                },
+                "ok_type": "address"
+              }
+            }
           ]
         }
       },
@@ -3656,6 +3665,12 @@
                   "u64"
                 ]
               }
+            },
+            {
+              "void_v0": {
+                "doc": "Admin-settable `(min, max)` bounds for the batch window (issue #1119).\\nAbsent means `(MIN_BATCH_WINDOW_SECS, MAX_BATCH_WINDOW_SECS)`.",
+                "name": "WindowBounds"
+              }
             }
           ],
           "doc": "",
@@ -3665,7 +3680,7 @@
       },
       {
         "function_v0": {
-          "doc": "Initialize the auction contract.\\n\\n- `batch_window_secs` \\xe2\\x80\\x94 how long (in ledger seconds) a batch window stays\\nopen before it can be settled.",
+          "doc": "Initialize the auction contract.\\n\\n- `batch_window_secs` \\xe2\\x80\\x94 how long (in ledger seconds) a batch window stays\\nopen before it can be settled. Must lie within the window bounds\\n(`MIN_BATCH_WINDOW_SECS`..=`MAX_BATCH_WINDOW_SECS` until the admin\\nchanges them), otherwise `InvalidBatchWindow`.",
           "inputs": [
             {
               "doc": "",
@@ -3720,7 +3735,7 @@
       },
       {
         "function_v0": {
-          "doc": "Return admin-allowlisted venues, `(pool, pool_type)`, paginated.",
+          "doc": "Return admin-allowlisted venues, `(pool, pool_type)`, paginated.\\n\\nDefensive (issue #1119): the offset and limit may be anything, including\\n`u32::MAX`; the page is clamped to the list, and an index entry without a\\n`Venue(pool)` record is skipped rather than trapping.",
           "inputs": [
             {
               "doc": "",
@@ -4271,6 +4286,21 @@
               "doc": "`add_venue` would push the persistent venue registry past\\n`MAX_VENUES` (issue #700).",
               "name": "TooManyVenues",
               "value": 19
+            },
+            {
+              "doc": "An admin entrypoint, `get_admin` or `accept_admin` was called before\\n`initialize` (issue #1119).",
+              "name": "NotInitialized",
+              "value": 20
+            },
+            {
+              "doc": "`batch_window_secs` is outside the configured `[min, max]` window\\nbounds (issue #1119).",
+              "name": "InvalidBatchWindow",
+              "value": 21
+            },
+            {
+              "doc": "`set_window_bounds` was given `min == 0`, `min > max`, a `max` above\\n`WINDOW_BOUNDS_CEILING_SECS`, or bounds that exclude the current window\\n(issue #1119).",
+              "name": "InvalidWindowBounds",
+              "value": 22
             }
           ],
           "doc": "",
@@ -4370,7 +4400,7 @@
       },
       {
         "function_v0": {
-          "doc": "Update the batch window duration. Admin-only.",
+          "doc": "Update the batch window duration. Admin-only.\\n\\nThe window must lie within the configured bounds (default\\n`MIN_BATCH_WINDOW_SECS`..=`MAX_BATCH_WINDOW_SECS`, see\\n`set_window_bounds`); `0` and `u64::MAX` are rejected with\\n`InvalidBatchWindow`, so a mis-set window can neither disable batching\\nnor freeze settlement (issue #1119).",
           "inputs": [
             {
               "doc": "",
@@ -4406,6 +4436,62 @@
             {
               "option": {
                 "value_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "The `(min_secs, max_secs)` bounds currently enforced on the batch window.",
+          "inputs": [],
+          "name": "get_window_bounds",
+          "outputs": [
+            {
+              "tuple": {
+                "value_types": [
+                  "u64",
+                  "u64"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Set the `[min_secs, max_secs]` bounds enforced on the batch window.\\nAdmin-only (issue #1119).\\n\\nRequires `0 < min_secs <= max_secs <= WINDOW_BOUNDS_CEILING_SECS` and\\nthat the current window still lies inside the new bounds; otherwise\\n`InvalidWindowBounds`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "min_secs",
+              "type_": "u64"
+            },
+            {
+              "doc": "",
+              "name": "max_secs",
+              "type_": "u64"
+            }
+          ],
+          "name": "set_window_bounds",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "AuctionError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
               }
             }
           ]
@@ -20830,6 +20916,81 @@
                   "address"
                 ]
               }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Per campaign: seconds after `end_time` during which recovery is blocked.\\nAbsent for campaigns created before #1117, which read back as 0.",
+                "name": "ClaimGraceSecs",
+                "type_": [
+                  "u64"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Per campaign: the address that created it (recorded for new campaigns).",
+                "name": "CampaignCreator",
+                "type_": [
+                  "u64"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per campaign: number of distribution records.",
+                "name": "DistCampaignCount",
+                "type_": [
+                  "u64"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per (campaign, n): the n-th distribution record id.",
+                "name": "DistCampaignItem",
+                "type_": [
+                  "u64",
+                  "u32"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per provider: number of distribution records.",
+                "name": "DistProviderCount",
+                "type_": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per (provider, n): the n-th distribution record id.",
+                "name": "DistProviderItem",
+                "type_": [
+                  "address",
+                  "u32"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per creator: number of campaigns created.",
+                "name": "CreatorCount",
+                "type_": [
+                  "address"
+                ]
+              }
+            },
+            {
+              "tuple_v0": {
+                "doc": "Indexed layout, per (creator, n): the n-th campaign id.",
+                "name": "CreatorItem",
+                "type_": [
+                  "address",
+                  "u32"
+                ]
+              }
             }
           ],
           "doc": "",
@@ -20839,7 +21000,7 @@
       },
       {
         "function_v0": {
-          "doc": "",
+          "doc": "Set the governance address. Callable once.\\n\\nDeliberately does **not** `require_auth` on `governance`: the address is\\ntypically a governance contract that cannot sign a deploy transaction.\\nInitialization is verified instead of authenticated: the `initialized`\\nevent and `get_governance` report what was stored, and the deploy script\\nreads it back and aborts on a mismatch, which exposes a front-run.",
           "inputs": [
             {
               "doc": "",
@@ -21070,7 +21231,7 @@
       },
       {
         "function_v0": {
-          "doc": "Create a time-based incentive campaign. Governance only.",
+          "doc": "Create a time-based incentive campaign with the default claim grace\\nperiod ([`DEFAULT_CLAIM_GRACE_SECS`]). Governance only.\\n\\nSee [`IncentiveCampaigns::create_campaign_with_grace`].",
           "inputs": [
             {
               "doc": "",
@@ -21123,6 +21284,66 @@
                   }
                 },
                 "ok_type": "u64"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Seconds after `end_time` during which `recover_leftover_funds` is blocked\\nfor `campaign_id`. Campaigns created before #1117 report 0.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "campaign_id",
+              "type_": "u64"
+            }
+          ],
+          "name": "get_claim_grace",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": "u64"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Move legacy `Vec`-based indexes into the indexed layout. Permissionless.\\n\\n`kind` selects the index: `0` distributions by campaign, `1` by provider,\\n`2` campaigns by creator. `offset`/`limit` page over the owners to visit\\n(campaign index for kinds 0 and 2, distribution record id for kind 1) and\\n`limit` is clamped to [`MAX_PAGE`]. Returns how many owners were moved.\\n\\nSafe to call repeatedly and in any order: an owner that is already\\nmigrated, or never had a legacy vector, is skipped. Until an owner is\\nmigrated its views keep reading the legacy vector, and its next append\\nmigrates it. Legacy creator vectors are located through the recorded\\ncreator of each campaign, falling back to the current governance for\\ncampaigns created before creators were recorded; any other legacy creator\\nis migrated lazily on its next append and is served correctly meanwhile.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "kind",
+              "type_": "u32"
+            },
+            {
+              "doc": "",
+              "name": "offset",
+              "type_": "u32"
+            },
+            {
+              "doc": "",
+              "name": "limit",
+              "type_": "u32"
+            }
+          ],
+          "name": "migrate_indexes",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": "u32"
               }
             }
           ]
@@ -21290,6 +21511,21 @@
               "doc": "A stake operation was attempted on a campaign created before the\\nstake-based model; such campaigns keep the live-balance rules.",
               "name": "LegacyCampaign",
               "value": 24
+            },
+            {
+              "doc": "`claim_grace_secs` is outside `[MIN_CLAIM_GRACE_SECS, MAX_CLAIM_GRACE_SECS]`.",
+              "name": "InvalidClaimGrace",
+              "value": 25
+            },
+            {
+              "doc": "`recover_leftover_funds` was called before `end_time + claim_grace_secs`\\nhad passed, so providers may still be claiming.",
+              "name": "ClaimGraceActive",
+              "value": 26
+            },
+            {
+              "doc": "`migrate_indexes` was given a `kind` other than 0, 1 or 2.",
+              "name": "InvalidIndexKind",
+              "value": 27
             }
           ],
           "doc": "Typed failures for every caller-triggerable precondition in this contract.\\n\\nDiscriminants follow the workspace convention (`AlreadyInitialized = 1`,\\n`NotInitialized = 2`) and are part of the ABI: never renumber, only append.",
@@ -21624,7 +21860,7 @@
       },
       {
         "function_v0": {
-          "doc": "Recover undistributed reward tokens after a campaign has ended. Governance only.\\n\\nTransfers the difference between the original `funding_amount` and what was\\nactually distributed (`total_distributed`) back to `recipient`. After recovery\\nthe campaign is marked **inactive** so no further LP claims can be made.\\n\\nGovernance should allow a reasonable grace period after `end_time` before\\ncalling this function so that LPs have an opportunity to claim first.",
+          "doc": "Recover undistributed reward tokens after a campaign has ended. Governance only.\\n\\nTransfers the difference between the original `funding_amount` and what was\\nactually distributed (`total_distributed`) back to `recipient`. After recovery\\nthe campaign is marked **inactive** so no further LP claims can be made.\\n\\nRecovery is rejected with `ClaimGraceActive` until the ledger time is\\nstrictly past `end_time + claim_grace_secs`, so providers always get that\\nwindow to claim first. Campaigns created before the grace period existed\\nhave no stored value and read back as 0, so they behave as they did.",
           "inputs": [
             {
               "doc": "",
@@ -21799,6 +22035,71 @@
                     "name": "DistributionRecord"
                   }
                 }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Create a time-based incentive campaign. Governance only.\\n\\n`claim_grace_secs` is how long after `end_time` providers can keep\\nclaiming before `recover_leftover_funds` may sweep the leftover. It must\\nlie in `[MIN_CLAIM_GRACE_SECS, MAX_CLAIM_GRACE_SECS]`.\\n\\nThe contract measures what it actually receives (balance after minus\\nbalance before the transfer), requires it to cover\\n`reward_rate * (end_time - start_time)` and stores it as\\n`funding_amount`. A fee-on-transfer reward token therefore cannot leave\\nthe campaign under-funded relative to its payout promise.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "caller",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "lp_token",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "reward_token",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "start_time",
+              "type_": "u64"
+            },
+            {
+              "doc": "",
+              "name": "end_time",
+              "type_": "u64"
+            },
+            {
+              "doc": "",
+              "name": "reward_rate",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "funding_amount",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "claim_grace_secs",
+              "type_": "u64"
+            }
+          ],
+          "name": "create_campaign_with_grace",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": "u64"
               }
             }
           ]

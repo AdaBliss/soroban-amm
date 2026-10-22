@@ -14,6 +14,7 @@
 |------|--------|--------|
 | 2026-10-04 | — | Added M-04: the k-of-n emergency guard could be disabled by the admin it guards, and emergency withdrawals had no pause precondition or delay. Recorded the fix and the new announce/delay flow. |
 | 2026-09-27 | `74d227f` | Re-verified every finding against the current source. Moved the fixed findings to [§2.6 Resolved findings](#26-resolved-findings), with the fixing change and current location for each. Added M-03 (the residual gap from M-02 in `initialize`). Listed the unreviewed concentrated-liquidity surfaces in §3. |
+| 2026-10-22 | #1107 | M-03 resolved: `initialize*`, `update_fee` and `set_protocol_fee` now share one fee-pair validator. |
 | — | `66a4643` | Original constant-product review. |
 
 ---
@@ -42,12 +43,12 @@
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
 | M-04 | Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay | Medium | **Fixed**. See §2.6 |
-| M-03 | `initialize` accepts `protocol_fee_bps == fee_bps` | Medium | **Open** |
 | L-02 | Imbalanced deposits accept excess tokens without refund | Low | Acknowledged (by design) |
 | I-02 | No distinct event for the first deposit | Informational | Open (informational) |
+| M-03 | `initialize` accepts `protocol_fee_bps == fee_bps` | Medium | Fixed. See §2.6 |
 | H-01 | `initialize` ignores `admin`, `fee_recipient`, `protocol_fee_bps` | High | Fixed. See §2.6 |
 | M-01 | No re-entrancy guard on `flash_loan` | Medium | Fixed. See §2.6 |
-| M-02 | `set_protocol_fee` allows `protocol_fee_bps == fee_bps` | Medium | Fixed. See §2.6 (residual gap: M-03) |
+| M-02 | `set_protocol_fee` allows `protocol_fee_bps == fee_bps` | Medium | Fixed. See §2.6 |
 | L-01 | `withdraw_protocol_fees` missing closing brace | Low | Fixed. See §2.6 |
 | L-03 | `pause`/`unpause` do not check the stored admin | Low | Fixed. See §2.6 |
 | I-01 | TWAP accumulators can overflow | Informational | Addressed. See §2.6 |
@@ -66,68 +67,7 @@ No open high-severity findings. H-01 is resolved (see §2.6).
 
 ### 2.3 Medium
 
-#### M-03 — `initialize` accepts `protocol_fee_bps == fee_bps`
-
-**Location:** `contracts/amm/src/lib.rs:381`, in `initialize_with_flash_loan_fee` (`initialize` delegates to it)
-**Description:** The M-02 fix made `set_protocol_fee` reject a value of
-`protocol_fee_bps` that is equal to or greater than `fee_bps`. The initializer
-still validates with `(0..=fee_bps).contains(&protocol_fee_bps)`, which allows
-equality. A pool created with `protocol_fee_bps == fee_bps > 0` sends 100% of
-swap fees to the protocol and none to LPs, which is the situation M-02 was
-meant to prevent. The admin can only move away from that setting later through
-`set_protocol_fee`.
-**Recommendation:** Apply the same strict bound as `set_protocol_fee` in the
-initializer: `protocol_fee_bps < fee_bps` when `fee_bps > 0`, and
-`protocol_fee_bps == 0` when `fee_bps == 0`.
-**Status:** Open.
-
----
-
-#### M-04 — Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay
-
-**Location:** `contracts/amm/src/lib.rs` — `emergency_withdraw`, `set_multisig`,
-`propose_emergency_withdraw`, `exec_multisig_emergency_wd`, and the new
-`announce_emergency_withdraw` / `cancel_emergency_withdraw`.
-**Description:** The emergency path moves every reserve out of the pool. Two
-layers were supposed to constrain it: a k-of-n multisig guard and a timed
-governance proposal. Neither constrained the key it existed to constrain.
-`set_multisig(admin, [], 0)` required only the stored admin's authorization, and
-the single-admin `emergency_withdraw` refused only while `MultisigQuorum > 0`.
-A single admin could therefore disable the guard and drain the pool in the same
-ledger. The same admin could instead install signers it controlled with
-`quorum = 1`. `emergency_withdraw` had no pause precondition and no delay, and
-`exec_multisig_emergency_wd` executed as soon as quorum was reached. Accrued
-protocol fees were left behind by both paths, and several failures returned
-misleading error variants (`InsufficientShares`, `NoPendingAdmin`,
-`InvalidFeeBps`).
-**Fix:** The guard is now tamper-resistant. `set_multisig` only installs the
-initial guard: while `MultisigQuorum > 0` it returns `MultisigGuardActive`, and
-the signer set or quorum (including lowering `quorum` to 0) can only change
-through the multisig itself (`propose_set_multisig`, `approve_multisig_proposal`,
-`exec_multisig_set_multisig` at the current quorum). Multisig proposals are
-addressed by id, and a signer-set change invalidates proposals created under the
-old set. Single-admin emergency withdrawals are announced with
-`announce_emergency_withdraw(admin, to)` and succeed only after
-`EmergencyDelaySecs` (configurable with `initialize_with_emergency_delay`,
-default 24 h, capped at 7 days), only for the announced recipient, and only
-while the pool is paused; `cancel_emergency_withdraw` clears the announcement
-and a second `announce` restarts the delay. `exec_multisig_emergency_wd` applies
-the same delay, measured from quorum being reached, and the same pause
-precondition. Both paths reject `to == env.current_contract_address()` and
-`to == lp_token` and sweep accrued fees to `to`. New `QuorumNotReached`,
-`InvalidQuorum`, `EmergencyDelayNotElapsed`, `InvalidRecipient`,
-`MultisigGuardActive` and `InvalidEmergencyDelay` error variants (appended, not
-renumbered) replace the misleading ones; a missing announcement or proposal
-returns the existing `NoPendingProposal`, and a withdrawal on an unpaused pool
-returns `Paused`. Versioned `emergency_announce`, `emergency_cancel` and
-`emergency_wd` events include the amounts moved. Governance's
-`EmergencyWithdraw` proposal kind still works and is subject to the same rules:
-proposing it makes governance (the pool admin) announce the withdrawal so the
-pool's delay runs alongside the voting period and timelock, and executing it
-pauses the pool and then withdraws. Because the announcement is made at
-proposal time, a newer `EmergencyWithdraw` proposal replaces the announced
-recipient of an earlier one that has not executed.
-**Status:** Fixed.
+No open medium findings. M-02, M-03 and M-04 are resolved (see §2.6).
 
 ---
 
@@ -179,8 +119,8 @@ and passed only `token_a`, `token_b`, `lp_token` and `fee_bps`. The values of
 **Current location:** `contracts/amm/src/lib.rs:336` (`initialize`) forwards
 to `initialize_with_flash_loan_fee` at line 361. That function stores `Admin`,
 `FeeRecipient` and `ProtocolFeeBps`.
-**Residual:** the initializer's protocol-fee bound is not as strict as the one
-in `set_protocol_fee`. This is tracked as M-03.
+**Residual:** the initializer's protocol-fee bound was not as strict as the one
+in `set_protocol_fee`. Resolved as M-03 below.
 
 #### M-01 — No re-entrancy guard on `flash_loan` — **Fixed**
 
@@ -205,7 +145,26 @@ whole swap fee to the protocol, leaving nothing for LPs.
 monitor it.
 **Current location:** `contracts/amm/src/lib.rs:850` — `set_protocol_fee` (the
 check follows the `// Fix M-02` comment).
-**Residual:** `initialize` still allows equality. This is tracked as M-03.
+**Residual:** `initialize` still allowed equality, and the `update_fee` fix from
+`6fc64226` (#506) was no longer on `main`. Both are resolved as M-03 below.
+
+#### M-03 — `initialize` accepts `protocol_fee_bps == fee_bps` — **Fixed**
+
+**Original finding:** `initialize_with_flash_loan_fee` validated the protocol
+fee with `(0..=fee_bps).contains(..)`, which accepts equality, and `update_fee`
+only rejected `new_fee_bps < protocol_fee_bps`, so `fee_bps == protocol_fee_bps`
+was reachable at deployment and through a governance `UpdateFee` proposal.
+**Fix:** change for issue #1107. One private validator, `validate_fee_pair`,
+states the invariant (`0 <= protocol_fee_bps < fee_bps`, or both 0, with
+`fee_bps` in `[0, 10_000)`) and is used by `initialize*`, `update_fee` and
+`set_protocol_fee`, all of which return `InvalidFeeBps` on a violation.
+`update_fee` rejects a new swap fee that would break the invariant; it never
+clamps the protocol fee.
+**Current location:** `contracts/amm/src/lib.rs`, `validate_fee_pair` and its
+three callers. Regression tests are in `contracts/amm/src/tests.rs`
+(`test_fee_entry_points_accept_exactly_the_same_pairs` and the
+`test_initialize_*` / `test_update_fee_*` tests) and
+`contracts/integration-tests/src/governance_locker_test.rs`.
 
 #### M-04 — Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay — **Fixed**
 
@@ -328,8 +287,8 @@ All regression cases pinned in the `regression` module also pass.
 The constant-product AMM review found the x*y=k invariant holding across the
 fee tiers exercised by the fuzz suite. As of `74d227f`, all of the original
 high, medium and low findings for that pool are fixed or acknowledged. One
-medium finding (M-03, the residual initializer gap from M-02) and one
-informational item (I-02) remain open.
+informational item (I-02) remains open; the residual initializer gap from M-02
+(M-03) is resolved.
 
 The emergency path was hardened after `74d227f` (M-04): the k-of-n guard can no
 longer be disabled by the admin it guards, and emergency withdrawals now

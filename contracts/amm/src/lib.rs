@@ -400,7 +400,7 @@ impl AmmPool {
     /// `admin` is stored as the contract administrator and is the only address
     /// permitted to call `set_protocol_fee` after deployment.
     /// `fee_recipient` receives accrued protocol fees via `withdraw_protocol_fees`.
-    /// `protocol_fee_bps` must be ≤ `fee_bps`; set to 0 to disable protocol fees.
+    /// `protocol_fee_bps` must be strictly below `fee_bps` (or both 0); set to 0 to disable protocol fees.
     /// # Panics
     /// - If the pool has already been initialized.
     /// - If `token_a == token_b`.
@@ -486,11 +486,10 @@ impl AmmPool {
         if token_a == token_b {
             return Err(AmmError::InvalidToken);
         }
-        Self::validate_fee_bps(fee_bps)?;
+        // #1107: one shared check for the swap fee and the protocol cut, so
+        // `initialize`, `update_fee` and `set_protocol_fee` cannot drift apart.
+        Self::validate_fee_pair(fee_bps, protocol_fee_bps)?;
         Self::validate_flash_loan_fee_bps(flash_loan_fee_bps)?;
-        if !(0..=fee_bps).contains(&protocol_fee_bps) {
-            return Err(AmmError::InvalidFeeBps);
-        }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::TokenA, &token_a);
@@ -1092,7 +1091,8 @@ impl AmmPool {
     /// Update the protocol fee configuration. Admin-only.
     ///
     /// Set `protocol_fee_bps` to 0 to disable protocol fee collection.
-    /// `protocol_fee_bps` must be ≤ the pool's `fee_bps`.
+    /// `protocol_fee_bps` must be strictly below the pool's `fee_bps` (or both
+    /// must be 0); see `validate_fee_pair`.
     pub fn set_protocol_fee(
         env: Env,
         admin: Address,
@@ -1107,15 +1107,8 @@ impl AmmPool {
         admin.require_auth();
         let fee_bps: i128 = Self::read_fee_bps(&env)?;
         // Fix M-02: protocol_fee_bps must be *strictly* less than fee_bps so LPs
-        // always retain a portion of swap income. Allowing protocol_fee_bps == fee_bps
-        // would route 100% of swap fees to the protocol, leaving LPs with nothing.
-        // Special case: both zero is valid (fees entirely disabled).
-        if protocol_fee_bps < 0
-            || (fee_bps > 0 && protocol_fee_bps >= fee_bps)
-            || (fee_bps == 0 && protocol_fee_bps != 0)
-        {
-            return Err(AmmError::InvalidFeeBps);
-        }
+        // always retain a portion of swap income (see `validate_fee_pair`).
+        Self::validate_fee_pair(fee_bps, protocol_fee_bps)?;
         env.storage()
             .instance()
             .set(&DataKey::FeeRecipient, &recipient);
@@ -1433,6 +1426,29 @@ impl AmmPool {
         Ok(())
     }
 
+    /// The pool's fee invariant (#1107), shared by `initialize*`, `update_fee`
+    /// and `set_protocol_fee`:
+    ///
+    /// - the swap fee passes `validate_fee_bps`, and
+    /// - `0 <= protocol_fee_bps < fee_bps`, or both are 0.
+    ///
+    /// `protocol_fee_bps == fee_bps` would send every swap fee to the protocol
+    /// and leave LPs with nothing (AUDIT M-02 / M-03), and a non-zero protocol
+    /// fee on a zero swap fee has nothing to take a cut of.
+    fn validate_fee_pair(fee_bps: i128, protocol_fee_bps: i128) -> Result<(), AmmError> {
+        Self::validate_fee_bps(fee_bps)?;
+        let ok = if fee_bps == 0 {
+            protocol_fee_bps == 0
+        } else {
+            (0..fee_bps).contains(&protocol_fee_bps)
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(AmmError::InvalidFeeBps)
+        }
+    }
+
     /// Flash loan fee validation: [0, 10_000] bps.
     fn validate_flash_loan_fee_bps(fee_bps: i128) -> Result<(), AmmError> {
         if !(0..=10_000).contains(&fee_bps) {
@@ -1715,23 +1731,26 @@ impl AmmPool {
     /// - `admin` - must match the stored admin address.
     /// - `new_fee_bps` - new swap fee in basis points; must be in [0, 10_000).
     ///
+    /// # Errors
+    /// - `InvalidFeeBps` if `new_fee_bps` is outside [0, 10_000).
+    /// - `InvalidFeeBps` if the new fee and the current `protocol_fee_bps` would
+    ///   break the invariant (`protocol_fee_bps < fee_bps`, or both 0). The
+    ///   call is rejected as a whole: the protocol fee is never silently
+    ///   clamped, so lowering the fee below the protocol cut means lowering
+    ///   `set_protocol_fee` first.
+    ///
     /// # Panics
     /// - If `admin` auth fails.
-    /// - If `new_fee_bps` is outside [0, 10_000).
-    /// - If `new_fee_bps` is less than the current `protocol_fee_bps`.
     pub fn update_fee(env: Env, new_fee_bps: i128) -> Result<(), AmmError> {
         Self::extend_ttl(&env);
         let admin: Address = Self::read_admin(&env)?;
         admin.require_auth();
-        Self::validate_fee_bps(new_fee_bps)?;
         let protocol_fee_bps: i128 = env
             .storage()
             .instance()
             .get(&DataKey::ProtocolFeeBps)
             .unwrap_or(0);
-        if new_fee_bps < protocol_fee_bps {
-            return Err(AmmError::InvalidFeeBps);
-        }
+        Self::validate_fee_pair(new_fee_bps, protocol_fee_bps)?;
         env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
         soroban_amm_sdk::emit_versioned_event!(
             env,

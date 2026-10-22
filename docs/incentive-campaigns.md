@@ -50,8 +50,11 @@ Accounting rules:
 
 - `recover_leftover_funds` marks the campaign inactive, after which
   `claim_rewards` fails with `CampaignInactive`. Rewards accrued but not yet
-  claimed at that point are part of the recovered leftover. Governance should
-  keep the grace period after `end_time` that the function already documents.
+  claimed at that point are part of the recovered leftover. The contract
+  enforces the grace period: recovery fails with `ClaimGraceActive` until the
+  ledger time is strictly past `end_time + claim_grace_secs` (7 days by
+  default; `create_campaign_with_grace` accepts 1 hour to 90 days), and
+  providers keep claiming throughout it.
   `unstake` keeps working, so principal is never lost.
 - `claim_rewards` by an address with no stake and nothing accrued fails with
   `NoStake`. An address with a stake but nothing new to collect gets

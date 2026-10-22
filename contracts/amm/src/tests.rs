@@ -4469,6 +4469,236 @@ fn test_remove_liquidity_one_sided_zero_fee_exact_parity() {
     assert_reserves_match_balances(&amm2, &ts2.env);
 }
 
+/// Test helper (#1107): an AMM from `setup()` initialised with the given fee pair.
+#[allow(clippy::type_complexity)]
+fn init_with_pair(
+    fee_bps: i128,
+    protocol_fee_bps: i128,
+) -> (
+    Env,
+    Address,
+    Address,
+    Result<Result<(), soroban_sdk::ConversionError>, Result<AmmError, soroban_sdk::InvokeError>>,
+) {
+    let (env, admin, amm_addr, lp_addr, _) = setup();
+    let (ta, _) = create_sac(&env, &admin);
+    let (tb, _) = create_sac(&env, &admin);
+    let fee_recipient = Address::generate(&env);
+    let result = AmmPoolClient::new(&env, &amm_addr).try_initialize(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &fee_bps,
+        &fee_recipient,
+        &protocol_fee_bps,
+    );
+    (env, admin, amm_addr, result)
+}
+
+/// #1107: `initialize` rejects `protocol_fee_bps == fee_bps` (AUDIT M-03).
+#[test]
+fn test_initialize_rejects_protocol_fee_equal_to_fee() {
+    let (_, _, _, equal) = init_with_pair(30, 30);
+    assert_eq!(equal, Err(Ok(AmmError::InvalidFeeBps)));
+
+    let (_, _, _, above) = init_with_pair(30, 31);
+    assert_eq!(above, Err(Ok(AmmError::InvalidFeeBps)));
+
+    let (_, _, _, negative) = init_with_pair(30, -1);
+    assert_eq!(negative, Err(Ok(AmmError::InvalidFeeBps)));
+
+    let (_, _, _, below) = init_with_pair(30, 29);
+    assert!(
+        below.is_ok(),
+        "protocol_fee_bps = fee_bps - 1 must be accepted"
+    );
+}
+
+/// #1107: both zero is valid; a protocol fee on a zero swap fee is not.
+#[test]
+fn test_initialize_zero_fee_requires_zero_protocol_fee() {
+    let (_, _, _, both_zero) = init_with_pair(0, 0);
+    assert!(both_zero.is_ok(), "(0, 0) must be accepted");
+
+    let (_, _, _, protocol_only) = init_with_pair(0, 1);
+    assert_eq!(protocol_only, Err(Ok(AmmError::InvalidFeeBps)));
+}
+
+/// #1107: a rejected initialize leaves the pool uninitialized.
+#[test]
+fn test_rejected_initialize_leaves_pool_uninitialized() {
+    let (env, admin, amm_addr, rejected) = init_with_pair(30, 30);
+    assert!(rejected.is_err());
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+    assert_eq!(amm.try_get_fee_info(), Err(Ok(AmmError::NotInitialized)));
+
+    // The same address can still be initialized with a valid pair.
+    let (ta, _) = create_sac(&env, &admin);
+    let (tb, _) = create_sac(&env, &admin);
+    let lp = env.register_contract(None, LpToken);
+    amm.initialize(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp,
+        &30_i128,
+        &admin,
+        &10_i128,
+    );
+    assert_eq!(amm.get_info().fee_bps, 30);
+}
+
+/// #1107: `update_fee` rejects fee == protocol fee (the #506 regression).
+#[test]
+fn test_update_fee_rejects_equal_or_below_protocol_fee() {
+    let (env, _admin, amm_addr, init) = init_with_pair(30, 10);
+    assert!(init.is_ok());
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+
+    // Strictly above the protocol fee is valid.
+    assert!(amm.try_update_fee(&11_i128).is_ok());
+    assert_eq!(amm.get_info().fee_bps, 11);
+    amm.update_fee(&30_i128);
+
+    // Equal to the protocol fee is the all-fees-to-protocol state.
+    assert_eq!(
+        amm.try_update_fee(&10_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    // Below it is rejected too.
+    assert_eq!(
+        amm.try_update_fee(&9_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    // Zero swap fee with a non-zero protocol fee is rejected.
+    assert_eq!(
+        amm.try_update_fee(&0_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    // Nothing was clamped or changed by the rejected calls.
+    assert_eq!(amm.get_info().fee_bps, 30);
+    assert_eq!(amm.get_protocol_fee().1, 10);
+}
+
+/// #1107: with the protocol fee disabled any valid swap fee is accepted.
+#[test]
+fn test_update_fee_works_with_zero_protocol_fee() {
+    let (env, _admin, amm_addr, init) = init_with_pair(30, 0);
+    assert!(init.is_ok());
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+
+    assert!(
+        amm.try_update_fee(&0_i128).is_ok(),
+        "(0, 0) must be accepted"
+    );
+    assert!(amm.try_update_fee(&50_i128).is_ok());
+    assert!(amm.try_update_fee(&0_i128).is_ok());
+    assert_eq!(amm.get_info().fee_bps, 0);
+}
+
+/// #1107: `update_fee(protocol_fee_bps + 1)` works and `update_fee(protocol_fee_bps)` does not.
+#[test]
+fn test_update_fee_boundary_around_protocol_fee() {
+    let (env, _admin, amm_addr, init) = init_with_pair(100, 25);
+    assert!(init.is_ok());
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+
+    assert_eq!(
+        amm.try_update_fee(&25_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    assert!(amm.try_update_fee(&26_i128).is_ok());
+    assert_eq!(amm.get_info().fee_bps, 26);
+}
+
+/// #1107: lowering the fee below the protocol cut is rejected, not clamped; the
+/// admin lowers the protocol fee first.
+#[test]
+fn test_update_fee_does_not_clamp_protocol_fee() {
+    let (env, admin, amm_addr, init) = init_with_pair(100, 50);
+    assert!(init.is_ok());
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+
+    assert_eq!(
+        amm.try_update_fee(&40_i128),
+        Err(Ok(AmmError::InvalidFeeBps))
+    );
+    assert_eq!(
+        amm.get_protocol_fee().1,
+        50,
+        "protocol fee must not be clamped"
+    );
+
+    let recipient = Address::generate(&env);
+    amm.set_protocol_fee(&admin, &recipient, &10_i128);
+    assert!(amm.try_update_fee(&40_i128).is_ok());
+    assert_eq!(amm.get_info().fee_bps, 40);
+}
+
+/// #1107: the validator itself, over every small pair.
+#[test]
+fn test_validate_fee_pair_matches_the_invariant_for_small_values() {
+    for fee in -2_i128..=12 {
+        for protocol in -2_i128..=14 {
+            let expected = (0..10_000).contains(&fee)
+                && ((fee == 0 && protocol == 0) || (protocol >= 0 && protocol < fee));
+            assert_eq!(
+                AmmPool::validate_fee_pair(fee, protocol).is_ok(),
+                expected,
+                "fee {fee}, protocol {protocol}"
+            );
+        }
+    }
+    assert!(AmmPool::validate_fee_pair(9_999, 9_998).is_ok());
+    assert!(AmmPool::validate_fee_pair(9_999, 9_999).is_err());
+    assert!(AmmPool::validate_fee_pair(10_000, 0).is_err());
+}
+
+/// #1107: `initialize`, `update_fee` and `set_protocol_fee` accept exactly the
+/// same set of (fee_bps, protocol_fee_bps) pairs.
+#[test]
+fn test_fee_entry_points_accept_exactly_the_same_pairs() {
+    for fee in [0_i128, 1, 5, 30, 100, 9_999] {
+        for protocol in [0_i128, 1, fee - 1, fee, fee + 1] {
+            let expected = (fee == 0 && protocol == 0) || (0 <= protocol && protocol < fee);
+
+            // initialize
+            let (_, _, _, init) = init_with_pair(fee, protocol);
+            let init_ok = init.is_ok();
+
+            // set_protocol_fee: a valid pool whose swap fee is moved to `fee`
+            // directly in storage, then the protocol fee is set.
+            let (env, admin, amm_addr, base) = init_with_pair(9_999, 0);
+            assert!(base.is_ok());
+            env.as_contract(&amm_addr, || {
+                env.storage().instance().set(&DataKey::FeeBps, &fee);
+            });
+            let recipient = Address::generate(&env);
+            let set_ok = AmmPoolClient::new(&env, &amm_addr)
+                .try_set_protocol_fee(&admin, &recipient, &protocol)
+                .is_ok();
+
+            // update_fee: a valid pool whose protocol fee is moved to
+            // `protocol` directly in storage, then the swap fee is updated.
+            let (env, _admin, amm_addr, base) = init_with_pair(9_999, 0);
+            assert!(base.is_ok());
+            env.as_contract(&amm_addr, || {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::ProtocolFeeBps, &protocol);
+            });
+            let update_ok = AmmPoolClient::new(&env, &amm_addr)
+                .try_update_fee(&fee)
+                .is_ok();
+
+            assert_eq!(init_ok, expected, "initialize({fee}, {protocol})");
+            assert_eq!(set_ok, expected, "set_protocol_fee({fee}, {protocol})");
+            assert_eq!(update_ok, expected, "update_fee({fee}, {protocol})");
+        }
+    }
+}
+
 // ── Emergency withdrawal: k-of-n guard + announced delay ─────────────────────
 //
 // Helpers that drive the full hardened flow with the default 24 h delay.

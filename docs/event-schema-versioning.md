@@ -657,6 +657,7 @@ count. Events marked unversioned carry their payload without the
 | `venue_removed` | 2 | _none_ | v1 |
 | `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
 | `admin_changed` | 1 | `new_admin` | v1 |
+| `window_bounds_updated` | 1 | `min_secs`, `max_secs` | v1 |
 
 ### `batch_router`
 
@@ -762,6 +763,7 @@ count. Events marked unversioned carry their payload without the
 
 | Event | Topics | Payload fields | Envelope |
 |---|---|---|---|
+| `initialized` | 1 | `governance`, `next_campaign_id`, `next_distribution_id` | v1 |
 | `governance_proposed` | 1 | `caller`, `new_governance` | v1 |
 | `governance_transferred` | 1 | `old_governance`, `new_governance` | v1 |
 | `campaign_created` | 1 | `id`, `pool`, `reward_token`, `start_time`, `end_time`, `reward_rate` | v1 |
