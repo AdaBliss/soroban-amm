@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- `pol_vesting` gets a governance-gated `upgrade(governance, new_wasm_hash)` that emits `upgraded`, and `initialize` emits an `initialized` event with the stored governance and treasury addresses (#1136). `initialize` still does not require auth, so a deploy script can read the addresses back and compare them with the intended ones.
+- E2E flows `scripts/e2e/batch_auction.sh` (#1144) and `scripts/e2e/v2_to_v3_migration.sh` (#1148), registered in `scripts/e2e/run.sh`. Both deploy their own instances, read every state change back through a view, and wait on ledger time read from the RPC node (`e2e_ledger_time` and `e2e_wait_for_ledger_time` in `common.sh`).
+
 ### Fixed
+- `pol_vesting::create_vesting` rejects an LP token that the given `pool` does not administer, with the new `VestingError::LpTokenMismatch = 13`. A mistyped pair used to create a schedule for a token the pool never issued (#1136).
+- `pol_vesting` schedules outlive the default 180-day bump. A schedule is stored with a TTL that covers its `end_ledger` plus a claim window, clamped to the network maximum. Reads (`get_vesting`, `vested_amount`, `releasable_amount`) refresh the schedule and its token's committed total, and the instance is refreshed to the network maximum. Before this, a schedule that ended after about 180 days could archive before it vested (#1136).
+- `pol_vesting` e2e flow (`scripts/e2e/pol_vesting.sh`) creates its LP token through a factory pool, because `create_vesting` now checks the pool.
+- `governance` compiled against a `total_supply_at` client that returns the unwrapped value, so `.map_err` did not exist and the WASM build failed. It now uses the `try_` client and keeps the `InsufficientSnapshotBal` mapping.
+- `integration-tests`: a stray closing brace in `multisig_emergency_withdraw_test.rs` stopped the integration crate from compiling. The module also still calls an emergency-withdraw API that no longer exists, so that crate's tests do not compile yet; this change does not fix that module.
+- `Cargo.lock` lists the `oracle_adapters` workspace member, so `--locked` builds pass.
 - `soroban_amm_sdk::events::decode_amm_event` returned `None` for the two most common AMM events. `swap` and `swap_exact_out` publish four fields (`swap_fot` adds the referrer as a fifth), and `flash_loan` publishes both tokens' amounts and fees. The decoder expected a five-field swap and a three-field flash loan, so an indexer built on it silently dropped every ordinary swap and every flash loan (#1149). It now accepts both swap shapes by field count and decodes the four-field flash loan.
 - **Breaking (SDK only):** `FlashLoanEvent` is now `{ receiver, amount_a, amount_b, fee_a, fee_b }`. The old `{ token, amount, fee }` shape never matched an event the contract emits, so nothing decoded into it correctly.
 - The `soroban_amm_sdk` test modules that were feature-gated behind a `testutils` feature nothing enables (`version_test`, `examples`) now run under `cargo test`. The orphaned `src/events_test.rs`, which used a stale API and did not compile, is removed.
