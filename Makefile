@@ -6,7 +6,7 @@ WASM_DIR := target/wasm32v1-none/release
 
 SHELL := bash
 
-.PHONY: all help build release-build optimize abi check-abi test-abi test test-all fmt lint lint-js check-node-versions check check-docs check-branch-protection check-branch-protection-remote check-storage-keys check-deploy-scripts \
+.PHONY: all help build release-build optimize abi check-abi test-abi test test-all fmt lint lint-js check-node-versions check check-docs check-branch-protection check-branch-protection-remote check-storage-keys check-deploy-scripts check-test-modules \
         size size-check doc audit bench deploy e2e clean fuzz-amm fuzz-amm-nightly fuzz-cl
 
 # Bare `make` explains itself instead of building.
@@ -92,6 +92,9 @@ check-storage-keys: ## Fail if a TWAP/TWAL storage key is built from the ledger 
 check-deploy-scripts: ## Fail if a deployable contract has no scripts/deploy/ module wired into deploy.sh
 	bash scripts/check_deploy_scripts.sh
 
+check-test-modules: ## Fail if a contract *_test.rs file is not declared as a mod, so cargo never runs it
+	bash scripts/check_test_modules.sh
+
 size: ## Print a WASM size report for all built contracts
 	bash scripts/size_report.sh
 
@@ -108,7 +111,7 @@ audit: ## Run a security audit of dependencies (cargo install cargo-audit if mis
 	}
 	cargo audit
 
-check: fmt lint test check-docs check-branch-protection check-storage-keys check-deploy-scripts size-check doc ## Run the checks CI enforces before pushing
+check: fmt lint test check-docs check-branch-protection check-storage-keys check-deploy-scripts check-test-modules size-check doc ## Run the checks CI enforces before pushing
 
 bench: ## Run hot-path benchmarks
 	cargo run -p benches -- --check

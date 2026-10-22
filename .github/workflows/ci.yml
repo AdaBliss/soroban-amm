@@ -104,6 +104,9 @@ jobs:
             # module that scripts/deploy.sh actually runs (issue #959).
             - name: Check deploy scripts cover every contract
               run: make check-deploy-scripts
+            # Every *_test.rs under a contract src/ must be a mod, or cargo never runs it.
+            - name: Check test modules are compiled
+              run: make check-test-modules
 
             - name: Security audit
               uses: rustsec/audit-check@v2

@@ -4,11 +4,11 @@
 //!
 //! | Event symbol    | Topics                        | Data                              |
 //! |-----------------|-------------------------------|-----------------------------------|
-//! | `swap`          | `("swap", trader)`            | `(1, (token_in, amt_in, token_out, amt_out, referrer))` |
+//! | `swap`          | `("swap", trader)`            | `(1, (token_in, amt_in, token_out, amt_out))` (`swap`, `swap_exact_out`); `(1, (token_in, amt_in, token_out, amt_out, referrer))` (`swap_fot`) |
 //! | `add_liquidity` | `("add_liquidity", provider)` | `(1, (amount_a, amount_b, shares))`    |
 //! | `rm_liq`        | `("rm_liq",)`                 | `(1, (provider, shares, out_a, out_b))`|
 //! | `rm_liq_1s`     | `("rm_liq_1s",)`              | `(1, (provider, shares, token_out, total_out))` |
-//! | `flash_loan`    | `("flash_loan", receiver)`    | `(1, (token, amount, fee))`            |
+//! | `flash_loan`    | `("flash_loan", receiver)`    | `(1, (amount_a, amount_b, fee_a, fee_b))` |
 //! | `fee_upd`       | `("fee_upd", admin)`          | `(1, (new_fee_bps,))`                  |
 //! | `flash_fee_upd` | `("flash_fee_upd", admin)`    | `(1, (new_fee_bps,))`                  |
 //! | `admin_nominated`| `("admin_nominated",)`       | `(1, (current_admin, new_admin))`      |
@@ -74,14 +74,16 @@ pub struct RemoveLiquidityOneSidedEvent {
     pub total_out: i128,
 }
 
-/// Emitted when a flash loan executes.
+/// Emitted when a flash loan executes. The pool lends both tokens in one call,
+/// so the event carries an amount and a fee for each side.
 #[contracttype]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlashLoanEvent {
     pub receiver: Address,
-    pub token: Address,
-    pub amount: i128,
-    pub fee: i128,
+    pub amount_a: i128,
+    pub amount_b: i128,
+    pub fee_a: i128,
+    pub fee_b: i128,
 }
 
 /// Emitted when the swap fee is updated.
@@ -246,6 +248,201 @@ pub mod symbols {
     pub const TOLERANCE_FAILED: &str = "tol_fail";
 }
 
+// ── Schema table ──────────────────────────────────────────────────────────────
+
+/// One payload shape the decoder accepts for an event. An event with several
+/// shapes (such as `swap`) has one entry per arity. `fields` lists the payload
+/// fields in order, as `(name, type)` pairs.
+///
+/// `docs/events.json` is generated from [`EVENT_SCHEMAS`]; the
+/// `schema_json_matches_docs` test fails when the two drift.
+pub struct EventSchema {
+    pub contract: &'static str,
+    pub topic: &'static str,
+    pub version: u32,
+    pub fields: &'static [(&'static str, &'static str)],
+}
+
+/// Every payload shape [`decode_amm_event`] recognises.
+pub const EVENT_SCHEMAS: &[EventSchema] = &[
+    EventSchema {
+        contract: "amm",
+        topic: symbols::ADD_LIQUIDITY,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("amount_a", "i128"),
+            ("amount_b", "i128"),
+            ("shares_minted", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::SWAP,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("token_in", "Address"),
+            ("amount_in", "i128"),
+            ("token_out", "Address"),
+            ("amount_out", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::SWAP,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("token_in", "Address"),
+            ("amount_in", "i128"),
+            ("token_out", "Address"),
+            ("amount_out", "i128"),
+            ("referrer", "Option<Address>"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::REMOVE_LIQUIDITY,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("provider", "Address"),
+            ("shares_burned", "i128"),
+            ("amount_a", "i128"),
+            ("amount_b", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::REMOVE_LIQUIDITY_ONE_SIDED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("provider", "Address"),
+            ("shares_burned", "i128"),
+            ("token_out", "Address"),
+            ("total_out", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::FLASH_LOAN,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("amount_a", "i128"),
+            ("amount_b", "i128"),
+            ("fee_a", "i128"),
+            ("fee_b", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::FEE_UPDATED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("new_fee_bps", "i128")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::FLASH_FEE_UPDATED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("new_fee_bps", "i128")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::ADMIN_NOMINATED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("current_admin", "Address"), ("new_admin", "Address")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::ADMIN_CHANGED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("new_admin", "Address")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::UPGRADED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("new_wasm_hash", "BytesN<32>")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::PROTOCOL_FEE_SET,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("protocol_fee_bps", "i128"), ("recipient", "Address")],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::CIRCUIT_BREAKER,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("price_before", "i128"),
+            ("price_after", "i128"),
+            ("deviation_bps", "i128"),
+            ("threshold_bps", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "amm",
+        topic: symbols::CB_RECOVERED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[("timestamp", "u64")],
+    },
+    EventSchema {
+        contract: "dex_aggregator",
+        topic: symbols::CL_POOL_REGISTERED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("token_a", "Address"),
+            ("token_b", "Address"),
+            ("fee_bps", "i128"),
+            ("pool", "Address"),
+        ],
+    },
+    EventSchema {
+        contract: "dex_aggregator",
+        topic: symbols::ROUTE_SELECTED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("venue", "Address"),
+            ("venue_kind", "RouteVenueKind"),
+            ("amount_in", "i128"),
+            ("amount_out", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "dex_aggregator",
+        topic: symbols::ROUTE_ALTERNATIVE,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("venue", "Address"),
+            ("amount_out", "i128"),
+            ("alt_venue", "Address"),
+            ("alt_venue_kind", "RouteVenueKind"),
+            ("alt_amount_out", "i128"),
+        ],
+    },
+    EventSchema {
+        contract: "dex_aggregator",
+        topic: symbols::ROUTE_EXECUTED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("trader", "Address"),
+            ("token_in", "Address"),
+            ("token_out", "Address"),
+            ("amount_in", "i128"),
+            ("amount_out", "i128"),
+            ("pool", "Address"),
+        ],
+    },
+    EventSchema {
+        contract: "dex_aggregator",
+        topic: symbols::TOLERANCE_FAILED,
+        version: crate::EVENT_SCHEMA_VERSION,
+        fields: &[
+            ("pool", "Address"),
+            ("observed_bps", "i128"),
+            ("tolerance_bps", "i128"),
+        ],
+    },
+];
+
 // ── Decoder helpers ───────────────────────────────────────────────────────────
 
 /// Wraps all possible events that can originate from an AMM pool.
@@ -315,6 +512,15 @@ where
     T::try_from_val(env, &payload).ok()
 }
 
+/// Number of elements in an event payload, or `None` if it is not a vector.
+fn payload_len(env: &soroban_sdk::Env, payload: soroban_sdk::Val) -> Option<u32> {
+    use soroban_sdk::TryFromVal;
+
+    let items: soroban_sdk::Vec<soroban_sdk::Val> =
+        soroban_sdk::Vec::try_from_val(env, &payload).ok()?;
+    Some(items.len())
+}
+
 pub fn decode_amm_event(
     env: &soroban_sdk::Env,
     topics: soroban_sdk::Vec<soroban_sdk::Val>,
@@ -337,13 +543,23 @@ pub fn decode_amm_event(
 
     if symbol == Symbol::new(env, symbols::SWAP) {
         let trader: Address = topics.get(1)?.try_into_val(env).ok()?;
+        // `swap` and `swap_exact_out` publish four fields. `swap_fot` also
+        // publishes the optional referrer as a fifth, so the arity selects the shape.
         let (token_in, amount_in, token_out, amount_out, referrer): (
             Address,
             i128,
             Address,
             i128,
             Option<Address>,
-        ) = decode_payload(env, payload_val, 5)?;
+        ) = match payload_len(env, payload_val)? {
+            4 => {
+                let (token_in, amount_in, token_out, amount_out): (Address, i128, Address, i128) =
+                    decode_payload(env, payload_val, 4)?;
+                (token_in, amount_in, token_out, amount_out, None)
+            }
+            5 => decode_payload(env, payload_val, 5)?,
+            _ => return None,
+        };
         Some(AmmEvent::Swap(SwapEvent {
             trader,
             token_in,
@@ -384,12 +600,14 @@ pub fn decode_amm_event(
         ))
     } else if symbol == Symbol::new(env, symbols::FLASH_LOAN) {
         let receiver: Address = topics.get(1)?.try_into_val(env).ok()?;
-        let (token, amount, fee): (Address, i128, i128) = decode_payload(env, payload_val, 3)?;
+        let (amount_a, amount_b, fee_a, fee_b): (i128, i128, i128, i128) =
+            decode_payload(env, payload_val, 4)?;
         Some(AmmEvent::FlashLoan(FlashLoanEvent {
             receiver,
-            token,
-            amount,
-            fee,
+            amount_a,
+            amount_b,
+            fee_a,
+            fee_b,
         }))
     } else if symbol == Symbol::new(env, symbols::FEE_UPDATED) {
         let admin: Address = topics.get(1)?.try_into_val(env).ok()?;
@@ -621,8 +839,64 @@ mod tests {
     fn decodes_flash_loan() {
         let env = Env::default();
         let receiver = address(&env);
+
+        let topics = vec![
+            &env,
+            symbol(&env, symbols::FLASH_LOAN),
+            receiver.clone().into_val(&env),
+        ];
+        // Matches `flash_loan` in contracts/amm/src/lib.rs: both tokens, both fees.
+        let payload: Val = (10_000i128, 5_000i128, 10i128, 5i128).into_val(&env);
+        let data = make_data(&env, payload, crate::EVENT_SCHEMA_VERSION);
+
+        assert_eq!(
+            decode_amm_event(&env, topics, data),
+            Some(AmmEvent::FlashLoan(FlashLoanEvent {
+                receiver,
+                amount_a: 10_000,
+                amount_b: 5_000,
+                fee_a: 10,
+                fee_b: 5,
+            }))
+        );
+    }
+
+    #[test]
+    fn decodes_swap_without_referrer() {
+        let env = Env::default();
+        let trader = address(&env);
+        let token_in = address(&env);
+        let token_out = address(&env);
+
+        let topics = vec![
+            &env,
+            symbol(&env, symbols::SWAP),
+            trader.clone().into_val(&env),
+        ];
+        // `swap` and `swap_exact_out` publish four fields and no referrer.
+        let payload: Val = (token_in.clone(), 1000i128, token_out.clone(), 999i128).into_val(&env);
+        let data = make_data(&env, payload, crate::EVENT_SCHEMA_VERSION);
+
+        assert_eq!(
+            decode_amm_event(&env, topics, data),
+            Some(AmmEvent::Swap(SwapEvent {
+                trader,
+                token_in,
+                amount_in: 1000,
+                token_out,
+                amount_out: 999,
+                referrer: None,
+            }))
+        );
+    }
+
+    #[test]
+    fn flash_loan_with_three_fields_returns_none() {
+        let env = Env::default();
+        let receiver = address(&env);
         let token = address(&env);
 
+        // The pre-fix decoder shape (token, amount, fee) is not what the AMM emits.
         let topics = vec![
             &env,
             symbol(&env, symbols::FLASH_LOAN),
@@ -631,15 +905,77 @@ mod tests {
         let payload: Val = (token.clone(), 10_000i128, 10i128).into_val(&env);
         let data = make_data(&env, payload, crate::EVENT_SCHEMA_VERSION);
 
-        assert_eq!(
-            decode_amm_event(&env, topics, data),
-            Some(AmmEvent::FlashLoan(FlashLoanEvent {
-                receiver,
-                token,
-                amount: 10_000,
-                fee: 10,
-            }))
-        );
+        assert!(decode_amm_event(&env, topics, data).is_none());
+    }
+
+    /// Each case is a payload the decoder must reject: a wrong arity, a wrong
+    /// field type, a wrong schema version, or a payload that is not a vector.
+    #[test]
+    fn malformed_events_decode_to_none() {
+        let env = Env::default();
+        let who = address(&env);
+        let v = crate::EVENT_SCHEMA_VERSION;
+
+        let cases: [(&str, Val, u32); 8] = [
+            // Wrong arity.
+            (
+                symbols::SWAP,
+                (who.clone(), 1i128, who.clone()).into_val(&env),
+                v,
+            ),
+            (symbols::FLASH_LOAN, (1i128, 2i128, 3i128).into_val(&env), v),
+            (symbols::FEE_UPDATED, (1i128, 2i128).into_val(&env), v),
+            // Wrong field type.
+            (
+                symbols::FLASH_LOAN,
+                (1i128, 2i128, who.clone(), 4i128).into_val(&env),
+                v,
+            ),
+            (symbols::CB_RECOVERED, who.clone().into_val(&env), v),
+            (
+                symbols::ADD_LIQUIDITY,
+                (1i128, who.clone(), 3i128).into_val(&env),
+                v,
+            ),
+            // Unknown schema version.
+            (symbols::ADMIN_CHANGED, (who.clone(),).into_val(&env), v + 1),
+            // Payload is not a vector at all.
+            (symbols::ADMIN_CHANGED, symbol(&env, "unused"), v),
+        ];
+
+        for (topic, payload, version) in cases {
+            let topics = vec![&env, symbol(&env, topic), who.clone().into_val(&env)];
+            let data = make_data(&env, payload, version);
+            assert!(
+                decode_amm_event(&env, topics, data).is_none(),
+                "{topic} should not decode"
+            );
+        }
+    }
+
+    #[test]
+    fn swap_with_wrong_field_type_returns_none() {
+        let env = Env::default();
+        let trader = address(&env);
+        let token_in = address(&env);
+        let token_out = address(&env);
+
+        let topics = vec![
+            &env,
+            symbol(&env, symbols::SWAP),
+            trader.clone().into_val(&env),
+        ];
+        // amount_in is an address, not an i128.
+        let payload: Val = (
+            token_in.clone(),
+            token_in.clone(),
+            token_out.clone(),
+            999i128,
+        )
+            .into_val(&env);
+        let data = make_data(&env, payload, crate::EVENT_SCHEMA_VERSION);
+
+        assert!(decode_amm_event(&env, topics, data).is_none());
     }
 
     #[test]

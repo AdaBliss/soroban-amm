@@ -2,10 +2,11 @@
 //!
 //! Run with:
 //! ```
-//! cargo test --package soroban-amm-sdk --features testutils -- examples::basic_swap
+//! cargo test -p soroban_amm_sdk -- examples::basic_swap
 //! ```
 
-#[cfg(all(test, feature = "testutils"))]
+#[cfg(test)]
+#[allow(clippy::module_inception)]
 mod basic_swap {
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
