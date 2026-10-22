@@ -3005,26 +3005,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -4938,26 +4943,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -6812,26 +6822,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -8869,26 +8884,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -12118,26 +12138,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -13778,26 +13803,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -16825,26 +16855,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -20152,26 +20187,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -22357,26 +22397,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -24296,26 +24341,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -25959,26 +26009,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -27693,26 +27748,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -29273,26 +29333,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -32136,26 +32201,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -34049,26 +34119,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -35788,26 +35863,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -37907,26 +37987,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
@@ -39756,26 +39841,31 @@
       },
       {
         "udt_struct_v0": {
-          "doc": "Emitted when a flash loan executes.",
+          "doc": "Emitted when a flash loan executes. The pool lends both tokens in one call,\\nso the event carries an amount and a fee for each side.",
           "fields": [
             {
               "doc": "",
-              "name": "amount",
+              "name": "amount_a",
               "type_": "i128"
             },
             {
               "doc": "",
-              "name": "fee",
+              "name": "amount_b",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_a",
+              "type_": "i128"
+            },
+            {
+              "doc": "",
+              "name": "fee_b",
               "type_": "i128"
             },
             {
               "doc": "",
               "name": "receiver",
-              "type_": "address"
-            },
-            {
-              "doc": "",
-              "name": "token",
               "type_": "address"
             }
           ],
