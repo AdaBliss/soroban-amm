@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // Contract error sentinels for contracts/amm's AmmError enum. The discriminants
@@ -42,6 +43,18 @@ var (
 	ErrReentrant = errors.New("reentrant call")
 	// ErrCircuitBreaker is AmmError::CircuitBreaker (15).
 	ErrCircuitBreaker = errors.New("circuit breaker tripped")
+	// ErrFotSlippage is AmmError::FotSlippage (16).
+	ErrFotSlippage = errors.New("fee-on-transfer slippage exceeded")
+	// ErrOracleDeviationExceeded is AmmError::OracleDeviationExceeded (17).
+	ErrOracleDeviationExceeded = errors.New("oracle deviation exceeded")
+	// ErrFlashLoanRepaymentFailed is AmmError::FlashLoanRepaymentFailed (18).
+	ErrFlashLoanRepaymentFailed = errors.New("flash loan repayment failed")
+	// ErrAlreadyExecuted is AmmError::AlreadyExecuted (19).
+	ErrAlreadyExecuted = errors.New("proposal already executed")
+	// ErrProposalExpired is AmmError::ProposalExpired (20).
+	ErrProposalExpired = errors.New("proposal expired")
+	// ErrNotInitialized is AmmError::NotInitialized (21).
+	ErrNotInitialized = errors.New("pool not initialized")
 )
 
 // Client-side sentinels, distinct from contract errors.
@@ -63,25 +76,55 @@ var (
 	ErrTransactionFailed = errors.New("transaction failed")
 	// ErrRPC is returned when the RPC endpoint reports a JSON-RPC error.
 	ErrRPC = errors.New("rpc error")
+	// ErrAuthFailed identifies a failed Soroban authorization check.
+	ErrAuthFailed = errors.New("soroban authorization failed")
+	// ErrWasmTrap identifies a contract WASM trap or invalid action.
+	ErrWasmTrap = errors.New("soroban wasm trap")
+	// ErrResourceLimit identifies an instruction, memory, or resource budget failure.
+	ErrResourceLimit = errors.New("soroban resource limit exceeded")
+	// ErrArchivedState identifies ledger state that must be restored before use.
+	ErrArchivedState = errors.New("soroban state is archived")
 )
 
-// ammErrorsByCode maps AmmError discriminants to sentinels.
-var ammErrorsByCode = map[int]error{
-	1:  ErrAlreadyInitialized,
-	2:  ErrInvalidFeeBps,
-	3:  ErrInsufficientShares,
-	4:  ErrDeadlineExceeded,
-	5:  ErrSlippageExceeded,
-	6:  ErrPaused,
-	7:  ErrUnauthorized,
-	8:  ErrZeroAmount,
-	9:  ErrInvalidToken,
-	10: ErrEmptyPool,
-	11: ErrInsufficientLiquidity,
-	12: ErrNoPendingAdmin,
-	13: ErrWrongAdmin,
-	14: ErrReentrant,
-	15: ErrCircuitBreaker,
+// ContractKind selects the error table for the contract being called.
+type ContractKind string
+
+const (
+	// ContractAmm is the constant-product AMM contract.
+	ContractAmm ContractKind = "amm"
+)
+
+type contractErrorInfo struct {
+	name     string
+	sentinel error
+}
+
+// contractErrorsByKind prevents a numeric code from being mislabeled as an
+// AMM error when it came from a different contract family.
+var contractErrorsByKind = map[ContractKind]map[int]contractErrorInfo{
+	ContractAmm: {
+		1:  {"AlreadyInitialized", ErrAlreadyInitialized},
+		2:  {"InvalidFeeBps", ErrInvalidFeeBps},
+		3:  {"InsufficientShares", ErrInsufficientShares},
+		4:  {"DeadlineExceeded", ErrDeadlineExceeded},
+		5:  {"SlippageExceeded", ErrSlippageExceeded},
+		6:  {"Paused", ErrPaused},
+		7:  {"Unauthorized", ErrUnauthorized},
+		8:  {"ZeroAmount", ErrZeroAmount},
+		9:  {"InvalidToken", ErrInvalidToken},
+		10: {"EmptyPool", ErrEmptyPool},
+		11: {"InsufficientLiquidity", ErrInsufficientLiquidity},
+		12: {"NoPendingAdmin", ErrNoPendingAdmin},
+		13: {"WrongAdmin", ErrWrongAdmin},
+		14: {"Reentrant", ErrReentrant},
+		15: {"CircuitBreaker", ErrCircuitBreaker},
+		16: {"FotSlippage", ErrFotSlippage},
+		17: {"OracleDeviationExceeded", ErrOracleDeviationExceeded},
+		18: {"FlashLoanRepaymentFailed", ErrFlashLoanRepaymentFailed},
+		19: {"AlreadyExecuted", ErrAlreadyExecuted},
+		20: {"ProposalExpired", ErrProposalExpired},
+		21: {"NotInitialized", ErrNotInitialized},
+	},
 }
 
 // ContractError is a decoded contract error. It wraps the matching sentinel so
@@ -91,6 +134,8 @@ type ContractError struct {
 	Code int
 	// Raw is the unmodified error text returned by the RPC endpoint.
 	Raw string
+	// Kind is the contract family used to decode Code.
+	Kind ContractKind
 
 	sentinel error
 }
@@ -110,14 +155,40 @@ func (e *ContractError) Unwrap() error { return e.sentinel }
 // report a contract-returned error.
 var contractErrPattern = regexp.MustCompile(`Error\s*\(\s*Contract\s*,\s*#(\d+)\s*\)`)
 
+var diagnosticErrors = []struct {
+	patterns []string
+	err      error
+}{
+	{[]string{"error(auth", "auth,", "unauthorized"}, ErrAuthFailed},
+	{[]string{"wasmvm", "wasm trap", "unreachable"}, ErrWasmTrap},
+	{[]string{"budget", "exceededlimit", "resource limit", "txinsufficientfee"}, ErrResourceLimit},
+	{[]string{"archived", "restorefootprint", "entryarchived", "ttl"}, ErrArchivedState},
+}
+
 // DecodeContractError converts an RPC error string into a typed *ContractError.
 // An unrecognised discriminant still yields a *ContractError so the caller
 // keeps the code and raw text; only the sentinel is absent.
 func DecodeContractError(raw string) *ContractError {
-	ce := &ContractError{Raw: raw}
+	return DecodeContractErrorFor(ContractAmm, raw)
+}
+
+// DecodeContractErrorFor decodes raw using only the selected contract's error
+// table. Unknown contract kinds retain the numeric code without assigning an
+// unrelated sentinel.
+func DecodeContractErrorFor(kind ContractKind, raw string) *ContractError {
+	ce := &ContractError{Raw: raw, Kind: kind}
 
 	m := contractErrPattern.FindStringSubmatch(raw)
 	if m == nil {
+		lower := strings.ToLower(raw)
+		for _, diagnostic := range diagnosticErrors {
+			for _, pattern := range diagnostic.patterns {
+				if strings.Contains(lower, pattern) {
+					ce.sentinel = diagnostic.err
+					return ce
+				}
+			}
+		}
 		return ce
 	}
 
@@ -126,6 +197,8 @@ func DecodeContractError(raw string) *ContractError {
 		return ce
 	}
 	ce.Code = code
-	ce.sentinel = ammErrorsByCode[code]
+	if table := contractErrorsByKind[kind]; table != nil {
+		ce.sentinel = table[code].sentinel
+	}
 	return ce
 }

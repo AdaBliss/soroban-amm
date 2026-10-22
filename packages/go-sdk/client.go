@@ -14,13 +14,15 @@ import (
 
 // Client talks to a Soroban RPC endpoint on behalf of one network.
 type Client struct {
-	rpcURL            string
-	networkPassphrase string
-	sourceAccount     string
-	signer            Signer
-	http              *http.Client
-	pollInterval      time.Duration
-	pollAttempts      int
+	rpcURL                string
+	networkPassphrase     string
+	sourceAccount         string
+	signer                Signer
+	http                  *http.Client
+	pollInterval          time.Duration
+	pollAttempts          int
+	transactionTimeout    time.Duration
+	resourceFeeMultiplier float64
 }
 
 // Default polling behaviour for submitted transactions.
@@ -30,6 +32,10 @@ const (
 	// DefaultPollAttempts bounds how many times a submitted transaction is
 	// polled before the client gives up waiting.
 	DefaultPollAttempts = 30
+	// DefaultTransactionTimeout is the validity window for submitted writes.
+	DefaultTransactionTimeout = 5 * time.Minute
+	// DefaultResourceFeeMultiplier leaves a 15% margin above simulation.
+	DefaultResourceFeeMultiplier = 1.15
 )
 
 // NewClient validates cfg and returns a ready client. A config that cannot
@@ -60,15 +66,31 @@ func NewClient(cfg Config) (*Client, error) {
 	if timeout == 0 {
 		timeout = DefaultTimeout
 	}
+	transactionTimeout := cfg.TransactionTimeout
+	if transactionTimeout == 0 {
+		transactionTimeout = DefaultTransactionTimeout
+	}
+	if transactionTimeout < 0 {
+		return nil, fmt.Errorf("%w: TransactionTimeout must be positive", ErrInvalidConfig)
+	}
+	resourceFeeMultiplier := cfg.ResourceFeeMultiplier
+	if resourceFeeMultiplier == 0 {
+		resourceFeeMultiplier = DefaultResourceFeeMultiplier
+	}
+	if resourceFeeMultiplier < 1 {
+		return nil, fmt.Errorf("%w: ResourceFeeMultiplier must be at least 1", ErrInvalidConfig)
+	}
 
 	return &Client{
-		rpcURL:            cfg.RPCURL,
-		networkPassphrase: cfg.NetworkPassphrase,
-		sourceAccount:     source,
-		signer:            cfg.Signer,
-		http:              &http.Client{Timeout: timeout},
-		pollInterval:      DefaultPollInterval,
-		pollAttempts:      DefaultPollAttempts,
+		rpcURL:                cfg.RPCURL,
+		networkPassphrase:     cfg.NetworkPassphrase,
+		sourceAccount:         source,
+		signer:                cfg.Signer,
+		http:                  &http.Client{Timeout: timeout},
+		pollInterval:          DefaultPollInterval,
+		pollAttempts:          DefaultPollAttempts,
+		transactionTimeout:    transactionTimeout,
+		resourceFeeMultiplier: resourceFeeMultiplier,
 	}, nil
 }
 

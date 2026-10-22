@@ -486,10 +486,21 @@ by `set_source_weight`. It has since been migrated onto the versioned scheme
 
 | Event | Topics | Payload |
 |---|---|---|
+| `init` | — | `(admin: Address, max_staleness_seconds: u64, max_deviation_bps: u32)` |
+| `paused` | — | `(admin: Address)` |
+| `unpaused` | — | `(admin: Address)` |
+| `src_add` | — | `(pair: PairKey, source: Address, source_type: OracleSourceType, weight: u32)` |
+| `src_rm` | — | `(pair: PairKey, source: Address, force: bool)` |
+| `pair_rm` | — | `(pair: PairKey)` |
+| `pair_cfg` | — | `(pair: PairKey, config: PairConfig)` |
+| `legacy` | — | `(pair: PairKey, moved: u32)` |
+| `src_migr` | — | `(migrated: bool)` |
+| `stale` | — | `(max_staleness_seconds: u64)` |
+| `deviation` | — | `(max_deviation_bps: u32)` |
 | `stale_src` | — | `(stale_sources: Vec<Address>)` |
 | `deviant` | — | `(deviant_sources: Vec<Address>)` |
 | `price` | — | `(token_a: Address, token_b: Address, price: i128, confidence: u32)` |
-| `src_wt` | — | `(source: Address, old_weight: u32, new_weight: u32)` |
+| `src_wt` | — | `(pair: PairKey, source: Address, old_weight: u32, new_weight: u32)` |
 
 ## Update (#812)
 

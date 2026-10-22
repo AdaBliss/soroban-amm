@@ -2,10 +2,64 @@ package gosdk
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"testing"
 )
+
+func TestKeypairSignerSignsStellarTransactionHash(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	secret, err := EncodeStrkey(seed, StrkeySeed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := NewKeypairSigner(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := BuildInvokeEnvelope(InvokeSpec{
+		SourceAccount: signer.Address(), ContractID: zeroContract,
+		Method: "swap", NetworkPassphrase: NetworkTestnet,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := signer.SignEnvelope(context.Background(), envelope, NetworkTestnet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) < 76 {
+		t.Fatalf("signed envelope too short: %d", len(raw))
+	}
+	signatureStart := len(raw) - 64
+	countOffset := len(raw) - 76
+	if raw[countOffset+3] != 1 || raw[countOffset] != 0 || raw[countOffset+1] != 0 || raw[countOffset+2] != 0 {
+		t.Fatal("signature vector count is not one")
+	}
+	publicRaw, _, err := DecodeStrkey(signer.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw[countOffset+4:countOffset+8]) != string(publicRaw[28:]) {
+		t.Fatal("decorated signature hint does not match public key")
+	}
+	networkID := sha256.Sum256([]byte(NetworkTestnet))
+	preimage := append(append(append([]byte{}, networkID[:]...), raw[:4]...), raw[4:countOffset]...)
+	hash := sha256.Sum256(preimage)
+	if !ed25519.Verify(ed25519.PublicKey(publicRaw), hash[:], raw[signatureStart:]) {
+		t.Fatal("signature does not verify against the Stellar transaction hash")
+	}
+}
 
 func corruptStrkey(addr string) string {
 	corrupt := []byte(addr)

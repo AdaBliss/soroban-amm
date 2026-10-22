@@ -23,11 +23,27 @@ type InvokeSpec struct {
 	// Fee is the transaction fee in stroops. Defaults to BaseFee when zero;
 	// simulation returns the resource fee that must be added before submission.
 	Fee uint32
-	// TimeoutSeconds becomes the envelope's absolute time bound offset. Zero
+	// TimeoutSeconds is the envelope's absolute upper Unix timestamp. Zero
 	// means no time bound.
 	TimeoutSeconds uint64
 	// MinLedgerTime is the lower time bound; normally zero.
 	MinLedgerTime uint64
+	// TransactionData is the base64 SorobanTransactionData returned by
+	// simulateTransaction.
+	TransactionData string
+	// Auth contains base64 SorobanAuthorizationEntry values returned by
+	// simulateTransaction.
+	Auth []string
+}
+
+// RestoreSpec describes a RestoreFootprint transaction assembled from a
+// simulation restore preamble.
+type RestoreSpec struct {
+	SourceAccount   string
+	Sequence        int64
+	Fee             uint32
+	MaxTime         uint64
+	TransactionData string
 }
 
 // BaseFee is the default per-operation fee in stroops.
@@ -39,6 +55,7 @@ const (
 	txPreconditionsTime int32 = 1
 	txPreconditionsNone int32 = 0
 	opTypeInvokeHostFn  int32 = 24
+	opTypeRestoreFoot   int32 = 26
 	hostFnTypeInvoke    int32 = 0
 	keyTypeEd25519      int32 = 0
 	muxedAccountEd25519 int32 = 0
@@ -130,15 +147,71 @@ func BuildInvokeEnvelope(spec InvokeSpec) (string, error) {
 		}
 	}
 
-	// InvokeHostFunctionOp.auth: empty; simulation fills it in.
-	w.writeUint32(0)
+	// InvokeHostFunctionOp.auth: simulation-provided authorization entries.
+	w.writeUint32(uint32(len(spec.Auth)))
+	for i, encoded := range spec.Auth {
+		auth, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return "", fmt.Errorf("%w: decoding auth entry %d: %v", ErrXDR, i, err)
+		}
+		w.writeRaw(auth)
+	}
 
-	// Transaction.ext: v0. Simulation returns the SorobanTransactionData that
-	// replaces this before submission.
-	w.writeInt32(0)
+	if spec.TransactionData == "" {
+		w.writeInt32(0)
+	} else {
+		transactionData, err := base64.StdEncoding.DecodeString(spec.TransactionData)
+		if err != nil {
+			return "", fmt.Errorf("%w: decoding transaction data: %v", ErrXDR, err)
+		}
+		w.writeInt32(1)
+		w.writeRaw(transactionData)
+	}
 
 	// TransactionV1Envelope.signatures: none yet.
 	w.writeUint32(0)
 
+	return base64.StdEncoding.EncodeToString(w.bytes()), nil
+}
+
+// BuildRestoreFootprintEnvelope builds an unsigned transaction from a
+// simulation restore preamble.
+func BuildRestoreFootprintEnvelope(spec RestoreSpec) (string, error) {
+	if !IsAccountAddress(spec.SourceAccount) {
+		return "", fmt.Errorf("%w: source account %q", ErrInvalidConfig, spec.SourceAccount)
+	}
+	transactionData, err := base64.StdEncoding.DecodeString(spec.TransactionData)
+	if err != nil || len(transactionData) == 0 {
+		return "", fmt.Errorf("%w: invalid restore transaction data", ErrXDR)
+	}
+	sourceRaw, _, err := DecodeStrkey(spec.SourceAccount)
+	if err != nil {
+		return "", err
+	}
+	fee := spec.Fee
+	if fee == 0 {
+		fee = BaseFee
+	}
+
+	var w xdrWriter
+	w.writeInt32(envelopeTypeTx)
+	w.writeInt32(muxedAccountEd25519)
+	w.writeRaw(sourceRaw)
+	w.writeUint32(fee)
+	w.writeInt64(spec.Sequence)
+	if spec.MaxTime > 0 {
+		w.writeInt32(txPreconditionsTime)
+		w.writeUint64(0)
+		w.writeUint64(spec.MaxTime)
+	} else {
+		w.writeInt32(txPreconditionsNone)
+	}
+	w.writeInt32(0) // MEMO_NONE
+	w.writeUint32(1)
+	w.writeUint32(0) // operation source absent
+	w.writeInt32(opTypeRestoreFoot)
+	w.writeInt32(1) // Transaction.ext v1
+	w.writeRaw(transactionData)
+	w.writeUint32(0) // signatures
 	return base64.StdEncoding.EncodeToString(w.bytes()), nil
 }

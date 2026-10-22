@@ -34,7 +34,9 @@ use concentrated_liquidity::{ClError, ConcentratedLiquidityClient, WASM as CL_WA
 use governance::{
     GovernanceClient, GovernanceError, ProposalKind, Vote, VoteRecord, WASM as GOV_WASM,
 };
-use oracle_aggregator::{OracleAggregatorClient, OracleSourceType, WASM as ORACLE_WASM};
+use oracle_aggregator::{
+    OracleAggregatorClient, OracleSourceType, PairKey, MAX_PAGE_SIZE, WASM as ORACLE_WASM,
+};
 use staking::{StakingClient, StakingError, WASM as STAKING_WASM};
 use token::{LpToken, LpTokenClient, WASM as TOKEN_WASM};
 
@@ -350,6 +352,10 @@ fn oracle_aggregator_upgrade_preserves_sources_and_config() {
     let admin = Address::generate(&env);
     let token_a = Address::generate(&env);
     let token_b = Address::generate(&env);
+    let pair = PairKey {
+        token_a: token_a.clone(),
+        token_b: token_b.clone(),
+    };
 
     let oracle_hash: BytesN<32> = env.deployer().upload_contract_wasm(ORACLE_WASM);
     let oracle_addr = env.register_contract_wasm(None, ORACLE_WASM);
@@ -360,14 +366,14 @@ fn oracle_aggregator_upgrade_preserves_sources_and_config() {
     let s1 = deploy_oracle_source(&env, 1_000_000);
     let s2 = deploy_oracle_source(&env, 1_010_000);
     let s3 = deploy_oracle_source(&env, 1_020_000);
-    oracle.register_source(&admin, &s1, &OracleSourceType::AmmTwap, &10_000);
-    oracle.register_source(&admin, &s2, &OracleSourceType::ClTwap, &20_000);
-    oracle.register_source(&admin, &s3, &OracleSourceType::External, &10_000);
-    oracle.set_source_weight(&admin, &s3, &30_000);
+    oracle.register_source(&admin, &pair, &s1, &OracleSourceType::AmmTwap, &10_000);
+    oracle.register_source(&admin, &pair, &s2, &OracleSourceType::ClTwap, &20_000);
+    oracle.register_source(&admin, &pair, &s3, &OracleSourceType::External, &10_000);
+    oracle.set_source_weight(&admin, &pair, &s3, &30_000);
     oracle.set_max_deviation_bps(&admin, &800);
 
     let price_before = oracle.get_price(&token_a, &token_b);
-    let sources_before = oracle.list_sources();
+    let sources_before = oracle.list_sources(&pair, &0, &MAX_PAGE_SIZE);
     assert_eq!(sources_before.len(), 3);
     assert!(price_before.price > 0 && price_before.confidence > 0);
 
@@ -377,11 +383,11 @@ fn oracle_aggregator_upgrade_preserves_sources_and_config() {
         &admin,
         &oracle_hash,
         |h| oracle.upgrade(&admin, h),
-        || oracle.try_list_sources().is_err(),
+        || oracle.try_list_sources(&pair, &0, &MAX_PAGE_SIZE).is_err(),
     );
 
     // Sources and configuration survived both code swaps.
-    let sources_after = oracle.list_sources();
+    let sources_after = oracle.list_sources(&pair, &0, &MAX_PAGE_SIZE);
     assert_eq!(sources_after.len(), sources_before.len());
     for (before, after) in sources_before.iter().zip(sources_after.iter()) {
         assert_eq!(after.source_contract, before.source_contract);
@@ -405,8 +411,8 @@ fn oracle_aggregator_upgrade_preserves_sources_and_config() {
 
     // The preserved admin still administers the restored code.
     let s4 = deploy_oracle_source(&env, 1_005_000);
-    oracle.register_source(&admin, &s4, &OracleSourceType::External, &10_000);
-    assert_eq!(oracle.list_sources().len(), 4);
+    oracle.register_source(&admin, &pair, &s4, &OracleSourceType::External, &10_000);
+    assert_eq!(oracle.list_sources(&pair, &0, &MAX_PAGE_SIZE).len(), 4);
 
     // Unauthorized upgrades are rejected.
     let attacker = Address::generate(&env);

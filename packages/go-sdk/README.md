@@ -34,16 +34,22 @@ import (
 	"errors"
 	"log"
 	"math/big"
+	"os"
 	"time"
 
 	gosdk "github.com/promisszn/soroban-amm/packages/go-sdk"
 )
 
 func main() {
+	signer, err := gosdk.NewKeypairSigner(os.Getenv("STELLAR_SECRET"))
+	if err != nil {
+		log.Fatal(err)
+	}
 	client, err := gosdk.NewClient(gosdk.Config{
 		RPCURL:            "https://soroban-testnet.stellar.org",
 		NetworkPassphrase: gosdk.NetworkTestnet,
 		Timeout:           20 * time.Second,
+		Signer:            signer,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -100,6 +106,14 @@ transaction, and none consumes fees.
 `Swap`, `AddLiquidity` and `RemoveLiquidity` each take a params struct, and
 each requires a `Signer`.
 
+Before signing, the client reads the source account sequence, simulates the
+invocation, copies the returned authorization entries and
+`SorobanTransactionData`, adds the simulation resource fee with a configurable
+safety multiplier, and applies a transaction time bound. If simulation reports
+archived state, it submits and confirms `RestoreFootprint`, then re-simulates
+the invocation. `TRY_AGAIN_LATER` submissions are retried with the configured
+polling backoff.
+
 **Deadlines and slippage bounds are never defaulted.** A zero `Deadline`
 returns `ErrDeadlineRequired` and a nil slippage bound returns
 `ErrSlippageRequired`, before any RPC call is made. Both are safety parameters:
@@ -120,7 +134,16 @@ minOut.Div(minOut, big.NewInt(10_000))
 
 ## Signing
 
-The client never holds a secret key. Supply a `Signer`:
+Supply a `Signer`. For local signing, construct one from an `S...` seed:
+
+```go
+signer, err := gosdk.NewKeypairSigner(os.Getenv("STELLAR_SECRET"))
+```
+
+`NewKeypairSigner` uses only the Go standard library, derives the corresponding
+`G...` address, hashes the Stellar signature base, and appends a decorated
+ed25519 signature. Applications that keep keys in an HSM or remote service can
+implement the same interface:
 
 ```go
 type Signer interface {
@@ -156,14 +179,18 @@ case errors.Is(err, gosdk.ErrInsufficientLiquidity): // AmmError #11
 }
 ```
 
-All fifteen `AmmError` discriminants from
+All twenty-one `AmmError` discriminants from
 [docs/error-codes.md](../../docs/error-codes.md) are mapped. An unrecognised
 discriminant still yields a `*ContractError` carrying `Code` and the raw RPC
 text, so a new contract error is legible rather than opaque.
 
+`DecodeContractErrorFor` selects a contract-specific table so equal numeric
+codes from other contracts are never labeled as AMM errors.
+
 Client-side failures have their own sentinels: `ErrInvalidConfig`,
 `ErrNoSigner`, `ErrDeadlineRequired`, `ErrSlippageRequired`, `ErrRPC`,
-`ErrTransactionFailed`.
+`ErrTransactionFailed`, `ErrAuthFailed`, `ErrWasmTrap`, `ErrResourceLimit`,
+and `ErrArchivedState`.
 
 ## 128-bit integers
 

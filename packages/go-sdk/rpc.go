@@ -3,10 +3,13 @@ package gosdk
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,7 +44,8 @@ type SimulateResult struct {
 	// Results holds one entry per host function invoked; XDR is the base64
 	// return value.
 	Results []struct {
-		XDR string `json:"xdr"`
+		XDR  string   `json:"xdr"`
+		Auth []string `json:"auth"`
 	} `json:"results"`
 	// LatestLedger is the ledger the simulation ran against.
 	LatestLedger uint32 `json:"latestLedger"`
@@ -50,6 +54,12 @@ type SimulateResult struct {
 	TransactionData string `json:"transactionData"`
 	// MinResourceFee is the additional resource fee simulation computed.
 	MinResourceFee string `json:"minResourceFee"`
+	// RestorePreamble is present when archived ledger entries must be restored
+	// before the invocation can be simulated successfully.
+	RestorePreamble *struct {
+		TransactionData string `json:"transactionData"`
+		MinResourceFee  string `json:"minResourceFee"`
+	} `json:"restorePreamble"`
 }
 
 // SendResult is the subset of a sendTransaction response this client consumes.
@@ -70,6 +80,14 @@ type GetTxResult struct {
 	ReturnValue string `json:"returnValue"`
 	// ResultXDR carries the failure detail when Status is FAILED.
 	ResultXDR string `json:"resultXdr"`
+	// DiagnosticEvents contains base64 diagnostic-event XDR for failures.
+	DiagnosticEvents []string `json:"diagnosticEvents"`
+}
+
+type ledgerEntriesResult struct {
+	Entries []struct {
+		XDR string `json:"xdr"`
+	} `json:"entries"`
 }
 
 // call performs one JSON-RPC round trip and unmarshals the result into out.
@@ -161,13 +179,21 @@ func (c *Client) invoke(ctx context.Context, contractID, method string, args []S
 		return nil, fmt.Errorf("%w: contract id %q", ErrInvalidConfig, contractID)
 	}
 
-	envelope, err := BuildInvokeEnvelope(InvokeSpec{
+	sequence, err := c.getAccountSequence(ctx, c.signer.Address())
+	if err != nil {
+		return nil, err
+	}
+	maxTime := uint64(time.Now().Add(c.transactionTimeout).Unix())
+	spec := InvokeSpec{
 		SourceAccount:     c.signer.Address(),
 		ContractID:        contractID,
 		Method:            method,
 		Args:              args,
 		NetworkPassphrase: c.networkPassphrase,
-	})
+		Sequence:          sequence + 1,
+		TimeoutSeconds:    maxTime,
+	}
+	envelope, err := BuildInvokeEnvelope(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +203,48 @@ func (c *Client) invoke(ctx context.Context, contractID, method string, args []S
 		return nil, err
 	}
 	if sim.Error != "" {
-		return nil, DecodeContractError(sim.Error)
+		return nil, DecodeContractErrorFor(ContractAmm, sim.Error)
+	}
+	if sim.RestorePreamble != nil {
+		if err := c.restoreFootprint(ctx, sequence+1, maxTime, sim.RestorePreamble); err != nil {
+			return nil, err
+		}
+		sequence, err = c.getAccountSequence(ctx, c.signer.Address())
+		if err != nil {
+			return nil, err
+		}
+		spec.Sequence = sequence + 1
+		envelope, err = BuildInvokeEnvelope(spec)
+		if err != nil {
+			return nil, err
+		}
+		sim = SimulateResult{}
+		if err := c.call(ctx, "simulateTransaction", map[string]interface{}{"transaction": envelope}, &sim); err != nil {
+			return nil, err
+		}
+		if sim.Error != "" {
+			return nil, DecodeContractErrorFor(ContractAmm, sim.Error)
+		}
+		if sim.RestorePreamble != nil {
+			return nil, fmt.Errorf("%w: state remains archived after restore", ErrArchivedState)
+		}
+	}
+	if len(sim.Results) == 0 {
+		return nil, fmt.Errorf("%w: %s simulation returned no invocation result", ErrRPC, method)
+	}
+	if sim.TransactionData == "" {
+		return nil, fmt.Errorf("%w: %s simulation returned no transaction data", ErrRPC, method)
+	}
+	fee, err := c.resourceFee(sim.MinResourceFee)
+	if err != nil {
+		return nil, err
+	}
+	spec.Fee = BaseFee + fee
+	spec.TransactionData = sim.TransactionData
+	spec.Auth = sim.Results[0].Auth
+	envelope, err = BuildInvokeEnvelope(spec)
+	if err != nil {
+		return nil, err
 	}
 
 	signed, err := c.signer.SignEnvelope(ctx, envelope, c.networkPassphrase)
@@ -185,19 +252,120 @@ func (c *Client) invoke(ctx context.Context, contractID, method string, args []S
 		return nil, fmt.Errorf("signing %s: %w", method, err)
 	}
 
-	var send SendResult
-	if err := c.call(ctx, "sendTransaction", map[string]interface{}{"transaction": signed}, &send); err != nil {
+	send, err := c.sendWithRetry(ctx, signed, method)
+	if err != nil {
 		return nil, err
-	}
-	switch send.Status {
-	case "PENDING", "DUPLICATE":
-	case "ERROR":
-		return nil, fmt.Errorf("%w: %s rejected: %s", ErrTransactionFailed, method, send.ErrorResultXDR)
-	default:
-		return nil, fmt.Errorf("%w: %s: unexpected send status %q", ErrTransactionFailed, method, send.Status)
 	}
 
 	return c.pollTransaction(ctx, send.Hash, method)
+}
+
+func (c *Client) resourceFee(raw string) (uint32, error) {
+	fee, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%w: invalid simulation resource fee %q", ErrRPC, raw)
+	}
+	adjusted := math.Ceil(float64(fee) * c.resourceFeeMultiplier)
+	if adjusted > float64(math.MaxUint32-BaseFee) {
+		return 0, fmt.Errorf("%w: resource fee exceeds transaction limit", ErrRPC)
+	}
+	return uint32(adjusted), nil
+}
+
+func (c *Client) getAccountSequence(ctx context.Context, account string) (int64, error) {
+	raw, kind, err := DecodeStrkey(account)
+	if err != nil || kind != StrkeyAccount {
+		return 0, fmt.Errorf("%w: invalid source account", ErrInvalidConfig)
+	}
+	var key xdrWriter
+	key.writeInt32(0) // LedgerEntryType::Account
+	key.writeInt32(keyTypeEd25519)
+	key.writeRaw(raw)
+	encodedKey := base64.StdEncoding.EncodeToString(key.bytes())
+	var result ledgerEntriesResult
+	if err := c.call(ctx, "getLedgerEntries", map[string]interface{}{"keys": []string{encodedKey}}, &result); err != nil {
+		return 0, err
+	}
+	if len(result.Entries) != 1 {
+		return 0, fmt.Errorf("%w: source account was not found", ErrRPC)
+	}
+	entry, err := base64.StdEncoding.DecodeString(result.Entries[0].XDR)
+	if err != nil {
+		return 0, fmt.Errorf("%w: decoding account ledger entry: %v", ErrXDR, err)
+	}
+	r := xdrReader{buf: entry}
+	if _, err = r.readUint32(); err != nil { // lastModifiedLedgerSeq
+		return 0, err
+	}
+	entryType, err := r.readInt32()
+	if err != nil || entryType != 0 {
+		return 0, fmt.Errorf("%w: ledger entry is not an account", ErrXDR)
+	}
+	publicKeyType, err := r.readInt32()
+	if err != nil || publicKeyType != keyTypeEd25519 {
+		return 0, fmt.Errorf("%w: account uses an unsupported public key", ErrXDR)
+	}
+	if _, err = r.readRaw(32); err != nil {
+		return 0, err
+	}
+	if _, err = r.readUint64(); err != nil { // balance
+		return 0, err
+	}
+	seq, err := r.readUint64()
+	return int64(seq), err
+}
+
+func (c *Client) restoreFootprint(ctx context.Context, sequence int64, maxTime uint64, preamble *struct {
+	TransactionData string `json:"transactionData"`
+	MinResourceFee  string `json:"minResourceFee"`
+}) error {
+	fee, err := c.resourceFee(preamble.MinResourceFee)
+	if err != nil {
+		return err
+	}
+	envelope, err := BuildRestoreFootprintEnvelope(RestoreSpec{
+		SourceAccount: c.signer.Address(), TransactionData: preamble.TransactionData,
+		Sequence: sequence, Fee: BaseFee + fee, MaxTime: maxTime,
+	})
+	if err != nil {
+		return err
+	}
+	signed, err := c.signer.SignEnvelope(ctx, envelope, c.networkPassphrase)
+	if err != nil {
+		return fmt.Errorf("signing restore footprint: %w", err)
+	}
+	send, err := c.sendWithRetry(ctx, signed, "restore_footprint")
+	if err != nil {
+		return err
+	}
+	_, err = c.pollTransaction(ctx, send.Hash, "restore_footprint")
+	return err
+}
+
+func (c *Client) sendWithRetry(ctx context.Context, signed, method string) (*SendResult, error) {
+	for attempt := 0; ; attempt++ {
+		var send SendResult
+		if err := c.call(ctx, "sendTransaction", map[string]interface{}{"transaction": signed}, &send); err != nil {
+			return nil, err
+		}
+		switch strings.ToUpper(send.Status) {
+		case "PENDING", "DUPLICATE":
+			return &send, nil
+		case "TRY_AGAIN_LATER":
+			if attempt >= c.pollAttempts {
+				return nil, fmt.Errorf("%w: %s remained TRY_AGAIN_LATER", ErrTransactionFailed, method)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(c.pollInterval):
+			}
+		case "ERROR":
+			return nil, fmt.Errorf("%w: %s rejected: %s", ErrTransactionFailed, method, send.ErrorResultXDR)
+		default:
+			return nil, fmt.Errorf("%w: %s: unexpected send status %q", ErrTransactionFailed, method, send.Status)
+		}
+	}
 }
 
 // pollTransaction polls getTransaction until the transaction leaves NOT_FOUND
@@ -211,9 +379,16 @@ func (c *Client) pollTransaction(ctx context.Context, hash, method string) (*TxR
 
 		switch strings.ToUpper(got.Status) {
 		case "SUCCESS":
-			return &TxResult{Hash: hash, Status: "SUCCESS", ReturnValue: got.ReturnValue}, nil
+			result := &TxResult{Hash: hash, Status: "SUCCESS", ReturnValue: got.ReturnValue}
+			if got.ReturnValue != "" {
+				if decoded, err := DecodeScValBase64(got.ReturnValue); err == nil {
+					result.DecodedReturnValue = &decoded
+				}
+			}
+			return result, nil
 		case "FAILED":
-			return nil, fmt.Errorf("%w: %s: %s", ErrTransactionFailed, method, got.ResultXDR)
+			result := &TxResult{Hash: hash, Status: "FAILED", DiagnosticEvents: got.DiagnosticEvents}
+			return result, fmt.Errorf("%w: %s: %s", ErrTransactionFailed, method, got.ResultXDR)
 		case "NOT_FOUND":
 			// Still in flight; fall through to the backoff below.
 		default:

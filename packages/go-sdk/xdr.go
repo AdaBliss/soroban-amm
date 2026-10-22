@@ -127,11 +127,14 @@ const (
 	StrkeyAccount
 	// StrkeyContract is a C... contract id.
 	StrkeyContract
+	// StrkeySeed is an S... ed25519 secret seed.
+	StrkeySeed
 )
 
 const (
-	versionByteAccount  byte = 6 << 3 // 0x30 -> 'G'
-	versionByteContract byte = 2 << 3 // 0x10 -> 'C'
+	versionByteAccount  byte = 6 << 3  // 0x30 -> 'G'
+	versionByteContract byte = 2 << 3  // 0x10 -> 'C'
+	versionByteSeed     byte = 18 << 3 // 0x90 -> 'S'
 )
 
 var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -161,6 +164,8 @@ func DecodeStrkey(s string) ([]byte, StrkeyKind, error) {
 		kind = StrkeyAccount
 	case versionByteContract:
 		kind = StrkeyContract
+	case versionByteSeed:
+		kind = StrkeySeed
 	default:
 		return nil, StrkeyUnknown, fmt.Errorf("%w: address %q has unknown version byte 0x%02x", ErrXDR, s, payload[0])
 	}
@@ -179,6 +184,8 @@ func EncodeStrkey(raw []byte, kind StrkeyKind) (string, error) {
 		version = versionByteAccount
 	case StrkeyContract:
 		version = versionByteContract
+	case StrkeySeed:
+		version = versionByteSeed
 	default:
 		return "", fmt.Errorf("%w: cannot encode unknown strkey kind", ErrXDR)
 	}

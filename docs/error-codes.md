@@ -21,7 +21,7 @@ Defined in [contracts/oracle_aggregator/src/lib.rs](../contracts/oracle_aggregat
 | 2 | `NotInitialized` | A function was called before `initialize`. | Call `initialize` first. |
 | 3 | `NotAdmin` | The caller did not match the stored admin address. | Use the correct admin keypair. |
 | 4 | `SourceAlreadyRegistered` | `register_source` was called with an address already in the registry. | Remove and re-register, or use a different address. |
-| 5 | `SourceNotFound` | `remove_source` or `set_source_weight` referenced an unknown address. | Check `list_sources()` for registered addresses. |
+| 5 | `SourceNotFound` | `remove_source` or `set_source_weight` referenced an unknown address. | Check `list_sources(pair, cursor, limit)` for registered addresses. |
 | 6 | `InsufficientSources` | Fewer than `MIN_VALID_SOURCES` fresh, agreeing sources were available, or `get_price` was called with insufficient confidence. | Register more sources or widen the deviation band. |
 | 7 | `InvalidStaleness` | `max_staleness_seconds` was zero. | Use a positive value. |
 | 8 | `InvalidDeviation` | `max_deviation_bps` was zero or exceeded `BPS_DENOMINATOR` (10 000). | Use a value in `1..=10_000`. |
@@ -30,6 +30,10 @@ Defined in [contracts/oracle_aggregator/src/lib.rs](../contracts/oracle_aggregat
 | 11 | `NoPendingAdmin` | `accept_admin` was called when no admin transfer is in progress. | Call `propose_admin` first to nominate a successor. |
 | 12 | `WrongAdmin` | `accept_admin` was called by an address that does not match the pending nominee. | Have the correct address (the one passed to `propose_admin`) call `accept_admin`. |
 | 13 | `Paused` | The aggregator has been paused. | Wait for the admin to call `unpause`. |
+| 14 | `InvalidPair` | A pair used the same token address on both sides. | Supply two distinct token contract addresses. |
+| 15 | `TooManySources` | A pair already has the bounded maximum of 16 sources. | Remove or replace an existing source before adding another. |
+| 16 | `InvalidPage` | A paginated pair/source view used a zero limit or a limit above 50. | Use a limit in `1..=50`. |
+| 17 | `PairNotFound` | `remove_pair` referenced a pair that is not registered. | Check `list_pairs` before removing the pair. |
 
 > **ABI change (#689):** `AggregatedPrice.confidence` is now the **summed weight**
 > of agreeing sources (not a raw count). A source with weight 10 000 contributes

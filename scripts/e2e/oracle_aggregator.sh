@@ -26,6 +26,8 @@ run_oracle_aggregator_flow() {
   local src1 src2
   src1=$(e2e_deploy token)
   src2=$(e2e_deploy token)
+  local pair_json
+  pair_json=$(printf '{"token_a":"%s","token_b":"%s"}' "$src1" "$src2")
 
   # ── initialize ──────────────────────────────────────────────────────────
   local oracle
@@ -42,17 +44,17 @@ run_oracle_aggregator_flow() {
     "$(invoke "$oracle" get_max_deviation_bps | parse_i128)" "500"
   assert_eq "oracle_aggregator: starts unpaused" "$(invoke "$oracle" is_paused)" "false"
   assert_eq "oracle_aggregator: starts with no sources" \
-    "$(invoke "$oracle" list_sources | count_matches '"source_contract"')" "0"
+    "$(invoke "$oracle" list_sources --pair "$pair_json" --cursor 0 --limit 50 | count_matches '"source_contract"')" "0"
 
   # ── register_source ─────────────────────────────────────────────────────
   # source_type 2 = OracleSourceType::External.
   invoke "$oracle" register_source \
-    --admin "$admin" --source_contract "$src1" --source_type 2 --weight 10000 >/dev/null
+    --admin "$admin" --pair "$pair_json" --source_contract "$src1" --source_type 2 --weight 10000 >/dev/null
   invoke "$oracle" register_source \
-    --admin "$admin" --source_contract "$src2" --source_type 2 --weight 10000 >/dev/null
+    --admin "$admin" --pair "$pair_json" --source_contract "$src2" --source_type 2 --weight 10000 >/dev/null
 
   local sources
-  sources=$(invoke "$oracle" list_sources)
+  sources=$(invoke "$oracle" list_sources --pair "$pair_json" --cursor 0 --limit 50)
   assert_eq "oracle_aggregator: two sources registered" \
     "$(printf '%s\n' "$sources" | count_matches '"source_contract"')" "2"
   assert_contains "oracle_aggregator: source 1 listed" "$sources" "$src1"
@@ -60,18 +62,18 @@ run_oracle_aggregator_flow() {
 
   expect_fail "oracle_aggregator: duplicate source is rejected" \
     invoke "$oracle" register_source \
-      --admin "$admin" --source_contract "$src1" --source_type 2 --weight 10000
+      --admin "$admin" --pair "$pair_json" --source_contract "$src1" --source_type 2 --weight 10000
   expect_fail "oracle_aggregator: zero weight is rejected" \
     invoke "$oracle" register_source \
-      --admin "$admin" --source_contract "$oracle" --source_type 2 --weight 0
+      --admin "$admin" --pair "$pair_json" --source_contract "$oracle" --source_type 2 --weight 0
   expect_fail "oracle_aggregator: non-admin cannot register a source" \
     invoke_as "$new_admin_key" "$oracle" register_source \
-      --admin "$new_admin" --source_contract "$oracle" --source_type 2 --weight 10000
+      --admin "$new_admin" --pair "$pair_json" --source_contract "$oracle" --source_type 2 --weight 10000
 
   # ── tune weight, staleness, deviation band ──────────────────────────────
-  invoke "$oracle" set_source_weight --admin "$admin" --source_contract "$src2" --weight 25000 >/dev/null
+  invoke "$oracle" set_source_weight --admin "$admin" --pair "$pair_json" --source_contract "$src2" --weight 25000 >/dev/null
   assert_eq "oracle_aggregator: updated weight reads back" \
-    "$(invoke "$oracle" list_sources | count_matches '"weight":[[:space:]]*25000')" "1"
+    "$(invoke "$oracle" list_sources --pair "$pair_json" --cursor 0 --limit 50 | count_matches '"weight":[[:space:]]*25000')" "1"
 
   invoke "$oracle" set_max_staleness --admin "$admin" --max_staleness_seconds 600 >/dev/null
   assert_eq "oracle_aggregator: updated staleness reads back" "$(invoke "$oracle" get_max_staleness | parse_i128)" "600"
@@ -95,13 +97,13 @@ run_oracle_aggregator_flow() {
   assert_eq "oracle_aggregator: is_paused after unpause" "$(invoke "$oracle" is_paused)" "false"
 
   # ── remove_source ───────────────────────────────────────────────────────
-  invoke "$oracle" remove_source --admin "$admin" --source_contract "$src1" >/dev/null
-  sources=$(invoke "$oracle" list_sources)
+  invoke "$oracle" remove_source --admin "$admin" --pair "$pair_json" --source_contract "$src1" --force true >/dev/null
+  sources=$(invoke "$oracle" list_sources --pair "$pair_json" --cursor 0 --limit 50)
   assert_eq "oracle_aggregator: one source left after removal" \
     "$(printf '%s\n' "$sources" | count_matches '"source_contract"')" "1"
   assert_not_contains "oracle_aggregator: removed source is gone" "$sources" "$src1"
   expect_fail "oracle_aggregator: removing the last source is rejected" \
-    invoke "$oracle" remove_source --admin "$admin" --source_contract "$src2"
+    invoke "$oracle" remove_source --admin "$admin" --pair "$pair_json" --source_contract "$src2" --force false
 
   # ── two-step admin handover ─────────────────────────────────────────────
   invoke "$oracle" propose_admin --current_admin "$admin" --new_admin "$new_admin" >/dev/null

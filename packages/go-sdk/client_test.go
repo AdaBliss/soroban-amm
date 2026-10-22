@@ -2,6 +2,7 @@ package gosdk
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,11 +24,25 @@ type recordedRPC struct {
 }
 
 func newRecordedRPC(t *testing.T) *recordedRPC {
-	return &recordedRPC{
+	r := &recordedRPC{
 		t:        t,
 		handlers: map[string]func(json.RawMessage) (interface{}, *rpcError){},
 		requests: map[string]json.RawMessage{},
 	}
+	r.respond("getLedgerEntries", map[string]interface{}{"entries": []map[string]string{{"xdr": accountEntryXDR(t, 42)}}})
+	return r
+}
+
+func accountEntryXDR(t *testing.T, sequence int64) string {
+	t.Helper()
+	var w xdrWriter
+	w.writeUint32(100) // last modified ledger
+	w.writeInt32(0)    // LedgerEntryType::Account
+	w.writeInt32(keyTypeEd25519)
+	w.writeRaw(make([]byte, 32))
+	w.writeInt64(0) // balance
+	w.writeInt64(sequence)
+	return base64.StdEncoding.EncodeToString(w.bytes())
 }
 
 func (r *recordedRPC) on(method string, fn func(params json.RawMessage) (interface{}, *rpcError)) *recordedRPC {
@@ -94,8 +109,10 @@ func simulationOf(t *testing.T, v ScValue) map[string]interface{} {
 		t.Fatalf("encoding simulation result: %v", err)
 	}
 	return map[string]interface{}{
-		"results":      []map[string]string{{"xdr": encoded}},
-		"latestLedger": 100,
+		"results":         []map[string]interface{}{{"xdr": encoded, "auth": []string{}}},
+		"latestLedger":    100,
+		"minResourceFee":  "0",
+		"transactionData": base64.StdEncoding.EncodeToString([]byte{0, 0, 0, 1}),
 	}
 }
 
@@ -349,6 +366,8 @@ func TestDecodeContractErrorCoversEveryDiscriminant(t *testing.T) {
 		7: ErrUnauthorized, 8: ErrZeroAmount, 9: ErrInvalidToken,
 		10: ErrEmptyPool, 11: ErrInsufficientLiquidity, 12: ErrNoPendingAdmin,
 		13: ErrWrongAdmin, 14: ErrReentrant, 15: ErrCircuitBreaker,
+		16: ErrFotSlippage, 17: ErrOracleDeviationExceeded, 18: ErrFlashLoanRepaymentFailed,
+		19: ErrAlreadyExecuted, 20: ErrProposalExpired, 21: ErrNotInitialized,
 	}
 	for code, sentinel := range want {
 		raw := "HostError: Error(Contract, #" + itoa(code) + ")"
@@ -468,7 +487,7 @@ func TestSwapSubmitsAndPolls(t *testing.T) {
 		t.Fatalf("signed for %q, want %q", signer.passphrase, NetworkTestnet)
 	}
 
-	wantOrder := []string{"simulateTransaction", "sendTransaction", "getTransaction"}
+	wantOrder := []string{"getLedgerEntries", "simulateTransaction", "sendTransaction", "getTransaction"}
 	if len(rec.calls) != len(wantOrder) {
 		t.Fatalf("calls = %v, want %v", rec.calls, wantOrder)
 	}

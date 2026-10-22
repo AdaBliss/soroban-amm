@@ -23,6 +23,12 @@ type Config struct {
 	// Signer signs write transactions. Read methods work without one; write
 	// methods return ErrNoSigner if it is nil.
 	Signer Signer
+	// TransactionTimeout sets the submitted transaction's upper time bound.
+	// Defaults to five minutes.
+	TransactionTimeout time.Duration
+	// ResourceFeeMultiplier is applied to simulation's minimum resource fee.
+	// Values below 1 are rejected; the default is 1.15.
+	ResourceFeeMultiplier float64
 }
 
 // Network passphrases for the public networks.
@@ -167,4 +173,9 @@ type TxResult struct {
 	// ReturnValue is the base64 XDR of the invocation's return value, when the
 	// endpoint supplies one.
 	ReturnValue string
+	// DecodedReturnValue is ReturnValue decoded as an ScVal when present.
+	DecodedReturnValue *ScValue
+	// DiagnosticEvents contains diagnostic event XDR returned for a failed
+	// transaction. It never contains signing material.
+	DiagnosticEvents []string
 }

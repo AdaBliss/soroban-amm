@@ -1,9 +1,12 @@
 package gosdk
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -500,7 +503,7 @@ func TestInvokeSendStatuses(t *testing.T) {
 		{"ERROR", ErrTransactionFailed},
 		{"TRY_AGAIN_LATER", ErrTransactionFailed},
 		{"", ErrTransactionFailed},
-		{"pending", ErrTransactionFailed}, // send statuses are matched exactly
+		{"pending", nil},
 	}
 	for _, tc := range cases {
 		t.Run("status "+tc.status, func(t *testing.T) {
@@ -532,6 +535,99 @@ func TestInvokeSendStatuses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInvokeAssemblesSimulationDataBeforeSigning(t *testing.T) {
+	txData := base64.StdEncoding.EncodeToString([]byte{0, 0, 0, 7})
+	auth := base64.StdEncoding.EncodeToString([]byte{0, 0, 0, 9})
+	simulation := simulationOf(t, I128(big.NewInt(1)))
+	simulation["transactionData"] = txData
+	simulation["minResourceFee"] = "100"
+	simulation["results"] = []map[string]interface{}{{"xdr": simulationOf(t, I128(big.NewInt(1)))["results"].([]map[string]interface{})[0]["xdr"], "auth": []string{auth}}}
+	rec := newRecordedRPC(t).
+		respond("simulateTransaction", simulation).
+		respond("sendTransaction", map[string]interface{}{"status": "PENDING", "hash": "assembled"}).
+		respond("getTransaction", map[string]interface{}{"status": "SUCCESS"})
+	signer := &testSigner{addr: zeroAccount}
+	c := newTestClient(t, rec, signer)
+	if _, err := c.invoke(context.Background(), zeroContract, "swap", nil); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	var simulated struct {
+		Transaction string `json:"transaction"`
+	}
+	if err := json.Unmarshal(rec.requests["simulateTransaction"], &simulated); err != nil {
+		t.Fatal(err)
+	}
+	if signer.seen == simulated.Transaction {
+		t.Fatal("submitted envelope is the unsimulated envelope")
+	}
+	assembled, err := base64.StdEncoding.DecodeString(signer.seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(assembled, []byte{0, 0, 0, 7}) || !bytes.Contains(assembled, []byte{0, 0, 0, 9}) {
+		t.Fatal("assembled envelope omitted transaction data or authorization")
+	}
+}
+
+func TestInvokeRestoresArchivedStateAndResimulates(t *testing.T) {
+	simulations := 0
+	sends := 0
+	rec := newRecordedRPC(t).
+		on("simulateTransaction", func(json.RawMessage) (interface{}, *rpcError) {
+			simulations++
+			result := simulationOf(t, Void())
+			if simulations == 1 {
+				result["restorePreamble"] = map[string]string{
+					"transactionData": base64.StdEncoding.EncodeToString([]byte{0, 0, 0, 1}),
+					"minResourceFee":  "10",
+				}
+			}
+			return result, nil
+		}).
+		on("sendTransaction", func(json.RawMessage) (interface{}, *rpcError) {
+			sends++
+			return map[string]interface{}{"status": "PENDING", "hash": fmt.Sprintf("tx-%d", sends)}, nil
+		}).
+		respond("getTransaction", map[string]interface{}{"status": "SUCCESS"})
+	c := newTestClient(t, rec, &testSigner{addr: zeroAccount})
+	if _, err := c.invoke(context.Background(), zeroContract, "swap", nil); err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if simulations != 2 || sends != 2 {
+		t.Fatalf("simulations=%d sends=%d, want two of each", simulations, sends)
+	}
+}
+
+func TestSendWithRetryRecoversFromTryAgainLater(t *testing.T) {
+	attempts := 0
+	rec := newRecordedRPC(t).on("sendTransaction", func(json.RawMessage) (interface{}, *rpcError) {
+		attempts++
+		if attempts < 3 {
+			return map[string]interface{}{"status": "TRY_AGAIN_LATER"}, nil
+		}
+		return map[string]interface{}{"status": "PENDING", "hash": "accepted"}, nil
+	})
+	c := newTestClient(t, rec, nil).WithPolling(time.Millisecond, 5)
+	result, err := c.sendWithRetry(context.Background(), "signed", "swap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 3 || result.Hash != "accepted" {
+		t.Fatalf("attempts=%d result=%+v", attempts, result)
+	}
+}
+
+func TestPollFailureReturnsDiagnostics(t *testing.T) {
+	rec := newRecordedRPC(t).respond("getTransaction", map[string]interface{}{
+		"status": "FAILED", "resultXdr": "failure", "diagnosticEvents": []string{"event-a"},
+	})
+	c := newTestClient(t, rec, nil)
+	result, err := c.pollTransaction(context.Background(), "hash", "swap")
+	if !errors.Is(err, ErrTransactionFailed) || result == nil || len(result.DiagnosticEvents) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 
@@ -626,7 +722,7 @@ func TestPollTransactionStatuses(t *testing.T) {
 				if err != nil {
 					t.Fatalf("pollTransaction: %v", err)
 				}
-				if *res != (TxResult{Hash: "h", Status: "SUCCESS", ReturnValue: "AAAAAw=="}) {
+				if res.Hash != "h" || res.Status != "SUCCESS" || res.ReturnValue != "AAAAAw==" {
 					t.Fatalf("result = %+v", res)
 				}
 				return

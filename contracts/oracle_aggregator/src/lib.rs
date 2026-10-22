@@ -1,6 +1,6 @@
 #![no_std]
 //! Oracle aggregator: reports the **weighted-median** price over fresh,
-//! agreeing sources.
+//! agreeing sources registered for one canonical token pair.
 //!
 //! Each source carries a configurable `weight` (basis-point style,
 //! 10_000 = 1.0×). A quote contributes to the result only when it is both
@@ -9,14 +9,22 @@
 //! reference median. The reference median stays unweighted so a single heavy
 //! source cannot drag the deviation band around itself.
 //!
-//! Sources outside the band are dropped and reported via a `deviant` event.
+//! Sources outside the band are dropped and reported via a `deviant` event
+//! only from [`OracleAggregator::get_price`]. Preview methods are event-free.
 //! The final price is the **weighted median** of the agreeing subset, and
 //! `confidence` is the summed weight of agreeing sources (not a raw count).
 //! A minimum total agreeing weight floor ([`MIN_AGREEING_WEIGHT`]) prevents
 //! returning a price backed by too little weight.
 //!
 //! The band defaults to [`DEFAULT_MAX_DEVIATION_BPS`] and is tunable by the
-//! admin via [`OracleAggregator::set_max_deviation_bps`].
+//! admin via [`OracleAggregator::set_max_deviation_bps`], with optional
+//! per-pair overrides. Pair records are bounded to 16 sources and list views
+//! are paginated. Reverse-pair reads reuse the canonical sources and invert
+//! the 1e6-scaled price.
+//!
+//! When paused, `get_price` panics with [`OracleError::Paused`]. The safe,
+//! detailed, and spread preview methods instead return zero confidence so
+//! downstream pools can fail closed without trapping.
 
 use soroban_amm_sdk::emit_versioned_event;
 use soroban_sdk::{
@@ -50,6 +58,23 @@ pub struct OracleSource {
     pub last_updated_at: u64,
     /// Weight in basis points (10_000 = 1.0×).
     pub weight: u32,
+}
+
+/// Canonically ordered token pair used as the persistent-storage key.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairKey {
+    pub token_a: Address,
+    pub token_b: Address,
+}
+
+/// Optional pair-specific policy. `None` fields inherit global defaults.
+#[contracttype]
+#[derive(Clone)]
+pub struct PairConfig {
+    pub max_staleness_seconds: Option<u64>,
+    pub max_deviation_bps: Option<u32>,
+    pub min_valid_sources: Option<u32>,
 }
 
 #[contracttype]
@@ -105,6 +130,10 @@ pub enum OracleError {
     NoPendingAdmin = 11,
     WrongAdmin = 12,
     Paused = 13,
+    InvalidPair = 14,
+    TooManySources = 15,
+    InvalidPage = 16,
+    PairNotFound = 17,
 }
 
 // ── Storage ────────────────────────────────────────────────────────────────
@@ -117,6 +146,9 @@ pub enum DataKey {
     Sources,
     MaxDeviationBps,
     Paused,
+    Pairs,
+    PairSources(PairKey),
+    PairConfig(PairKey),
 }
 
 pub const MIN_VALID_SOURCES: u32 = 2;
@@ -139,6 +171,16 @@ pub const MAX_SOURCE_WEIGHT: u32 = 100_000;
 /// Minimum total agreeing weight required to return a confident price.
 /// Default requires at least 2 default-weight sources to agree.
 pub const MIN_AGREEING_WEIGHT: u32 = 20_000;
+
+/// Maximum registered sources for one pair. This bounds cross-contract calls
+/// and the insertion sorts used by median calculation.
+pub const MAX_SOURCES_PER_PAIR: u32 = 16;
+
+/// Maximum number of pairs or sources returned by one list view.
+pub const MAX_PAGE_SIZE: u32 = 50;
+
+/// Fixed-point scale used by source adapters.
+pub const PRICE_SCALE: i128 = 1_000_000;
 
 // ── Adapter client (UPDATED) ───────────────────────────────────────────────
 
@@ -175,9 +217,17 @@ impl OracleAggregator {
 
         let empty: Vec<OracleSource> = Vec::new(&env);
         env.storage().instance().set(&DataKey::Sources, &empty);
+        let pairs: Vec<PairKey> = Vec::new(&env);
+        env.storage().instance().set(&DataKey::Pairs, &pairs);
+        emit_versioned_event!(
+            env,
+            (symbol_short!("init"),),
+            (admin, max_staleness_seconds, DEFAULT_MAX_DEVIATION_BPS)
+        );
     }
 
     pub fn propose_admin(env: Env, current_admin: Address, new_admin: Address) {
+        Self::extend_ttl(&env);
         require_admin(&env, &current_admin);
         env.storage()
             .instance()
@@ -190,6 +240,7 @@ impl OracleAggregator {
     }
 
     pub fn accept_admin(env: Env, new_admin: Address) {
+        Self::extend_ttl(&env);
         let pending: Option<Address> = env
             .storage()
             .instance()
@@ -217,6 +268,7 @@ impl OracleAggregator {
     /// uploaded to the network. Sources and configuration are preserved and
     /// `initialize` is not re-run; only the bytecode is replaced.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
@@ -224,27 +276,28 @@ impl OracleAggregator {
     }
 
     pub fn pause(env: Env, admin: Address) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish((symbol_short!("pause"),), ());
+        emit_versioned_event!(env, (symbol_short!("paused"),), (admin,));
     }
 
     pub fn unpause(env: Env, admin: Address) {
+        Self::extend_ttl(&env);
         require_admin(&env, &admin);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish((symbol_short!("unpause"),), ());
+        emit_versioned_event!(env, (symbol_short!("unpaused"),), (admin,));
     }
 
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
+        Self::extend_ttl(&env);
+        read_paused(&env)
     }
 
     pub fn register_source(
         env: Env,
         admin: Address,
+        pair: PairKey,
         source_contract: Address,
         source_type: OracleSourceType,
         weight: u32,
@@ -256,7 +309,11 @@ impl OracleAggregator {
             panic_with_error!(&env, OracleError::InvalidWeight);
         }
 
-        let mut sources = read_sources(&env);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let mut sources = read_pair_sources(&env, &pair);
+        if sources.len() >= MAX_SOURCES_PER_PAIR {
+            panic_with_error!(&env, OracleError::TooManySources);
+        }
         for i in 0..sources.len() {
             if sources.get_unchecked(i).source_contract == source_contract {
                 panic_with_error!(&env, OracleError::SourceAlreadyRegistered);
@@ -270,14 +327,27 @@ impl OracleAggregator {
             weight,
         });
 
-        env.storage().instance().set(&DataKey::Sources, &sources);
+        write_pair_sources(&env, &pair, &sources);
+        add_pair(&env, &pair);
+        emit_versioned_event!(
+            env,
+            (symbol_short!("src_add"),),
+            (pair, source_contract, source_type, weight)
+        );
     }
 
-    pub fn remove_source(env: Env, admin: Address, source_contract: Address) {
+    pub fn remove_source(
+        env: Env,
+        admin: Address,
+        pair: PairKey,
+        source_contract: Address,
+        force: bool,
+    ) {
         Self::extend_ttl(&env);
         require_admin(&env, &admin);
 
-        let sources = read_sources(&env);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let sources = read_pair_sources(&env, &pair);
         let mut new_sources: Vec<OracleSource> = Vec::new(&env);
         let mut found = false;
         for i in 0..sources.len() {
@@ -293,18 +363,48 @@ impl OracleAggregator {
             panic_with_error!(&env, OracleError::SourceNotFound);
         }
 
-        if new_sources.is_empty() {
+        let min_sources = read_pair_config(&env, &pair)
+            .min_valid_sources
+            .unwrap_or(MIN_VALID_SOURCES);
+        if !force && new_sources.len() < min_sources {
             panic_with_error!(&env, OracleError::InsufficientSources);
         }
 
-        env.storage()
+        write_pair_sources(&env, &pair, &new_sources);
+        emit_versioned_event!(
+            env,
+            (symbol_short!("src_rm"),),
+            (pair, source_contract, force)
+        );
+    }
+
+    /// Remove all configuration and sources for a pair in one explicit admin
+    /// action. This is the only non-force path that may remove the last source.
+    pub fn remove_pair(env: Env, admin: Address, pair: PairKey) {
+        Self::extend_ttl(&env);
+        require_admin(&env, &admin);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let pairs: Vec<PairKey> = env
+            .storage()
             .instance()
-            .set(&DataKey::Sources, &new_sources);
+            .get(&DataKey::Pairs)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !pairs.contains(&pair) {
+            panic_with_error!(&env, OracleError::PairNotFound);
+        }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PairSources(pair.clone()));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PairConfig(pair.clone()));
+        remove_pair_index(&env, &pair);
+        emit_versioned_event!(env, (symbol_short!("pair_rm"),), (pair,));
     }
 
     pub fn get_price(env: Env, token_a: Address, token_b: Address) -> AggregatedPrice {
         Self::extend_ttl(&env);
-        if Self::is_paused(env.clone()) {
+        if read_paused(&env) {
             panic_with_error!(&env, OracleError::Paused);
         }
         let breakdown = Self::aggregate_price(&env, token_a.clone(), token_b.clone(), true);
@@ -326,6 +426,12 @@ impl OracleAggregator {
 
     pub fn get_price_safe(env: Env, token_a: Address, token_b: Address) -> AggregatedPrice {
         Self::extend_ttl(&env);
+        if read_paused(&env) {
+            return AggregatedPrice {
+                price: 0,
+                confidence: 0,
+            };
+        }
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         AggregatedPrice {
             price: breakdown.price,
@@ -341,6 +447,15 @@ impl OracleAggregator {
         token_b: Address,
     ) -> (AggregatedPrice, Vec<SourceQuote>) {
         Self::extend_ttl(&env);
+        if read_paused(&env) {
+            return (
+                AggregatedPrice {
+                    price: 0,
+                    confidence: 0,
+                },
+                Vec::new(&env),
+            );
+        }
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         let price = AggregatedPrice {
             price: breakdown.price,
@@ -353,6 +468,9 @@ impl OracleAggregator {
     /// points. Returns 0 when fewer than two sources agree.
     pub fn get_price_spread_bps(env: Env, token_a: Address, token_b: Address) -> u32 {
         Self::extend_ttl(&env);
+        if read_paused(&env) {
+            return 0;
+        }
         let breakdown = Self::aggregate_price(&env, token_a, token_b, false);
         let mut min_price: i128 = 0;
         let mut max_price: i128 = 0;
@@ -382,7 +500,13 @@ impl OracleAggregator {
 
     /// Admin: update the weight of a registered source.
     /// Emits a `src_wt` event with the old and new weight.
-    pub fn set_source_weight(env: Env, admin: Address, source_contract: Address, weight: u32) {
+    pub fn set_source_weight(
+        env: Env,
+        admin: Address,
+        pair: PairKey,
+        source_contract: Address,
+        weight: u32,
+    ) {
         Self::extend_ttl(&env);
         require_admin(&env, &admin);
 
@@ -390,7 +514,8 @@ impl OracleAggregator {
             panic_with_error!(&env, OracleError::InvalidWeight);
         }
 
-        let mut sources = read_sources(&env);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let mut sources = read_pair_sources(&env, &pair);
         let mut found = false;
         for i in 0..sources.len() {
             let mut source = sources.get_unchecked(i);
@@ -403,7 +528,7 @@ impl OracleAggregator {
                 emit_versioned_event!(
                     env,
                     (symbol_short!("src_wt"),),
-                    (source_contract, old_weight, weight)
+                    (pair.clone(), source_contract, old_weight, weight)
                 );
                 break;
             }
@@ -413,16 +538,17 @@ impl OracleAggregator {
             panic_with_error!(&env, OracleError::SourceNotFound);
         }
 
-        env.storage().instance().set(&DataKey::Sources, &sources);
+        write_pair_sources(&env, &pair, &sources);
     }
 
-    /// Admin-only migration: rewrites all stored source records, defaulting
-    /// any pre-upgrade record missing a `weight` field to
+    /// Admin-only migration: rewrites legacy and pair-scoped source records,
+    /// defaulting any pre-upgrade record missing a `weight` field to
     /// `DEFAULT_SOURCE_WEIGHT` (10_000 = 1.0×).
     pub fn migrate_sources(env: Env, admin: Address) {
         Self::extend_ttl(&env);
         require_admin(&env, &admin);
-        let mut sources = read_sources(&env);
+
+        let mut sources = read_legacy_sources(&env);
         let mut migrated = false;
         for i in 0..sources.len() {
             let mut source = sources.get_unchecked(i);
@@ -435,15 +561,80 @@ impl OracleAggregator {
         if migrated {
             env.storage().instance().set(&DataKey::Sources, &sources);
         }
+
+        let pairs: Vec<PairKey> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pairs)
+            .unwrap_or_else(|| Vec::new(&env));
+        for pair in pairs.iter() {
+            let mut pair_sources = read_pair_sources(&env, &pair);
+            let mut pair_migrated = false;
+            for i in 0..pair_sources.len() {
+                let mut source = pair_sources.get_unchecked(i);
+                if source.weight == 0 {
+                    source.weight = DEFAULT_SOURCE_WEIGHT;
+                    pair_sources.set(i, source);
+                    migrated = true;
+                    pair_migrated = true;
+                }
+            }
+            if pair_migrated {
+                write_pair_sources(&env, &pair, &pair_sources);
+            }
+        }
+
+        emit_versioned_event!(env, (symbol_short!("src_migr"),), (migrated,));
+    }
+
+    /// Move selected legacy global sources under a canonical pair. Reads fall
+    /// back to the legacy list only while a pair has no dedicated sources.
+    pub fn assign_legacy_sources(env: Env, admin: Address, pair: PairKey, selected: Vec<Address>) {
+        Self::extend_ttl(&env);
+        require_admin(&env, &admin);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let mut legacy = read_legacy_sources(&env);
+        let mut pair_sources = read_pair_sources(&env, &pair);
+        let mut remaining: Vec<OracleSource> = Vec::new(&env);
+        let mut moved = 0_u32;
+        for i in 0..legacy.len() {
+            let source = legacy.get_unchecked(i);
+            if selected.contains(&source.source_contract) {
+                if pair_sources.len() >= MAX_SOURCES_PER_PAIR {
+                    panic_with_error!(&env, OracleError::TooManySources);
+                }
+                for pair_source in pair_sources.iter() {
+                    if pair_source.source_contract == source.source_contract {
+                        panic_with_error!(&env, OracleError::SourceAlreadyRegistered);
+                    }
+                }
+                pair_sources.push_back(source);
+                moved += 1;
+            } else {
+                remaining.push_back(source);
+            }
+        }
+        if moved == 0 {
+            panic_with_error!(&env, OracleError::SourceNotFound);
+        }
+        legacy = remaining;
+        env.storage().instance().set(&DataKey::Sources, &legacy);
+        write_pair_sources(&env, &pair, &pair_sources);
+        add_pair(&env, &pair);
+        emit_versioned_event!(env, (symbol_short!("legacy"),), (pair, moved));
     }
 
     fn aggregate_price(
         env: &Env,
         token_a: Address,
         token_b: Address,
-        persist_sources: bool,
+        emit_alerts: bool,
     ) -> PriceBreakdown {
-        let sources = read_sources(env);
+        let (pair, reverse) = canonical_pair(env, token_a, token_b);
+        let mut sources = read_pair_sources(env, &pair);
+        if sources.is_empty() {
+            sources = read_legacy_sources(env);
+        }
 
         if sources.is_empty() {
             return PriceBreakdown {
@@ -454,91 +645,96 @@ impl OracleAggregator {
         }
 
         let now = env.ledger().timestamp();
-        let max_staleness: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MaxStaleness)
-            .unwrap_or(0);
+        let config = read_pair_config(env, &pair);
+        let max_staleness = config
+            .max_staleness_seconds
+            .unwrap_or_else(|| read_global_staleness(env));
+        let min_valid_sources = config.min_valid_sources.unwrap_or(MIN_VALID_SOURCES);
 
         let mut prices: Vec<i128> = Vec::new(env);
         let mut weights: Vec<u32> = Vec::new(env);
-        let mut fresh_sources: Vec<Address> = Vec::new(env);
-        let mut updated: Vec<OracleSource> = Vec::new(env);
+        let mut fresh_quote_indexes: Vec<u32> = Vec::new(env);
         let mut stale_sources: Vec<Address> = Vec::new(env);
-        let mut all_quotes: Vec<(Address, i128, u64, u32)> = Vec::new(env);
+        let mut source_quotes: Vec<SourceQuote> = Vec::new(env);
 
         for i in 0..sources.len() {
-            let mut source = sources.get_unchecked(i);
+            let source = sources.get_unchecked(i);
             let src_addr = source.source_contract.clone();
             let w = source.weight;
 
             let client = OracleSourceAdapterClient::new(env, &source.source_contract);
 
-            let (price, source_timestamp) = match client.try_quote(&token_a, &token_b) {
+            let (mut price, source_timestamp) = match client.try_quote(&pair.token_a, &pair.token_b)
+            {
                 Ok(Ok(res)) => res,
                 _ => (0, 0),
             };
+            if reverse && price > 0 {
+                price = PRICE_SCALE.saturating_mul(PRICE_SCALE) / price;
+            }
 
             let is_fresh = source_timestamp > 0
                 && source_timestamp <= now
                 && now - source_timestamp <= max_staleness;
 
-            let mut contributed = false;
-
-            if price > 0 && is_fresh {
-                source.last_updated_at = source_timestamp;
+            let status = if price <= 0 {
+                QuoteStatus::NoQuote
+            } else if !is_fresh {
+                QuoteStatus::Stale
+            } else {
                 prices.push_back(price);
                 weights.push_back(w);
-                fresh_sources.push_back(src_addr.clone());
-                contributed = true;
-            }
-
-            if !contributed {
+                fresh_quote_indexes.push_back(i);
+                QuoteStatus::Agreed
+            };
+            if !matches!(status, QuoteStatus::Agreed) {
                 stale_sources.push_back(src_addr.clone());
             }
-
-            all_quotes.push_back((src_addr, price, source_timestamp, w));
-            updated.push_back(source);
+            source_quotes.push_back(SourceQuote {
+                source: src_addr,
+                price,
+                timestamp: source_timestamp,
+                weight: w,
+                status,
+            });
         }
 
-        if !stale_sources.is_empty() {
+        if emit_alerts && !stale_sources.is_empty() {
             emit_versioned_event!(env, (symbol_short!("stale_src"),), (stale_sources,));
         }
 
-        if prices.len() < MIN_VALID_SOURCES {
+        if prices.len() < min_valid_sources {
             return PriceBreakdown {
                 price: 0,
                 confidence: 0,
-                source_quotes: Self::build_source_quotes(
-                    env,
-                    &all_quotes,
-                    &Vec::new(env),
-                    &Vec::new(env),
-                ),
+                source_quotes,
             };
-        }
-
-        if persist_sources {
-            env.storage().instance().set(&DataKey::Sources, &updated);
         }
 
         // Reference median remains unweighted: the outlier test should not
         // be swayed by weights, or a heavy source could drag the band.
         let reference_median = median_i128(env, &prices);
-        let max_deviation_bps = read_max_deviation_bps(env);
+        let max_deviation_bps = config
+            .max_deviation_bps
+            .unwrap_or_else(|| read_global_deviation_bps(env))
+            as i128;
 
         let mut agreeing: Vec<(i128, u32)> = Vec::new(env);
         let mut deviant_sources: Vec<Address> = Vec::new(env);
         for i in 0..prices.len() {
             let price = prices.get_unchecked(i);
+            let quote_index = fresh_quote_indexes.get_unchecked(i);
             if within_deviation_band(price, reference_median, max_deviation_bps) {
                 agreeing.push_back((price, weights.get_unchecked(i)));
             } else {
-                deviant_sources.push_back(fresh_sources.get_unchecked(i));
+                let mut quote = source_quotes.get_unchecked(quote_index);
+                quote.status = QuoteStatus::Deviant;
+                deviant_sources.push_back(quote.source.clone());
+                source_quotes.set(quote_index, quote);
             }
         }
 
-        if !deviant_sources.is_empty() {
+        if emit_alerts && !deviant_sources.is_empty() {
             emit_versioned_event!(env, (symbol_short!("deviant"),), (deviant_sources.clone(),));
         }
 
@@ -548,12 +744,7 @@ impl OracleAggregator {
             return PriceBreakdown {
                 price: 0,
                 confidence: 0,
-                source_quotes: Self::build_source_quotes(
-                    env,
-                    &all_quotes,
-                    &agreeing,
-                    &deviant_sources,
-                ),
+                source_quotes,
             };
         }
 
@@ -562,53 +753,70 @@ impl OracleAggregator {
         PriceBreakdown {
             price: median,
             confidence: total_weight,
-            source_quotes: Self::build_source_quotes(env, &all_quotes, &agreeing, &deviant_sources),
+            source_quotes,
         }
     }
 
-    /// Classify each source quote and build the per-source breakdown.
-    fn build_source_quotes(
-        env: &Env,
-        all_quotes: &Vec<(Address, i128, u64, u32)>,
-        agreeing: &Vec<(i128, u32)>,
-        deviant_addrs: &Vec<Address>,
-    ) -> Vec<SourceQuote> {
-        let mut result: Vec<SourceQuote> = Vec::new(env);
-        for i in 0..all_quotes.len() {
-            let (addr, price, ts, w) = all_quotes.get_unchecked(i);
-            let status = if price == 0 {
-                QuoteStatus::NoQuote
-            } else if deviant_addrs.contains(&addr) {
-                QuoteStatus::Deviant
-            } else if Self::is_in_agreeing(price, w, agreeing) {
-                QuoteStatus::Agreed
-            } else {
-                QuoteStatus::Stale
-            };
-            result.push_back(SourceQuote {
-                source: addr,
-                price,
-                timestamp: ts,
-                weight: w,
-                status,
-            });
+    pub fn list_sources(env: Env, pair: PairKey, cursor: u32, limit: u32) -> Vec<OracleSource> {
+        Self::extend_ttl(&env);
+        validate_page(&env, limit);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let mut sources = read_pair_sources(&env, &pair);
+        if sources.is_empty() {
+            sources = read_legacy_sources(&env);
         }
-        result
+        page_sources(&env, &sources, cursor, limit)
     }
 
-    fn is_in_agreeing(price: i128, _weight: u32, agree_set: &Vec<(i128, u32)>) -> bool {
-        for i in 0..agree_set.len() {
-            let (p, _w) = agree_set.get_unchecked(i);
-            if p == price {
-                return true;
+    pub fn list_pairs(env: Env, cursor: u32, limit: u32) -> Vec<PairKey> {
+        Self::extend_ttl(&env);
+        validate_page(&env, limit);
+        let pairs: Vec<PairKey> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pairs)
+            .unwrap_or_else(|| Vec::new(&env));
+        page_pairs(&env, &pairs, cursor, limit)
+    }
+
+    pub fn get_pair_config(env: Env, pair: PairKey) -> PairConfig {
+        Self::extend_ttl(&env);
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        read_pair_config(&env, &pair)
+    }
+
+    pub fn set_pair_config(
+        env: Env,
+        admin: Address,
+        pair: PairKey,
+        max_staleness_seconds: Option<u64>,
+        max_deviation_bps: Option<u32>,
+        min_valid_sources: Option<u32>,
+    ) {
+        Self::extend_ttl(&env);
+        require_admin(&env, &admin);
+        if matches!(max_staleness_seconds, Some(0)) {
+            panic_with_error!(&env, OracleError::InvalidStaleness);
+        }
+        if let Some(deviation) = max_deviation_bps {
+            if deviation == 0 || deviation as i128 > BPS_DENOMINATOR {
+                panic_with_error!(&env, OracleError::InvalidDeviation);
             }
         }
-        false
-    }
-
-    pub fn list_sources(env: Env) -> Vec<OracleSource> {
-        Self::extend_ttl(&env);
-        read_sources(&env)
+        if let Some(minimum) = min_valid_sources {
+            if minimum == 0 || minimum > MAX_SOURCES_PER_PAIR {
+                panic_with_error!(&env, OracleError::InsufficientSources);
+            }
+        }
+        let pair = canonical_pair(&env, pair.token_a, pair.token_b).0;
+        let config = PairConfig {
+            max_staleness_seconds,
+            max_deviation_bps,
+            min_valid_sources,
+        };
+        write_pair_config(&env, &pair, &config);
+        add_pair(&env, &pair);
+        emit_versioned_event!(env, (symbol_short!("pair_cfg"),), (pair, config));
     }
 
     pub fn get_max_staleness(env: Env) -> u64 {
@@ -628,6 +836,7 @@ impl OracleAggregator {
         env.storage()
             .instance()
             .set(&DataKey::MaxStaleness, &max_staleness_seconds);
+        emit_versioned_event!(env, (symbol_short!("stale"),), (max_staleness_seconds,));
     }
 
     /// Returns the deviation band (in bps) a fresh quote must fall within of
@@ -650,6 +859,7 @@ impl OracleAggregator {
         env.storage()
             .instance()
             .set(&DataKey::MaxDeviationBps, &max_deviation_bps);
+        emit_versioned_event!(env, (symbol_short!("deviation"),), (max_deviation_bps,));
     }
 
     pub fn get_admin(env: Env) -> Address {
@@ -662,14 +872,13 @@ impl OracleAggregator {
 
     /// Instance-storage TTL maintenance.
     ///
-    /// The oracle aggregator keeps every entry (`Admin`, `MaxStaleness`,
-    /// `Sources`, `MaxDeviationBps`) in instance storage, so the instance entry
-    /// holds all of the contract's state as well as its executable. If that
-    /// entry's TTL lapses the contract is archived and every call traps until
-    /// someone restores it — and downstream pools reading this for price sanity
-    /// checks trap with it. Every public entrypoint therefore bumps the
-    /// instance TTL, including the read-only price and getter paths, which are
-    /// the only traffic a sporadically-read oracle may see for long stretches.
+    /// Global configuration and the pair index live in instance storage;
+    /// pair-specific sources and policies live in persistent storage and are
+    /// extended whenever read or written. If the instance entry's TTL lapses,
+    /// the contract is archived and every call traps until someone restores it.
+    /// Every public entrypoint therefore bumps the instance TTL, including the
+    /// read-only price and getter paths, which may be the only traffic a
+    /// sporadically-read oracle sees for long stretches.
     ///
     /// The threshold and bump are in ledgers. At ~5 s per ledger, 172_800
     /// ledgers is about 10 days (top up when less than this remains) and
@@ -683,11 +892,148 @@ impl OracleAggregator {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-fn read_sources(env: &Env) -> Vec<OracleSource> {
+fn read_legacy_sources(env: &Env) -> Vec<OracleSource> {
     env.storage()
         .instance()
         .get(&DataKey::Sources)
         .unwrap_or_else(|| panic_with_error!(env, OracleError::NotInitialized))
+}
+
+fn canonical_pair(env: &Env, token_a: Address, token_b: Address) -> (PairKey, bool) {
+    if token_a == token_b {
+        panic_with_error!(env, OracleError::InvalidPair);
+    }
+    if token_a < token_b {
+        (PairKey { token_a, token_b }, false)
+    } else {
+        (
+            PairKey {
+                token_a: token_b,
+                token_b: token_a,
+            },
+            true,
+        )
+    }
+}
+
+fn read_pair_sources(env: &Env, pair: &PairKey) -> Vec<OracleSource> {
+    let key = DataKey::PairSources(pair.clone());
+    let sources = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 172_800, 518_400);
+    }
+    sources
+}
+
+fn write_pair_sources(env: &Env, pair: &PairKey, sources: &Vec<OracleSource>) {
+    let key = DataKey::PairSources(pair.clone());
+    env.storage().persistent().set(&key, sources);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, 172_800, 518_400);
+}
+
+fn read_pair_config(env: &Env, pair: &PairKey) -> PairConfig {
+    let key = DataKey::PairConfig(pair.clone());
+    let config = env.storage().persistent().get(&key).unwrap_or(PairConfig {
+        max_staleness_seconds: None,
+        max_deviation_bps: None,
+        min_valid_sources: None,
+    });
+    if env.storage().persistent().has(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 172_800, 518_400);
+    }
+    config
+}
+
+fn write_pair_config(env: &Env, pair: &PairKey, config: &PairConfig) {
+    let key = DataKey::PairConfig(pair.clone());
+    env.storage().persistent().set(&key, config);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, 172_800, 518_400);
+}
+
+fn add_pair(env: &Env, pair: &PairKey) {
+    let mut pairs: Vec<PairKey> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Pairs)
+        .unwrap_or_else(|| Vec::new(env));
+    if !pairs.contains(pair) {
+        pairs.push_back(pair.clone());
+        env.storage().instance().set(&DataKey::Pairs, &pairs);
+    }
+}
+
+fn remove_pair_index(env: &Env, pair: &PairKey) {
+    let pairs: Vec<PairKey> = env
+        .storage()
+        .instance()
+        .get(&DataKey::Pairs)
+        .unwrap_or_else(|| Vec::new(env));
+    let mut remaining = Vec::new(env);
+    for candidate in pairs.iter() {
+        if candidate != pair.clone() {
+            remaining.push_back(candidate);
+        }
+    }
+    env.storage().instance().set(&DataKey::Pairs, &remaining);
+}
+
+fn validate_page(env: &Env, limit: u32) {
+    if limit == 0 || limit > MAX_PAGE_SIZE {
+        panic_with_error!(env, OracleError::InvalidPage);
+    }
+}
+
+fn page_sources(
+    env: &Env,
+    sources: &Vec<OracleSource>,
+    cursor: u32,
+    limit: u32,
+) -> Vec<OracleSource> {
+    let mut result = Vec::new(env);
+    let end = core::cmp::min(sources.len(), cursor.saturating_add(limit));
+    let mut index = cursor;
+    while index < end {
+        result.push_back(sources.get_unchecked(index));
+        index += 1;
+    }
+    result
+}
+
+fn page_pairs(env: &Env, pairs: &Vec<PairKey>, cursor: u32, limit: u32) -> Vec<PairKey> {
+    let mut result = Vec::new(env);
+    let end = core::cmp::min(pairs.len(), cursor.saturating_add(limit));
+    let mut index = cursor;
+    while index < end {
+        result.push_back(pairs.get_unchecked(index));
+        index += 1;
+    }
+    result
+}
+
+fn read_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
+fn read_global_staleness(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::MaxStaleness)
+        .unwrap_or(0)
 }
 
 fn require_admin(env: &Env, claimed: &Address) {
@@ -704,13 +1050,11 @@ fn require_admin(env: &Env, claimed: &Address) {
     claimed.require_auth();
 }
 
-fn read_max_deviation_bps(env: &Env) -> i128 {
-    let bps: u32 = env
-        .storage()
+fn read_global_deviation_bps(env: &Env) -> u32 {
+    env.storage()
         .instance()
         .get(&DataKey::MaxDeviationBps)
-        .unwrap_or(DEFAULT_MAX_DEVIATION_BPS);
-    bps as i128
+        .unwrap_or(DEFAULT_MAX_DEVIATION_BPS)
 }
 
 /// Returns `true` when `price` is within `max_deviation_bps` of `median`.
