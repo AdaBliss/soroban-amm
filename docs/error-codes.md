@@ -418,7 +418,9 @@ Defined in [contracts/router/src/lib.rs](../contracts/router/src/lib.rs) as `Rou
 | 7 | `PoolNotFound` | The factory returned no pool for the token pair at some hop. | Ensure a pool exists for every adjacent pair; call `is_path_routable` to check before quoting. |
 | 8 | `SlippageExceeded` | Realized output `< min_amount_out`, or required input `> max_in`. | Widen the slippage bounds or recalculate the path quote. |
 | 9 | `Paused` | `swap_exact_in` or `swap_exact_out` was called while the router is paused. Quotes and path views stay callable. | Wait for the admin to call `unpause`; check `is_paused` first. |
-| 10 | `Unauthorized` | `pause` or `unpause` was called with an `admin` address that does not match the stored admin. | Pass the stored admin address and sign with its key. |
+| 10 | `Unauthorized` | An admin-only operation used the wrong admin, or `accept_admin` was called by an address other than the nominee. | Pass the stored or nominated address and sign with its key. |
+| 11 | `InvalidFactory` | `initialize` could not call the factory's `get_pool_count` interface. | Pass a deployed factory contract address. |
+| 12 | `NoPendingAdmin` | `accept_admin` was called without a pending nomination. | Call `propose_admin` first. |
 
 ---
 

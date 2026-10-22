@@ -7,7 +7,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 use pool_interfaces::{AmmPoolClient, FactoryClient};
@@ -48,12 +48,17 @@ pub enum RouterError {
     /// `pause` / `unpause` was called with an address that is not the stored
     /// admin.
     Unauthorized = 10,
+    /// The supplied factory does not implement the factory interface.
+    InvalidFactory = 11,
+    /// `accept_admin` was called without a pending nomination.
+    NoPendingAdmin = 12,
 }
 
 #[contracttype]
 pub enum DataKey {
     Factory,
     Admin,
+    PendingAdmin,
     /// `true` while swaps are halted by the admin; absent means unpaused.
     Paused,
 }
@@ -65,10 +70,17 @@ pub struct Router;
 impl Router {
     /// Initialize the router with the factory that tracks all deployed pools.
     pub fn initialize(env: Env, admin: Address, factory: Address) -> Result<(), RouterError> {
+        Self::extend_ttl(&env);
         if env.storage().instance().has(&DataKey::Factory) {
             return Err(RouterError::AlreadyInitialized);
         }
         admin.require_auth();
+        if FactoryClient::new(&env, &factory)
+            .try_get_pool_count()
+            .is_err()
+        {
+            return Err(RouterError::InvalidFactory);
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Factory, &factory);
         Ok(())
@@ -97,6 +109,7 @@ impl Router {
 
     /// Whether swaps are currently halted.
     pub fn is_paused(env: Env) -> bool {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Paused)
@@ -150,6 +163,12 @@ impl Router {
         if current_amount < min_amount_out {
             return Err(RouterError::SlippageExceeded);
         }
+
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (symbol_short!("route"),),
+            (trader, path, amount_in, current_amount, hops)
+        );
 
         Ok(current_amount)
     }
@@ -207,6 +226,11 @@ impl Router {
             current_amount_in = actual_out;
         }
 
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (symbol_short!("route"),),
+            (trader, path, total_in, amount_out, hops)
+        );
         Ok(total_in)
     }
 
@@ -253,14 +277,14 @@ impl Router {
     ///
     /// The exact-out mirror of [`Router::get_amount_out_path`]. Walks the path
     /// in reverse through `AmmPoolClient::get_amount_in`, using the same helper
-    /// `swap_exact_out` executes with. Panics with `no pool for hop {i}` when a
-    /// hop has no deployed pool; use [`Router::is_path_routable`] to check
-    /// first.
+    /// `swap_exact_out` executes with. Returns `RouterError::PoolNotFound` when
+    /// any hop has no deployed pool; use [`Router::is_path_routable`] to check first.
     pub fn get_amount_in_path(
         env: Env,
         path: Vec<Address>,
         amount_out: i128,
     ) -> Result<i128, RouterError> {
+        Self::extend_ttl(&env);
         Self::require_valid_path(&path)?;
         if amount_out <= 0 {
             return Err(RouterError::InvalidAmount);
@@ -279,13 +303,14 @@ impl Router {
     /// Returns `path.len()` amounts where element `i` is the amount of
     /// `path[i]` moving through the route; element `0` is `amount_in` and the
     /// last element equals [`Router::get_amount_out_path`] for the same
-    /// arguments. Panics with `no pool for hop {i}` when a hop has no pool,
+    /// arguments. Returns `RouterError::PoolNotFound` when a hop has no pool,
     /// rather than collapsing the route to the ambiguous `0` sentinel.
     pub fn get_amounts_out_path(
         env: Env,
         path: Vec<Address>,
         amount_in: i128,
     ) -> Result<Vec<i128>, RouterError> {
+        Self::extend_ttl(&env);
         Self::require_valid_path(&path)?;
         if amount_in <= 0 {
             return Err(RouterError::InvalidAmount);
@@ -305,6 +330,7 @@ impl Router {
         path: Vec<Address>,
         amount_out: i128,
     ) -> Result<Vec<i128>, RouterError> {
+        Self::extend_ttl(&env);
         Self::require_valid_path(&path)?;
         if amount_out <= 0 {
             return Err(RouterError::InvalidAmount);
@@ -317,9 +343,10 @@ impl Router {
     /// Resolve every adjacent pair in `path` to its pool address.
     ///
     /// Returns `path.len() - 1` addresses so integrators can inspect fee tiers
-    /// and reserves themselves. Panics with `no pool for hop {i}`, naming the
-    /// failing hop index, when a pair has no deployed pool.
+    /// and reserves themselves. Returns `RouterError::PoolNotFound` when a
+    /// pair has no deployed pool.
     pub fn get_pools_for_path(env: Env, path: Vec<Address>) -> Result<Vec<Address>, RouterError> {
+        Self::extend_ttl(&env);
         Self::require_valid_path(&path)?;
 
         let factory_client = Self::factory_client(&env)?;
@@ -340,6 +367,7 @@ impl Router {
     /// adjacent token) is also `false` -- a predicate reports rather than
     /// panics.
     pub fn is_path_routable(env: Env, path: Vec<Address>) -> bool {
+        Self::extend_ttl(&env);
         if path.len() < 2 {
             return false;
         }
@@ -362,10 +390,75 @@ impl Router {
     }
 
     pub fn get_factory(env: Env) -> Result<Address, RouterError> {
+        Self::extend_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Factory)
             .ok_or(RouterError::NotInitialized)
+    }
+
+    pub fn propose_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), RouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &current_admin)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &Some(new_admin.clone()));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (soroban_sdk::Symbol::new(&env, "admin_nominated"),),
+            (current_admin, new_admin)
+        );
+        Ok(())
+    }
+
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), RouterError> {
+        Self::extend_ttl(&env);
+        let pending: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or(None);
+        let nominee = pending.ok_or(RouterError::NoPendingAdmin)?;
+        if new_admin != nominee {
+            return Err(RouterError::Unauthorized);
+        }
+        new_admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &Option::<Address>::None);
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (soroban_sdk::Symbol::new(&env, "admin_changed"),),
+            (new_admin,)
+        );
+        Ok(())
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, RouterError> {
+        Self::extend_ttl(&env);
+        Self::read_admin(&env)
+    }
+
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::extend_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .unwrap_or(None)
+    }
+
+    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) -> Result<(), RouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &admin)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        soroban_amm_sdk::emit_versioned_event!(env, (symbol_short!("upgraded"),), (new_wasm_hash,));
+        Ok(())
     }
 
     fn extend_ttl(env: &Env) {
@@ -493,7 +586,7 @@ mod tests {
     use factory::{Factory, FactoryClient};
     use soroban_sdk::token::StellarAssetClient;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger},
+        testutils::{storage::Instance as _, Address as _, Ledger},
         Env,
     };
 
@@ -1106,5 +1199,216 @@ mod tests {
         assert_eq!(router.get_amounts_out_path(&path, &10_000).len(), 3);
         assert_eq!(router.get_amounts_in_path(&path, &10_000).len(), 3);
         assert_eq!(router.get_pools_for_path(&path).len(), 2);
+    }
+
+    #[test]
+    fn test_admin_rotation_replaces_pause_authority() {
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let next = Address::generate(&s.env);
+        router.propose_admin(&s.admin, &next);
+        assert_eq!(router.get_pending_admin(), Some(next.clone()));
+        router.accept_admin(&next);
+        assert_eq!(router.get_admin(), next.clone());
+        assert_eq!(
+            router.try_pause(&s.admin),
+            Err(Ok(RouterError::Unauthorized))
+        );
+        router.pause(&next);
+    }
+
+    #[test]
+    fn test_admin_rotation_rejects_unauthorized_proposal() {
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        assert_eq!(
+            router.try_propose_admin(&Address::generate(&s.env), &Address::generate(&s.env)),
+            Err(Ok(RouterError::Unauthorized))
+        );
+    }
+
+    #[test]
+    fn test_admin_rotation_rejects_stranger_and_missing_nomination() {
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let nominee = Address::generate(&s.env);
+        assert_eq!(
+            router.try_accept_admin(&nominee),
+            Err(Ok(RouterError::NoPendingAdmin))
+        );
+        router.propose_admin(&s.admin, &nominee);
+        assert_eq!(
+            router.try_accept_admin(&Address::generate(&s.env)),
+            Err(Ok(RouterError::Unauthorized))
+        );
+    }
+
+    #[test]
+    fn test_upgrade_requires_admin_and_preserves_router_state() {
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let router_wasm = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/wasm32v1-none/release/router.wasm"
+        ));
+        let router_wasm = soroban_sdk::Bytes::from_slice(&s.env, router_wasm);
+        let wasm_hash = s.env.deployer().upload_contract_wasm(router_wasm);
+        assert_eq!(
+            router.try_upgrade(&Address::generate(&s.env), &wasm_hash),
+            Err(Ok(RouterError::Unauthorized))
+        );
+        router.upgrade(&s.admin, &wasm_hash);
+        assert_eq!(router.get_factory(), s.factory);
+        assert_eq!(router.get_admin(), s.admin);
+    }
+
+    #[test]
+    fn test_initialize_rejects_non_factory_without_writing_state() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let router_addr = env.register_contract(None, Router);
+        let client = RouterClient::new(&env, &router_addr);
+        let admin = Address::generate(&env);
+        let not_factory = Address::generate(&env);
+        assert_eq!(
+            client.try_initialize(&admin, &not_factory),
+            Err(Ok(RouterError::InvalidFactory))
+        );
+        assert_eq!(
+            client.try_get_factory(),
+            Err(Ok(RouterError::NotInitialized))
+        );
+    }
+
+    fn last_route_event(env: &Env, router: &Address) -> (Address, Vec<Address>, i128, i128, u32) {
+        use soroban_sdk::{testutils::Events as _, IntoVal};
+        let event = env
+            .events()
+            .all()
+            .iter()
+            .rfind(|e| e.0 == *router && e.1 == (symbol_short!("route"),).into_val(env))
+            .unwrap();
+        let (version, payload): (u32, (Address, Vec<Address>, i128, i128, u32)) =
+            event.2.into_val(env);
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        payload
+    }
+
+    #[test]
+    fn test_swap_exact_in_emits_one_complete_route_event() {
+        use soroban_sdk::{testutils::Events as _, IntoVal};
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let path = soroban_sdk::vec![
+            &s.env,
+            s.token1.clone(),
+            s.token2.clone(),
+            s.token3.clone(),
+            s.token4.clone()
+        ];
+        let amount_out = router.swap_exact_in(&s.trader, &path, &10_000, &0, &u64::MAX);
+        let routes = s
+            .env
+            .events()
+            .all()
+            .iter()
+            .filter(|e| e.0 == s.router && e.1 == (symbol_short!("route"),).into_val(&s.env))
+            .count();
+        assert_eq!(routes, 1);
+        assert_eq!(
+            last_route_event(&s.env, &s.router),
+            (s.trader, path, 10_000, amount_out, 3)
+        );
+    }
+
+    #[test]
+    fn test_swap_exact_out_emits_actual_input_and_requested_output() {
+        use soroban_sdk::{testutils::Events as _, IntoVal};
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let path = soroban_sdk::vec![
+            &s.env,
+            s.token1.clone(),
+            s.token2.clone(),
+            s.token3.clone(),
+            s.token4.clone()
+        ];
+        let amount_in = router.swap_exact_out(&s.trader, &path, &10_000, &i128::MAX, &u64::MAX);
+        let routes = s
+            .env
+            .events()
+            .all()
+            .iter()
+            .filter(|e| e.0 == s.router && e.1 == (symbol_short!("route"),).into_val(&s.env))
+            .count();
+        assert_eq!(routes, 1);
+        assert_eq!(
+            last_route_event(&s.env, &s.router),
+            (s.trader, path, amount_in, 10_000, 3)
+        );
+    }
+
+    fn assert_view_ttl_bump(view: u32) {
+        let s = setup_three_hop();
+        let router = RouterClient::new(&s.env, &s.router);
+        let path = soroban_sdk::vec![&s.env, s.token1.clone(), s.token2.clone(), s.token3.clone()];
+        s.env.ledger().set_sequence_number(BUMP_TO - MIN_TTL + 1);
+        match view {
+            0 => {
+                let _ = router.get_amount_in_path(&path, &10_000);
+            }
+            1 => {
+                let _ = router.get_amounts_out_path(&path, &10_000);
+            }
+            2 => {
+                let _ = router.get_amounts_in_path(&path, &10_000);
+            }
+            3 => {
+                let _ = router.get_pools_for_path(&path);
+            }
+            4 => {
+                let _ = router.is_path_routable(&path);
+            }
+            5 => {
+                let _ = router.get_factory();
+            }
+            _ => {
+                let _ = router.is_paused();
+            }
+        }
+        assert_eq!(
+            s.env
+                .as_contract(&s.router, || s.env.storage().instance().get_ttl()),
+            BUMP_TO
+        );
+    }
+
+    #[test]
+    fn test_ttl_bump_get_amount_in_path() {
+        assert_view_ttl_bump(0);
+    }
+    #[test]
+    fn test_ttl_bump_get_amounts_out_path() {
+        assert_view_ttl_bump(1);
+    }
+    #[test]
+    fn test_ttl_bump_get_amounts_in_path() {
+        assert_view_ttl_bump(2);
+    }
+    #[test]
+    fn test_ttl_bump_get_pools_for_path() {
+        assert_view_ttl_bump(3);
+    }
+    #[test]
+    fn test_ttl_bump_is_path_routable() {
+        assert_view_ttl_bump(4);
+    }
+    #[test]
+    fn test_ttl_bump_get_factory() {
+        assert_view_ttl_bump(5);
+    }
+    #[test]
+    fn test_ttl_bump_is_paused() {
+        assert_view_ttl_bump(6);
     }
 }

@@ -767,6 +767,10 @@ count. Events marked unversioned carry their payload without the
 |---|---|---|---|
 | `pause` | 1 | `admin` | v1 |
 | `unpause` | 1 | `admin` | v1 |
+| `route` | 1 | `trader`, `path`, `amount_in`, `amount_out`, `hops` | v1 |
+| `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
+| `admin_changed` | 1 | `new_admin` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 
 ### `staking`
 

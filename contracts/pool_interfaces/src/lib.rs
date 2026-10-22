@@ -111,6 +111,8 @@ pub trait AmmPoolInterface {
 /// `dex-aggregator`, and `batch_router`.
 #[contractclient(name = "FactoryClient")]
 pub trait FactoryInterface {
+    fn get_pool_count(env: Env) -> u64;
+
     fn get_pool(env: Env, token_a: Address, token_b: Address) -> Option<Address>;
 
     fn get_cl_pool(env: Env, token_a: Address, token_b: Address, fee_bps: i128) -> Option<Address>;
