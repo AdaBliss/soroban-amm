@@ -34,10 +34,10 @@ pub mod client;
 pub mod events;
 pub mod types;
 
-#[cfg(all(test, feature = "testutils"))]
+#[cfg(test)]
 mod examples;
 
-#[cfg(all(test, feature = "testutils"))]
+#[cfg(test)]
 mod version_test;
 
 // ── Event schema versioning (#302) ──────────────────────────────────────────

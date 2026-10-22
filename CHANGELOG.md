@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- `soroban_amm_sdk::events::decode_amm_event` returned `None` for the two most common AMM events. `swap` and `swap_exact_out` publish four fields (`swap_fot` adds the referrer as a fifth), and `flash_loan` publishes both tokens' amounts and fees. The decoder expected a five-field swap and a three-field flash loan, so an indexer built on it silently dropped every ordinary swap and every flash loan (#1149). It now accepts both swap shapes by field count and decodes the four-field flash loan.
+- **Breaking (SDK only):** `FlashLoanEvent` is now `{ receiver, amount_a, amount_b, fee_a, fee_b }`. The old `{ token, amount, fee }` shape never matched an event the contract emits, so nothing decoded into it correctly.
+- The `soroban_amm_sdk` test modules that were feature-gated behind a `testutils` feature nothing enables (`version_test`, `examples`) now run under `cargo test`. The orphaned `src/events_test.rs`, which used a stale API and did not compile, is removed.
+- New `contracts/amm-sdk/tests/events_from_contracts.rs` deploys the real `amm` pool and decodes the events each operation publishes, so an emit-site change that the decoder does not follow fails the build. `docs/events.json` is generated from the decoder's `EVENT_SCHEMAS` table and checked by `tests/schema_json.rs` (`UPDATE_EVENTS_JSON=1` regenerates it).
+- `scripts/check_test_modules.sh` (`make check-test-modules`, run in CI) fails when a `*_test.rs` file under a contract's `src/` is not declared as a `mod`, so cargo would never run it.
+
 ### Removed
 - `packages/android-sdk` is removed (#962). It was one Kotlin file whose two methods, transaction building and submission, were empty TODOs, under the placeholder `com.example.amm` namespace. No workflow built or tested it, no manifest referenced it and no document mentioned it, so the directory only implied mobile support that did not exist. Removing it is deliberate: a real Android SDK would need transaction construction, signing and RPC transport, XDR fixtures shared with the Go SDK and a Gradle CI job, and should arrive as a complete package rather than a placeholder. The README now lists the client SDKs that do exist (TypeScript, Go, Rust).
 
