@@ -1,0 +1,21 @@
+[
+  {"contract": "amm", "topic": "add_liquidity", "version": 1, "fields": [{"name": "amount_a", "type": "i128"}, {"name": "amount_b", "type": "i128"}, {"name": "shares_minted", "type": "i128"}]},
+  {"contract": "amm", "topic": "swap", "version": 1, "fields": [{"name": "token_in", "type": "Address"}, {"name": "amount_in", "type": "i128"}, {"name": "token_out", "type": "Address"}, {"name": "amount_out", "type": "i128"}]},
+  {"contract": "amm", "topic": "swap", "version": 1, "fields": [{"name": "token_in", "type": "Address"}, {"name": "amount_in", "type": "i128"}, {"name": "token_out", "type": "Address"}, {"name": "amount_out", "type": "i128"}, {"name": "referrer", "type": "Option<Address>"}]},
+  {"contract": "amm", "topic": "rm_liq", "version": 1, "fields": [{"name": "provider", "type": "Address"}, {"name": "shares_burned", "type": "i128"}, {"name": "amount_a", "type": "i128"}, {"name": "amount_b", "type": "i128"}]},
+  {"contract": "amm", "topic": "rm_liq_1s", "version": 1, "fields": [{"name": "provider", "type": "Address"}, {"name": "shares_burned", "type": "i128"}, {"name": "token_out", "type": "Address"}, {"name": "total_out", "type": "i128"}]},
+  {"contract": "amm", "topic": "flash_loan", "version": 1, "fields": [{"name": "amount_a", "type": "i128"}, {"name": "amount_b", "type": "i128"}, {"name": "fee_a", "type": "i128"}, {"name": "fee_b", "type": "i128"}]},
+  {"contract": "amm", "topic": "fee_upd", "version": 1, "fields": [{"name": "new_fee_bps", "type": "i128"}]},
+  {"contract": "amm", "topic": "flash_fee_upd", "version": 1, "fields": [{"name": "new_fee_bps", "type": "i128"}]},
+  {"contract": "amm", "topic": "admin_nominated", "version": 1, "fields": [{"name": "current_admin", "type": "Address"}, {"name": "new_admin", "type": "Address"}]},
+  {"contract": "amm", "topic": "admin_changed", "version": 1, "fields": [{"name": "new_admin", "type": "Address"}]},
+  {"contract": "amm", "topic": "upgraded", "version": 1, "fields": [{"name": "new_wasm_hash", "type": "BytesN<32>"}]},
+  {"contract": "amm", "topic": "protocol_fee_set", "version": 1, "fields": [{"name": "protocol_fee_bps", "type": "i128"}, {"name": "recipient", "type": "Address"}]},
+  {"contract": "amm", "topic": "circuit_break", "version": 1, "fields": [{"name": "price_before", "type": "i128"}, {"name": "price_after", "type": "i128"}, {"name": "deviation_bps", "type": "i128"}, {"name": "threshold_bps", "type": "i128"}]},
+  {"contract": "amm", "topic": "cb_recovered", "version": 1, "fields": [{"name": "timestamp", "type": "u64"}]},
+  {"contract": "dex_aggregator", "topic": "cl_reg", "version": 1, "fields": [{"name": "token_a", "type": "Address"}, {"name": "token_b", "type": "Address"}, {"name": "fee_bps", "type": "i128"}, {"name": "pool", "type": "Address"}]},
+  {"contract": "dex_aggregator", "topic": "route_sel", "version": 1, "fields": [{"name": "venue", "type": "Address"}, {"name": "venue_kind", "type": "RouteVenueKind"}, {"name": "amount_in", "type": "i128"}, {"name": "amount_out", "type": "i128"}]},
+  {"contract": "dex_aggregator", "topic": "route_alt", "version": 1, "fields": [{"name": "venue", "type": "Address"}, {"name": "amount_out", "type": "i128"}, {"name": "alt_venue", "type": "Address"}, {"name": "alt_venue_kind", "type": "RouteVenueKind"}, {"name": "alt_amount_out", "type": "i128"}]},
+  {"contract": "dex_aggregator", "topic": "route_exe", "version": 1, "fields": [{"name": "trader", "type": "Address"}, {"name": "token_in", "type": "Address"}, {"name": "token_out", "type": "Address"}, {"name": "amount_in", "type": "i128"}, {"name": "amount_out", "type": "i128"}, {"name": "pool", "type": "Address"}]},
+  {"contract": "dex_aggregator", "topic": "tol_fail", "version": 1, "fields": [{"name": "pool", "type": "Address"}, {"name": "observed_bps", "type": "i128"}, {"name": "tolerance_bps", "type": "i128"}]}
+]
