@@ -143,7 +143,11 @@ generate_and_fund_source() {
 # deployment, and cannot be disturbed by state other flows leave behind.
 
 E2E_REPO_ROOT="${E2E_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# An explicit E2E_WASM_DIR always wins; otherwise e2e_wasm prefers the optimized
+# artifacts over the raw release build.
+E2E_WASM_DIR_OVERRIDDEN="${E2E_WASM_DIR:+1}"
 E2E_WASM_DIR="${E2E_WASM_DIR:-$E2E_REPO_ROOT/target/wasm32v1-none/release}"
+E2E_OPTIMIZED_DIR="${E2E_OPTIMIZED_DIR:-$E2E_REPO_ROOT/optimized-artifacts}"
 
 # parse_address — last Stellar account (G…) or contract (C…) strkey in stdin.
 parse_address() {
@@ -271,9 +275,15 @@ expect_fail() {
   pass "$label"
 }
 
-# e2e_wasm NAME — path to a built contract artifact.
+# e2e_wasm NAME — path to a built contract artifact. Uses the optimized build
+# (scripts/optimize_contracts.sh) when one exists, because the raw release
+# build of some contracts (amm, concentrated_liquidity) is over the network's
+# 128KB contract cap and the upload is rejected with TxSorobanInvalid.
 e2e_wasm() {
   local path="$E2E_WASM_DIR/$1.wasm"
+  if [[ -z "$E2E_WASM_DIR_OVERRIDDEN" && -f "$E2E_OPTIMIZED_DIR/$1.wasm" ]]; then
+    path="$E2E_OPTIMIZED_DIR/$1.wasm"
+  fi
   if [[ ! -f "$path" ]]; then
     die "missing WASM artifact $path — run: cargo build --release --target wasm32v1-none"
   fi
