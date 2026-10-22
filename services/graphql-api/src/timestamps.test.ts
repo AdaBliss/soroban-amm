@@ -30,7 +30,7 @@ function swap(id: string, timestamp: Seconds, price = 1.5): PoolEvent {
     poolId: "pool-t",
     type: "swap",
     timestamp,
-    payload: { amountIn: 100, fee: 1, price, tokenA: "XLM", tokenB: "USDC" },
+    payload: { amountIn: 100, amountOut: 100 * price, fee: 1, token_in: "XLM", token_out: "USDC" },
   };
 }
 
@@ -259,7 +259,7 @@ describe("RpcIngester events through the GraphQL API", () => {
       `{ poolStats(poolId: "${POOL}") { swapCount volume24h } }`,
     );
     assert.equal(data.poolStats[0].swapCount, 5);
-    assert.equal(data.poolStats[0].volume24h, 5000);
+    assert.equal(data.poolStats[0].volume24h, 4750);
   });
 
   it("alert firedAt is in seconds", async () => {
@@ -269,7 +269,7 @@ describe("RpcIngester events through the GraphQL API", () => {
       poolId: POOL,
       type: "swap",
       timestamp: systemClock(),
-      payload: { amountIn: 10, price: 1, tokenA: "A", tokenB: "B" },
+      payload: { amountIn: 10, amountOut: 10, token_in: "GC_IN", token_out: "GC_OUT" },
     });
     const data = await query<{ poolHealth: { alertsFired: { firedAt: number }[] } }>(
       `{ poolHealth(poolId: "${POOL}") { alertsFired { firedAt } } }`,

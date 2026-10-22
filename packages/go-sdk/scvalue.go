@@ -11,24 +11,32 @@ import (
 // the Soroban ScVal representation.
 var ErrScValue = errors.New("scval")
 
-// ScVal discriminants, from the Soroban XDR definition. Only the subset the AMM
-// contracts use is implemented.
+// ScVal discriminants follow SCValType in Stellar-contract.x. Keep the complete
+// sequence here even when a value is unsupported so later variants cannot drift.
 const (
-	scvBool          int32 = 0
-	scvVoid          int32 = 1
-	scvError         int32 = 2
-	scvU32           int32 = 3
-	scvI32           int32 = 4
-	scvU64           int32 = 5
-	scvI64           int32 = 6
-	scvU128          int32 = 9
-	scvI128          int32 = 10
-	scvBytes         int32 = 14
-	scvString        int32 = 15
-	scvSymbol        int32 = 16
-	scvVec           int32 = 17
-	scvMap           int32 = 18
-	scvAddress       int32 = 19
+	scvBool int32 = iota
+	scvVoid
+	scvError
+	scvU32
+	scvI32
+	scvU64
+	scvI64
+	scvTimepoint
+	scvDuration
+	scvU128
+	scvI128
+	scvU256
+	scvI256
+	scvBytes
+	scvString
+	scvSymbol
+	scvVec
+	scvMap
+	scvAddress
+	scvContractInstance
+	scvLedgerKeyContractInstance
+	scvLedgerKeyNonce
+
 	scoAccount       int32 = 0
 	scoContract      int32 = 1
 	scAddressAccount int32 = 0
@@ -348,6 +356,9 @@ func readScVal(r *xdrReader) (ScValue, error) {
 	case scvError:
 		// Error values are surfaced through DecodeContractError, not here.
 		return ScValue{}, fmt.Errorf("%w: value is a contract error", ErrScValue)
+	case scvTimepoint, scvDuration, scvU256, scvI256,
+		scvContractInstance, scvLedgerKeyContractInstance, scvLedgerKeyNonce:
+		return ScValue{}, fmt.Errorf("%w: unsupported type %d for decoding", ErrScValue, t)
 	default:
 		return ScValue{}, fmt.Errorf("%w: unsupported type %d for decoding", ErrScValue, t)
 	}

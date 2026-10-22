@@ -37,6 +37,8 @@ export interface RpcIngesterOptions {
    * back to DEFAULT_FEE_BPS, which is very likely wrong for that pool.
    */
   poolFeeBps?: Record<string, number>;
+  /** Canonical token order for each pool, used to orient CL swap events. */
+  poolTokens?: Record<string, { tokenA: string; tokenB: string }>;
 }
 
 /** Fallback swap fee, in basis points, for a pool not in `poolFeeBps`. */
@@ -79,6 +81,7 @@ interface GetEventsResponse {
  */
 const TOPIC_MAP: Record<string, PoolEventType> = {
   swap: "swap",
+  swap_out: "swap_out",
   add_liquidity: "add_liquidity",
   remove_liquidity: "remove_liquidity",
   rm_liq: "remove_liquidity",
@@ -87,6 +90,16 @@ const TOPIC_MAP: Record<string, PoolEventType> = {
   reward_distributed: "reward_distributed",
   fot_detected: "fot_detected",
   price_upd: "price_upd",
+  mint_pos: "mint_pos",
+  burn_pos: "burn_pos",
+  coll_fees: "coll_fees",
+  proposed: "governance",
+  voted: "governance",
+  executed: "governance",
+  cancelled: "governance",
+  staked: "staking",
+  unstaked: "staking",
+  claimed: "staking",
 };
 
 /**
@@ -130,6 +143,7 @@ export class RpcIngester {
       pollIntervalMs: 5000,
       startLedger: 0,
       poolFeeBps: {},
+      poolTokens: {},
       ...opts,
     };
     for (const contractId of this.opts.contractIds) {
@@ -308,16 +322,17 @@ export class RpcIngester {
       if (raw.inSuccessfulContractInvocation) {
         const event = this._decodeEvent(raw, contractId);
         if (event) {
-          await this.onEvent(event);
-          if (this.store) {
-            await this.store.setCursor({
-              contractId,
-              ledger: raw.ledger,
-              txHash: event.txHash,
-              eventIndex: event.eventIndex,
-              updatedAt: systemClock(),
-            });
-          }
+          const nextCursor = {
+            contractId,
+            ledger: raw.ledger,
+            txHash: event.txHash,
+            eventIndex: event.eventIndex,
+            updatedAt: systemClock(),
+          };
+          const inserted = this.store
+            ? await this.store.appendEventAndSetCursor(event, nextCursor)
+            : true;
+          if (inserted) await this.onEvent(event);
         }
         currentLedger = raw.ledger;
         this.contractLedgers.set(contractId, currentLedger);
@@ -447,6 +462,10 @@ export class RpcIngester {
     const payload: Record<string, unknown> = {};
 
     if (eventName === "swap") {
+      if (Array.isArray(rawPayload) && typeof rawPayload[0] === "boolean") {
+        this.mapClSwap(payload, rawPayload, contractId);
+        return payload;
+      }
       // topics[1] is trader (Address)
       if (topics.length > 1) {
         payload["trader"] = asStr(topics[1]);
@@ -460,9 +479,10 @@ export class RpcIngester {
         payload["token_out"] = asStr(rawPayload[2]);
         payload["amountOut"] = Number(rawPayload[3] ?? 0);
         payload["referrer"] = rawPayload[4] !== null && rawPayload[4] !== undefined ? asStr(rawPayload[4]) : null;
-        payload["price"] = Number(rawPayload[3] ?? 0) > 0 && Number(rawPayload[1] ?? 0) > 0 ? Number(rawPayload[3]) / Number(rawPayload[1]) : 0;
         const feeBps = this.opts.poolFeeBps[contractId] ?? DEFAULT_FEE_BPS;
         payload["fee"] = Math.round((Number(rawPayload[1] ?? 0) * feeBps) / 10_000);
+        payload["feeBps"] = feeBps;
+        payload["feeBpsSource"] = this.opts.poolFeeBps[contractId] === undefined ? "default" : "configured";
       }
     } else if (eventName === "add_liquidity") {
       // topics[1] is provider
@@ -483,11 +503,54 @@ export class RpcIngester {
         payload["amountA"] = Number(rawPayload[2] ?? 0);
         payload["amountB"] = Number(rawPayload[3] ?? 0);
       }
+    } else if (eventName === "mint_pos" || eventName === "burn_pos") {
+      if (topics.length > 1) payload["owner"] = asStr(topics[1]);
+      if (Array.isArray(rawPayload)) {
+        payload["lowerTick"] = Number(rawPayload[0] ?? 0);
+        payload["upperTick"] = Number(rawPayload[1] ?? 0);
+        payload["liquidity"] = Number(rawPayload[2] ?? 0);
+        payload["amountA"] = Number(rawPayload[3] ?? 0);
+        payload["amountB"] = Number(rawPayload[4] ?? 0);
+      }
+    } else if (eventName === "swap_out") {
+      this.mapClSwap(payload, rawPayload, contractId);
+    } else if (eventName === "coll_fees") {
+      if (topics.length > 1) payload["owner"] = asStr(topics[1]);
+      if (Array.isArray(rawPayload)) {
+        payload["lowerTick"] = Number(rawPayload[0] ?? 0);
+        payload["upperTick"] = Number(rawPayload[1] ?? 0);
+        payload["amountA"] = Number(rawPayload[2] ?? 0);
+        payload["amountB"] = Number(rawPayload[3] ?? 0);
+      }
     } else if (typeof rawPayload === "object" && rawPayload !== null) {
       Object.assign(payload, rawPayload);
     }
 
     return payload;
+  }
+
+  private mapClSwap(
+    payload: Record<string, unknown>,
+    rawPayload: unknown,
+    contractId: string,
+  ): void {
+    if (!Array.isArray(rawPayload)) return;
+    const tokens = this.opts.poolTokens[contractId];
+    const zeroForOne = Boolean(rawPayload[0]);
+    payload["amountIn"] = Number(rawPayload[1] ?? 0);
+    payload["amountOut"] = Number(rawPayload[2] ?? 0);
+    payload["sqrtPriceX96"] = asStr(rawPayload[3]);
+    payload["tick"] = Number(rawPayload[4] ?? 0);
+    if (tokens) {
+      payload["token_in"] = zeroForOne ? tokens.tokenA : tokens.tokenB;
+      payload["token_out"] = zeroForOne ? tokens.tokenB : tokens.tokenA;
+      payload["tokenA"] = tokens.tokenA;
+      payload["tokenB"] = tokens.tokenB;
+    }
+    const feeBps = this.opts.poolFeeBps[contractId] ?? DEFAULT_FEE_BPS;
+    payload["fee"] = Math.round((Number(rawPayload[1] ?? 0) * feeBps) / 10_000);
+    payload["feeBps"] = feeBps;
+    payload["feeBpsSource"] = this.opts.poolFeeBps[contractId] === undefined ? "default" : "configured";
   }
 
   private _sleep(ms: number): Promise<void> {

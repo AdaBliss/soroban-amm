@@ -7,9 +7,14 @@ export const typeDefs = `#graphql
     poolId: ID!
     tokenA: String!
     tokenB: String!
-    tvl: Float!
+    reserveA: Float!
+    reserveB: Float!
+    "USD TVL, or null until prices for both reserve assets are configured."
+    tvl: Float
     volume24h: Float!
     fees24h: Float!
+    feeBps: Int!
+    feeBpsSource: String!
     swapCount: Int!
     priceDeviationBps: Int!
   }
@@ -28,7 +33,9 @@ export const typeDefs = `#graphql
     poolId: ID!
     owner: String!
     shares: Float!
-    valueUsd: Float!
+    valueUsd: Float
+    lowerTick: Int
+    upperTick: Int
   }
 
   type PricePoint {
@@ -37,6 +44,7 @@ export const typeDefs = `#graphql
     timestamp: Float!
     price: Float!
     feeBps: Int!
+    feeBpsSource: String!
   }
 
   type PoolHealth {

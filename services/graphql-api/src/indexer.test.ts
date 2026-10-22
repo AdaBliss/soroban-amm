@@ -10,6 +10,7 @@ import {
   RETENTION_SECONDS,
   InvalidMetricError,
   InvalidThresholdError,
+  seedDemoData,
   type PoolEvent,
 } from "./indexer.js";
 import { asSeconds, type Seconds } from "./time.js";
@@ -23,7 +24,9 @@ function at(offsetSeconds: number): Seconds {
 }
 
 function makeIndexer() {
-  return new PoolIndexer(() => NOW);
+  return new PoolIndexer(() => NOW, {
+    p1: { tokenA: "XLM", tokenB: "USDC", tokenPrices: { XLM: 1, USDC: 1 } },
+  });
 }
 
 function swapEvent(
@@ -32,7 +35,7 @@ function swapEvent(
   return {
     type: "swap",
     timestamp: NOW,
-    payload: { amountIn: 500, fee: 5, price: 1.2, tokenA: "XLM", tokenB: "USDC" },
+    payload: { amountIn: 500, amountOut: 600, fee: 5, token_in: "XLM", token_out: "USDC" },
     ...overrides,
   };
 }
@@ -62,17 +65,17 @@ function removeLiquidityEvent(
 // ── Event indexing ────────────────────────────────────────────────────────
 
 describe("indexEvent", () => {
-  it("swap increments swapCount, volume24h, and fees24h", () => {
+  it("swap increments swapCount and accounts volume and fees in quote token", () => {
     const idx = makeIndexer();
     idx.indexEvent(swapEvent({ id: "s1", poolId: "p1" }));
     idx.indexEvent(
-      swapEvent({ id: "s2", poolId: "p1", payload: { amountIn: 300, fee: 3, price: 1.2, tokenA: "XLM", tokenB: "USDC" } }),
+      swapEvent({ id: "s2", poolId: "p1", payload: { amountIn: 300, amountOut: 360, fee: 3, token_in: "XLM", token_out: "USDC" } }),
     );
 
     const [stats] = idx.getPoolStats("p1");
     assert.equal(stats.swapCount, 2);
-    assert.equal(stats.volume24h, 800);
-    assert.equal(stats.fees24h, 8);
+    assert.equal(stats.volume24h, 960);
+    assert.equal(stats.fees24h, 9.6);
   });
 
   it("swap records price data into history", () => {
@@ -84,11 +87,13 @@ describe("indexEvent", () => {
     assert.equal(prices[0].price, 1.2);
   });
 
-  it("add_liquidity increases tvl", () => {
+  it("add_liquidity tracks reserves and prices TVL", () => {
     const idx = makeIndexer();
     idx.indexEvent(addLiquidityEvent({ id: "a1", poolId: "p1" }));
 
     const [stats] = idx.getPoolStats("p1");
+    assert.equal(stats.reserveA, 10_000);
+    assert.equal(stats.reserveB, 20_000);
     assert.equal(stats.tvl, 30_000);
   });
 
@@ -155,7 +160,7 @@ describe("health alerts", () => {
     });
 
     idx.indexEvent(
-      swapEvent({ id: "s1", poolId: "p1", payload: { amountIn: 500, fee: 5, price: 1.2, tokenA: "XLM", tokenB: "USDC" } }),
+      swapEvent({ id: "s1", poolId: "p1", payload: { amountIn: 500, amountOut: 600, fee: 5, token_in: "XLM", token_out: "USDC" } }),
     );
 
     const health = idx.getPoolHealth("p1");
@@ -163,7 +168,7 @@ describe("health alerts", () => {
     assert.equal(health.alertsFired.length, 1);
     assert.equal(health.alertsFired[0].metric, "volume24h");
     assert.equal(health.alertsFired[0].threshold, 100);
-    assert.equal(health.alertsFired[0].currentValue, 500);
+    assert.equal(health.alertsFired[0].currentValue, 600);
   });
 
   it("does not fire when the metric stays below the threshold", () => {
@@ -181,6 +186,67 @@ describe("health alerts", () => {
 
     const health = idx.getPoolHealth("p1");
     assert.equal(health!.alertsFired.length, 0);
+  });
+});
+
+describe("analytics correctness", () => {
+  it("keeps reciprocal swap directions at the same canonical price", () => {
+    const idx = makeIndexer();
+    idx.indexEvent(swapEvent({ id: "ab", poolId: "p1" }));
+    idx.indexEvent(swapEvent({
+      id: "ba",
+      poolId: "p1",
+      payload: { amountIn: 600, amountOut: 500, fee: 6, token_in: "USDC", token_out: "XLM" },
+    }));
+    assert.deepEqual(idx.getPriceHistory("p1").map((point) => point.price), [1.2, 1.2]);
+    assert.equal(idx.getPoolStats("p1")[0].priceDeviationBps, 0);
+  });
+
+  it("returns null TVL without a configured price source", () => {
+    const idx = new PoolIndexer(() => NOW);
+    idx.indexEvent(addLiquidityEvent({ id: "a1", poolId: "unpriced" }));
+    assert.equal(idx.getPoolStats("unpriced")[0].tvl, null);
+  });
+
+  it("does not apply the same event key twice", () => {
+    const idx = makeIndexer();
+    const event = swapEvent({ id: "same", poolId: "p1", ledger: 9, txHash: "tx", eventIndex: 1 });
+    idx.indexEvent(event);
+    idx.indexEvent({ ...event, id: "different-rpc-id" });
+    assert.equal(idx.getPoolStats("p1")[0].swapCount, 1);
+  });
+
+  it("drops swap volume and fees after the trailing 24-hour window", () => {
+    let now = NOW;
+    const idx = new PoolIndexer(() => now, {
+      p1: { tokenA: "XLM", tokenB: "USDC" },
+    });
+    idx.indexEvent(swapEvent({ id: "old", poolId: "p1", timestamp: at(-23 * 60 * 60) }));
+    assert.equal(idx.getPoolStats("p1")[0].volume24h, 600);
+    now = at(2 * 60 * 60);
+    assert.equal(idx.getPoolStats("p1")[0].volume24h, 0);
+    assert.equal(idx.getPoolStats("p1")[0].fees24h, 0);
+  });
+
+  it("derives AMM and concentrated-liquidity positions", () => {
+    const idx = makeIndexer();
+    idx.indexEvent(addLiquidityEvent({
+      id: "lp", poolId: "p1", payload: { amountA: 10, amountB: 20, shares: 5, provider: "alice" },
+    }));
+    idx.indexEvent({
+      id: "cl", poolId: "p1", type: "mint_pos", timestamp: NOW,
+      payload: { amountA: 4, amountB: 8, liquidity: 9, owner: "bob", lowerTick: -10, upperTick: 10 },
+    });
+    const positions = idx.getPositions();
+    assert.equal(positions.find((position) => position.owner === "alice")?.shares, 5);
+    assert.equal(positions.find((position) => position.owner === "bob")?.lowerTick, -10);
+  });
+
+  it("surfaces when the pool fee came from the explicit default", () => {
+    const idx = new PoolIndexer(() => NOW, { p1: { tokenA: "XLM", tokenB: "USDC" } });
+    idx.indexEvent(swapEvent({ id: "fee", poolId: "p1" }));
+    assert.equal(idx.getPoolStats("p1")[0].feeBpsSource, "default");
+    assert.equal(idx.getPriceHistory("p1")[0].feeBpsSource, "default");
   });
 });
 
@@ -306,5 +372,29 @@ describe("positions", () => {
     const alicePos = idx.getPositions("alice");
     assert.equal(alicePos.length, 1);
     assert.equal(alicePos[0].shares, 100);
+  });
+});
+
+describe("demo data", () => {
+  it("is opt-in and remains disabled in production", () => {
+    const previousSeed = process.env.SEED_DEMO_DATA;
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      delete process.env.SEED_DEMO_DATA;
+      const disabled = makeIndexer();
+      seedDemoData(disabled);
+      assert.equal(disabled.getEvents().length, 0);
+
+      process.env.SEED_DEMO_DATA = "true";
+      process.env.NODE_ENV = "production";
+      const production = makeIndexer();
+      seedDemoData(production);
+      assert.equal(production.getEvents().length, 0);
+    } finally {
+      if (previousSeed === undefined) delete process.env.SEED_DEMO_DATA;
+      else process.env.SEED_DEMO_DATA = previousSeed;
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 });

@@ -124,6 +124,7 @@ test("2. A real swap event fixture (AMM) decodes to a PoolEvent of type swap wit
   assert.strictEqual(result!.type, "swap");
   assert.strictEqual(result!.payload["amountIn"], 1000);
   assert.strictEqual(result!.payload["amountOut"], 950);
+  assert.strictEqual(result!.payload["feeBpsSource"], "default");
   assert.strictEqual(result!.txHash, "tx-abc");
 });
 
@@ -340,4 +341,39 @@ test("8. Malformed event topics or XDR gracefully handled", async () => {
 
   const res = internals(ingester)._decodeEvent(rawBad, "POOL_1");
   assert.strictEqual(res, null);
+});
+
+test("9. Event persistence and cursor advancement are atomic before indexing", async () => {
+  const { MemoryStore } = await import("../store/memory.js");
+  const store = new MemoryStore();
+  const originalFetch = global.fetch;
+  const fixture = encodeFixture("swap", 1, ["A", 10, "B", 9, null]);
+  const raw: SorobanRpcEvent = {
+    type: "contract", ledger: 500, ledgerClosedAt: new Date().toISOString(),
+    contractId: "POOL_1", id: "atomic", pagingToken: "500-0",
+    topic: fixture.topic, value: fixture.value,
+    inSuccessfulContractInvocation: true, txHash: "atomic-tx",
+  };
+  global.fetch = stubFetch(() => ({
+    ok: true,
+    json: async () => ({ jsonrpc: "2.0", id: "1", result: { events: [raw], latestLedger: 501 } }),
+  }));
+  let callbacks = 0;
+  try {
+    const ingester = new RpcIngester(
+      { rpcUrl: "https://rpc.test", contractIds: ["POOL_1"], startLedger: 499 },
+      async () => {
+        callbacks += 1;
+        assert.equal((await store.getRecentEvents(10)).length, 1);
+        assert.equal((await store.getCursor("POOL_1"))?.ledger, 500);
+      },
+      async () => {},
+      store,
+    );
+    await internals(ingester)._poll();
+    await internals(ingester)._poll();
+    assert.equal(callbacks, 1, "idempotent replay must not update computed state twice");
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

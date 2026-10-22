@@ -169,17 +169,17 @@ func TestScValWireFormat(t *testing.T) {
 		{"i128 minus one", I128(big.NewInt(-1)), "0000000a" + strings.Repeat("ff", 16)},
 		{"i128 max", I128(new(big.Int).Set(MaxI128)), "0000000a" + "7fffffffffffffff" + "ffffffffffffffff"},
 		{"i128 min", I128(new(big.Int).Set(MinI128)), "0000000a" + "8000000000000000" + "0000000000000000"},
-		{"bytes empty", Bytes(nil), "0000000e" + "00000000"},
-		{"bytes padded", Bytes([]byte{1, 2, 3, 4, 5}), "0000000e" + "00000005" + "0102030405000000"},
-		{"string empty", Str(""), "0000000f" + "00000000"},
-		{"string", Str("abc"), "0000000f" + "00000003" + "61626300"},
-		{"symbol", Symbol("swap"), "00000010" + "00000004" + "73776170"},
-		{"vec empty", Vec(), "00000011" + "00000001" + "00000000"},
-		{"vec", Vec(U32(7), Bool(true)), "00000011" + "00000001" + "00000002" + "00000003" + "00000007" + "00000000" + "00000001"},
-		{"map empty", Map(), "00000012" + "00000001" + "00000000"},
-		{"map", Map(ScMapEntry{Key: Symbol("a"), Val: U32(1)}), "00000012" + "00000001" + "00000001" + "00000010" + "00000001" + "61000000" + "00000003" + "00000001"},
-		{"account address", Addr(zeroAccount), "00000013" + "00000000" + "00000000" + zero32},
-		{"contract address", Addr(zeroContract), "00000013" + "00000001" + zero32},
+		{"bytes empty", Bytes(nil), "0000000d" + "00000000"},
+		{"bytes padded", Bytes([]byte{1, 2, 3, 4, 5}), "0000000d" + "00000005" + "0102030405000000"},
+		{"string empty", Str(""), "0000000e" + "00000000"},
+		{"string", Str("abc"), "0000000e" + "00000003" + "61626300"},
+		{"symbol", Symbol("swap"), "0000000f" + "00000004" + "73776170"},
+		{"vec empty", Vec(), "00000010" + "00000001" + "00000000"},
+		{"vec", Vec(U32(7), Bool(true)), "00000010" + "00000001" + "00000002" + "00000003" + "00000007" + "00000000" + "00000001"},
+		{"map empty", Map(), "00000011" + "00000001" + "00000000"},
+		{"map", Map(ScMapEntry{Key: Symbol("a"), Val: U32(1)}), "00000011" + "00000001" + "00000001" + "0000000f" + "00000001" + "61000000" + "00000003" + "00000001"},
+		{"account address", Addr(zeroAccount), "00000012" + "00000000" + "00000000" + zero32},
+		{"contract address", Addr(zeroContract), "00000012" + "00000001" + zero32},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -328,19 +328,19 @@ func TestDecodeScValRejects(t *testing.T) {
 		{"type only, bool body missing", "00000000", ErrXDR},
 		{"u64 body truncated", "00000005" + "00000000", ErrXDR},
 		{"i128 low limb missing", "0000000a" + "0000000000000000", ErrXDR},
-		{"bytes length beyond buffer", "0000000e" + "00000010" + "00000000", ErrXDR},
-		{"symbol missing padding", "00000010" + "00000001" + "61", ErrXDR},
-		{"vec count beyond buffer", "00000011" + "00000001" + "7fffffff", ErrXDR},
-		{"vec element truncated", "00000011" + "00000001" + "00000001" + "00000003", ErrXDR},
-		{"map value missing", "00000012" + "00000001" + "00000001" + "00000001", ErrXDR},
-		{"address kind missing", "00000013", ErrXDR},
-		{"account key truncated", "00000013" + "00000000" + "00000000" + strings.Repeat("00", 31), ErrXDR},
-		{"contract id truncated", "00000013" + "00000001" + strings.Repeat("00", 16), ErrXDR},
-		{"unknown address kind", "00000013" + "00000007" + zero32, ErrScValue},
+		{"bytes length beyond buffer", "0000000d" + "00000010" + "00000000", ErrXDR},
+		{"symbol missing padding", "0000000f" + "00000001" + "61", ErrXDR},
+		{"vec count beyond buffer", "00000010" + "00000001" + "7fffffff", ErrXDR},
+		{"vec element truncated", "00000010" + "00000001" + "00000001" + "00000003", ErrXDR},
+		{"map value missing", "00000011" + "00000001" + "00000001" + "00000001", ErrXDR},
+		{"address kind missing", "00000012", ErrXDR},
+		{"account key truncated", "00000012" + "00000000" + "00000000" + strings.Repeat("00", 31), ErrXDR},
+		{"contract id truncated", "00000012" + "00000001" + strings.Repeat("00", 16), ErrXDR},
+		{"unknown address kind", "00000012" + "00000007" + zero32, ErrScValue},
 		{"error value", "00000002" + "00000000" + "00000005", ErrScValue},
 		{"unsupported type", "00000007", ErrScValue},
 		{"negative type", "ffffffff", ErrScValue},
-		{"unknown type inside vec", "00000011" + "00000001" + "00000001" + "00000063", ErrScValue},
+		{"unknown type inside vec", "00000010" + "00000001" + "00000001" + "00000063", ErrScValue},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -363,8 +363,8 @@ func TestDecodeScValAbsentVecAndMapAreEmpty(t *testing.T) {
 		hex  string
 		typ  int32
 	}{
-		{"vec", "00000011" + "00000000", scvVec},
-		{"map", "00000012" + "00000000", scvMap},
+		{"vec", "00000010" + "00000000", scvVec},
+		{"map", "00000011" + "00000000", scvMap},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			buf, _ := hex.DecodeString(tc.hex)
@@ -382,7 +382,7 @@ func TestDecodeScValAbsentVecAndMapAreEmpty(t *testing.T) {
 func TestDecodeScValRejectsHugeLengthWithoutAllocating(t *testing.T) {
 	// A corrupt count must be rejected by the length guard, not by running out
 	// of memory trying to pre-size the slice.
-	for _, prefix := range []string{"00000011", "00000012"} {
+	for _, prefix := range []string{"00000010", "00000011"} {
 		buf, _ := hex.DecodeString(prefix + "00000001" + "ffffffff")
 		if _, err := DecodeScVal(buf); !errors.Is(err, ErrXDR) {
 			t.Fatalf("%s: expected ErrXDR, got %v", prefix, err)

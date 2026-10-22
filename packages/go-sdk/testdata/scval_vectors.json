@@ -1,0 +1,433 @@
+{
+  "generatedBy": "@stellar/stellar-sdk",
+  "vectors": [
+    {
+      "name": "bool_true",
+      "xdr": "AAAAAAAAAAE=",
+      "logical": {
+        "type": "bool",
+        "value": true
+      },
+      "unsupported": false
+    },
+    {
+      "name": "bool_false",
+      "xdr": "AAAAAAAAAAA=",
+      "logical": {
+        "type": "bool",
+        "value": false
+      },
+      "unsupported": false
+    },
+    {
+      "name": "void",
+      "xdr": "AAAAAQ==",
+      "logical": {
+        "type": "void",
+        "value": null
+      },
+      "unsupported": false
+    },
+    {
+      "name": "u32_max",
+      "xdr": "AAAAA/////8=",
+      "logical": {
+        "type": "u32",
+        "value": 4294967295
+      },
+      "unsupported": false
+    },
+    {
+      "name": "i32_min",
+      "xdr": "AAAABIAAAAA=",
+      "logical": {
+        "type": "i32",
+        "value": -2147483648
+      },
+      "unsupported": false
+    },
+    {
+      "name": "u64_max",
+      "xdr": "AAAABf//////////",
+      "logical": {
+        "type": "u64",
+        "value": "18446744073709551615"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "i64_min",
+      "xdr": "AAAABoAAAAAAAAAA",
+      "logical": {
+        "type": "i64",
+        "value": "-9223372036854775808"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "u128_zero",
+      "xdr": "AAAACQAAAAAAAAAAAAAAAAAAAAA=",
+      "logical": {
+        "type": "u128",
+        "value": "0"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "u128_max",
+      "xdr": "AAAACf////////////////////8=",
+      "logical": {
+        "type": "u128",
+        "value": "340282366920938463463374607431768211455"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "i128_negative",
+      "xdr": "AAAACv///////////////////9Y=",
+      "logical": {
+        "type": "i128",
+        "value": "-42"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "i128_min",
+      "xdr": "AAAACoAAAAAAAAAAAAAAAAAAAAA=",
+      "logical": {
+        "type": "i128",
+        "value": "-170141183460469231731687303715884105728"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "i128_max",
+      "xdr": "AAAACn////////////////////8=",
+      "logical": {
+        "type": "i128",
+        "value": "170141183460469231731687303715884105727"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "bytes_empty",
+      "xdr": "AAAADQAAAAA=",
+      "logical": {
+        "type": "bytes",
+        "value": ""
+      },
+      "unsupported": false
+    },
+    {
+      "name": "bytes_binary",
+      "xdr": "AAAADQAAAAMA/xAA",
+      "logical": {
+        "type": "bytes",
+        "value": "AP8Q"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "string",
+      "xdr": "AAAADgAAAAtzb3JvYmFuIGFtbQA=",
+      "logical": {
+        "type": "string",
+        "value": "soroban amm"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "symbol_long",
+      "xdr": "AAAADwAAACBhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ejAxMjM0NQ==",
+      "logical": {
+        "type": "symbol",
+        "value": "abcdefghijklmnopqrstuvwxyz012345"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "account_address",
+      "xdr": "AAAAEgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "logical": {
+        "type": "address",
+        "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "contract_address",
+      "xdr": "AAAAEgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+      "logical": {
+        "type": "address",
+        "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"
+      },
+      "unsupported": false
+    },
+    {
+      "name": "vec_empty",
+      "xdr": "AAAAEAAAAAEAAAAA",
+      "logical": {
+        "type": "vec",
+        "value": []
+      },
+      "unsupported": false
+    },
+    {
+      "name": "vec_nested",
+      "xdr": "AAAAEAAAAAEAAAACAAAAEAAAAAEAAAABAAAAAwAAAAEAAAAQAAAAAQAAAAA=",
+      "logical": {
+        "type": "vec",
+        "value": [
+          {
+            "type": "vec",
+            "value": [
+              {
+                "type": "u32",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "type": "vec",
+            "value": []
+          }
+        ]
+      },
+      "unsupported": false
+    },
+    {
+      "name": "map_empty",
+      "xdr": "AAAAEQAAAAEAAAAA",
+      "logical": {
+        "type": "map",
+        "value": []
+      },
+      "unsupported": false
+    },
+    {
+      "name": "map_nested",
+      "xdr": "AAAAEQAAAAEAAAABAAAADwAAAAVpdGVtcwAAAAAAABAAAAABAAAAAQAAABEAAAABAAAAAQAAAA8AAAAGYW1vdW50AAAAAAAKAAAAAAAAAAAAAAAAAAAACQ==",
+      "logical": {
+        "type": "map",
+        "value": [
+          {
+            "key": {
+              "type": "symbol",
+              "value": "items"
+            },
+            "value": {
+              "type": "vec",
+              "value": [
+                {
+                  "type": "map",
+                  "value": [
+                    {
+                      "key": {
+                        "type": "symbol",
+                        "value": "amount"
+                      },
+                      "value": {
+                        "type": "i128",
+                        "value": "9"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "unsupported": false
+    },
+    {
+      "name": "get_info",
+      "xdr": "AAAAEQAAAAEAAAALAAAADwAAAAVhZG1pbgAAAAAAABIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAdmZWVfYnBzAAAAAAoAAAAAAAAAAAAAAAAAAAAeAAAADwAAAA1mZWVfcmVjaXBpZW50AAAAAAAAEgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPAAAAEmZsYXNoX2xvYW5fZmVlX2JwcwAAAAAACgAAAAAAAAAAAAAAAAAAAAUAAAAPAAAADWxwX3JlYmF0ZV9icHMAAAAAAAAKAAAAAAAAAAAAAAAAAAAAAgAAAA8AAAAQcHJvdG9jb2xfZmVlX2JwcwAAAAoAAAAAAAAAAAAAAAAAAAADAAAADwAAAAlyZXNlcnZlX2EAAAAAAAAKAAAAAAAAAAAAAAAAAJiWgAAAAA8AAAAJcmVzZXJ2ZV9iAAAAAAAACgAAAAAAAAAAAAAAAAF9eEAAAAAPAAAAB3Rva2VuX2EAAAAAEgAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAAAHdG9rZW5fYgAAAAASAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8AAAAMdG90YWxfc2hhcmVzAAAACgAAAAAAAAAAAAAAAADk4cA=",
+      "logical": {
+        "type": "map",
+        "value": [
+          {
+            "key": {
+              "type": "symbol",
+              "value": "admin"
+            },
+            "value": {
+              "type": "address",
+              "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "fee_bps"
+            },
+            "value": {
+              "type": "i128",
+              "value": "30"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "fee_recipient"
+            },
+            "value": {
+              "type": "address",
+              "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "flash_loan_fee_bps"
+            },
+            "value": {
+              "type": "i128",
+              "value": "5"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "lp_rebate_bps"
+            },
+            "value": {
+              "type": "i128",
+              "value": "2"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "protocol_fee_bps"
+            },
+            "value": {
+              "type": "i128",
+              "value": "3"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "reserve_a"
+            },
+            "value": {
+              "type": "i128",
+              "value": "10000000"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "reserve_b"
+            },
+            "value": {
+              "type": "i128",
+              "value": "25000000"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "token_a"
+            },
+            "value": {
+              "type": "address",
+              "value": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "token_b"
+            },
+            "value": {
+              "type": "address",
+              "value": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "total_shares"
+            },
+            "value": {
+              "type": "i128",
+              "value": "15000000"
+            }
+          }
+        ]
+      },
+      "unsupported": false
+    },
+    {
+      "name": "simulate_swap",
+      "xdr": "AAAAEQAAAAEAAAAFAAAADwAAAAphbW91bnRfb3V0AAAAAAAKAAAAAAAAAAAAAAAAAA7gmAAAAA8AAAAPZWZmZWN0aXZlX3ByaWNlAAAAAAoAAAAAAAAAAAAAAAAAlMXwAAAADwAAAApmZWVfYW1vdW50AAAAAAAKAAAAAAAAAAAAAAAAAAALuAAAAA8AAAAQcHJpY2VfaW1wYWN0X2JwcwAAAAoAAAAAAAAAAAAAAAAAAAAZAAAADwAAAApzcG90X3ByaWNlAAAAAAAKAAAAAAAAAAAAAAAAAJiWgA==",
+      "logical": {
+        "type": "map",
+        "value": [
+          {
+            "key": {
+              "type": "symbol",
+              "value": "amount_out"
+            },
+            "value": {
+              "type": "i128",
+              "value": "975000"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "effective_price"
+            },
+            "value": {
+              "type": "i128",
+              "value": "9750000"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "fee_amount"
+            },
+            "value": {
+              "type": "i128",
+              "value": "3000"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "price_impact_bps"
+            },
+            "value": {
+              "type": "i128",
+              "value": "25"
+            }
+          },
+          {
+            "key": {
+              "type": "symbol",
+              "value": "spot_price"
+            },
+            "value": {
+              "type": "i128",
+              "value": "10000000"
+            }
+          }
+        ]
+      },
+      "unsupported": false
+    },
+    {
+      "name": "contract_error",
+      "xdr": "AAAAAgAAAAAAAAAH",
+      "logical": {
+        "type": "error",
+        "value": 7
+      },
+      "unsupported": true
+    }
+  ]
+}

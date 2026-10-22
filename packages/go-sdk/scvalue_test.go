@@ -183,6 +183,25 @@ func TestDecodeScValRejectsTruncatedBuffer(t *testing.T) {
 	}
 }
 
+func TestDecodeScValRejectsKnownUnsupportedTypes(t *testing.T) {
+	for _, typ := range []int32{
+		scvError,
+		scvTimepoint,
+		scvDuration,
+		scvU256,
+		scvI256,
+		scvContractInstance,
+		scvLedgerKeyContractInstance,
+		scvLedgerKeyNonce,
+	} {
+		var w xdrWriter
+		w.writeInt32(typ)
+		if _, err := DecodeScVal(w.bytes()); !errors.Is(err, ErrScValue) {
+			t.Fatalf("type %d: expected ErrScValue, got %v", typ, err)
+		}
+	}
+}
+
 func TestScValAccessors(t *testing.T) {
 	m := Map(
 		ScMapEntry{Key: Symbol("amount"), Val: I128(big.NewInt(7))},

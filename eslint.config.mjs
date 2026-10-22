@@ -48,6 +48,7 @@ export default defineConfig(
             "packages/sdk/scripts/*.mjs",
             "packages/ui-components/vitest.config.ts",
             "packages/ts-advanced-client/test/*.js",
+            "services/graphql-api/scripts/*.mjs",
           ],
         },
         tsconfigRootDir: import.meta.dirname,

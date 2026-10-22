@@ -3,8 +3,7 @@
  *
  * This implementation holds all data in JavaScript Maps and arrays.
  * It is fast but loses all data on process restart. It's ideal for tests
- * and development, but production deployments should use MemoryStore with
- * manual backups or migrate to the SQLiteStore.
+ * and development; production deployments should use SQLiteStore.
  */
 
 import type {
@@ -31,15 +30,25 @@ export class MemoryStore implements AnalyticsStore {
   // Track (ledger, txHash, eventIndex) for idempotency
   private eventKeys = new Set<string>();
 
-  async appendEvent(event: PoolEvent): Promise<void> {
+  async appendEvent(event: PoolEvent): Promise<boolean> {
     // Idempotency check: skip if event already exists
     const key = `${event.ledger}:${event.txHash}:${event.eventIndex}`;
     if (this.eventKeys.has(key)) {
-      return;
+      return false;
     }
 
     this.events.push(event);
     this.eventKeys.add(key);
+    return true;
+  }
+
+  async appendEventAndSetCursor(
+    event: PoolEvent,
+    cursor: IngestionCursor,
+  ): Promise<boolean> {
+    const inserted = await this.appendEvent(event);
+    await this.setCursor(cursor);
+    return inserted;
   }
 
   async queryEvents(
@@ -60,6 +69,12 @@ export class MemoryStore implements AnalyticsStore {
 
   async getRecentEvents(limit: number): Promise<PoolEvent[]> {
     return this.events.slice(-limit).reverse();
+  }
+
+  async getEventsSince(from: Seconds): Promise<PoolEvent[]> {
+    return this.events
+      .filter((event) => event.timestamp >= from)
+      .sort((a, b) => a.timestamp - b.timestamp || a.eventIndex - b.eventIndex);
   }
 
   async upsertPoolStats(stats: PoolStats): Promise<void> {
@@ -134,6 +149,15 @@ export class MemoryStore implements AnalyticsStore {
 
   async setCursor(cursor: IngestionCursor): Promise<void> {
     this.cursors.set(cursor.contractId, cursor);
+  }
+
+  async prune(before: Seconds): Promise<void> {
+    this.events = this.events.filter((event) => event.timestamp >= before);
+    this.eventKeys = new Set(
+      this.events.map((event) => `${event.ledger}:${event.txHash}:${event.eventIndex}`),
+    );
+    this.priceHistory = this.priceHistory.filter((point) => point.timestamp >= before);
+    this.firedAlerts = this.firedAlerts.filter((alert) => alert.firedAt >= before);
   }
 
   async close(): Promise<void> {

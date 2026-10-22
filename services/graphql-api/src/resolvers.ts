@@ -12,24 +12,38 @@ import {
   type AlertMetric,
 } from "./indexer.js";
 import { asSeconds } from "./time.js";
+import type { AnalyticsStore } from "./store/interface.js";
+import type { PoolIndexer } from "./indexer.js";
+
+export interface GraphQLContext {
+  [key: string]: unknown;
+  indexer: PoolIndexer;
+  store?: AnalyticsStore;
+}
+
+function activeIndexer(context?: Partial<GraphQLContext>): PoolIndexer {
+  return context?.indexer ?? defaultIndexer;
+}
 
 export const pubsub = new PubSub();
 
 export const resolvers = {
   Query: {
-    poolStats: (_: unknown, { poolId }: { poolId?: string }) =>
-      defaultIndexer.getPoolStats(poolId),
+    poolStats: (_: unknown, { poolId }: { poolId?: string }, context?: GraphQLContext) =>
+      activeIndexer(context).getPoolStats(poolId),
     poolEvents: (
       _: unknown,
       { poolId, limit }: { poolId?: string; limit?: number },
-    ) => defaultIndexer.getEvents(poolId, limit ?? 100),
-    positions: (_: unknown, { owner }: { owner?: string }) =>
-      defaultIndexer.getPositions(owner),
+      context?: GraphQLContext,
+    ) => activeIndexer(context).getEvents(poolId, limit ?? 100),
+    positions: (_: unknown, { owner }: { owner?: string }, context?: GraphQLContext) =>
+      activeIndexer(context).getPositions(owner),
     priceHistory: (
       _: unknown,
       { poolId, from, to }: { poolId: string; from?: number; to?: number },
+      context?: GraphQLContext,
     ) =>
-      defaultIndexer.getPriceHistory(
+      activeIndexer(context).getPriceHistory(
         poolId,
         from === undefined ? undefined : asSeconds(from),
         to === undefined ? undefined : asSeconds(to),
@@ -37,18 +51,19 @@ export const resolvers = {
     twal: (
       _: unknown,
       { poolId, windowSeconds }: { poolId: string; windowSeconds: number },
+      context?: GraphQLContext,
     ) => {
       if (windowSeconds <= 0) {
         throw new GraphQLError("windowSeconds must be greater than 0", {
           extensions: { code: "BAD_USER_INPUT" },
         });
       }
-      return defaultIndexer.getTwal(poolId, windowSeconds);
+      return activeIndexer(context).getTwal(poolId, windowSeconds);
     },
-    poolHealth: (_: unknown, { poolId }: { poolId: string }) =>
-      defaultIndexer.getPoolHealth(poolId),
-    alertConfigs: (_: unknown, { poolId }: { poolId?: string }) =>
-      defaultIndexer.getAlertConfigs(poolId),
+    poolHealth: (_: unknown, { poolId }: { poolId: string }, context?: GraphQLContext) =>
+      activeIndexer(context).getPoolHealth(poolId),
+    alertConfigs: (_: unknown, { poolId }: { poolId?: string }, context?: GraphQLContext) =>
+      activeIndexer(context).getAlertConfigs(poolId),
   },
   Mutation: {
     setAlertConfig: (
@@ -64,14 +79,18 @@ export const resolvers = {
         thresholdBps?: number;
         thresholdValue?: number;
       },
-    ): AlertConfig => {
+      context?: GraphQLContext,
+    ): AlertConfig | Promise<AlertConfig> => {
       try {
-        return defaultIndexer.setAlertConfig({
+        const config = activeIndexer(context).setAlertConfig({
           poolId,
           metric: metric as AlertMetric,
           thresholdBps,
           thresholdValue,
         });
+        return context?.store
+          ? context.store.setAlertConfig(config).then(() => config)
+          : config;
       } catch (error) {
         if (error instanceof InvalidMetricError || error instanceof InvalidThresholdError) {
           throw new GraphQLError(error.message, {
@@ -84,7 +103,13 @@ export const resolvers = {
     removeAlertConfig: (
       _: unknown,
       { poolId, metric }: { poolId: string; metric: string },
-    ): boolean => defaultIndexer.removeAlertConfig(poolId, metric),
+      context?: GraphQLContext,
+    ): boolean | Promise<boolean> => {
+      const removed = activeIndexer(context).removeAlertConfig(poolId, metric);
+      return context?.store
+        ? context.store.removeAlertConfig(poolId, metric).then((stored) => removed || stored)
+        : removed;
+    },
   },
   PoolEvent: {
     payload: (parent: { payload: Record<string, unknown> }) =>

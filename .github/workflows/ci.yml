@@ -140,6 +140,15 @@ jobs:
                   # The SDK has no third-party dependencies, so there is no go.sum to
                   # key a module cache on.
                   cache: false
+            - name: Setup Node for reference vectors
+              uses: actions/setup-node@v7
+              with:
+                  node-version-file: .nvmrc
+            - name: Check ScVal vectors against Stellar SDK
+              run: |
+                  npm ci --ignore-scripts --prefix ../../services/graphql-api
+                  node testdata/gen.mjs
+                  git diff --exit-code -- testdata/scval_vectors.json
             - name: Format check
               run: |
                   unformatted=$(gofmt -l .)
