@@ -4,44 +4,88 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Version tag (must have a matching section in CHANGELOG.md)
+        required: true
+        type: string
+      dry_run:
+        description: Run all gates and the testnet smoke test without creating or publishing a release
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   release:
-    name: Build and publish contract artifacts
+    name: Gate, build, smoke test and release contracts
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      RELEASE_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # `Update changelog` walks the tag history to build the release notes,
-          # so the default depth-1 checkout is not enough.
           fetch-depth: 0
-      # Channel and target come from rust-toolchain.toml, so a release is built
-      # with the same toolchain CI tested the commit on.
-      - name: Setup Rust
+
+      - name: Install pinned Rust toolchain
         run: rustup show
-      # The list of crates excluded from the wasm build lives in
-      # scripts/build_workspace.sh, which is shared with .github/workflows/ci.yml
-      # and the Makefile. Change the exclusions there, not here.
-      - name: Build contracts
+
+      # Use the same compile, test, lint, format, docs and ABI/error-doc gates
+      # as CI. In particular, a tag is never trusted to imply a green CI run.
+      - name: Build deployable contracts with the lockfile
         run: bash scripts/build_workspace.sh
-      # Report-only: unoptimized artifacts are reliably larger than what
-      # actually gets deployed (`stellar contract optimize` strips ~15-20%
-      # on a contract like concentrated_liquidity), so failing the release on
-      # this number would reject contracts that fit comfortably once
-      # optimized. The real enforcement is the optimized-artifact check below.
-      - name: Check contract sizes (unoptimized)
-        run: bash scripts/size_report.sh
-      # Same version as the Dockerfile, README.md and smoke-test.yml, installed
-      # the same way smoke-test.yml does. Building it with `cargo install`
-      # here compiled the CLI under rust-toolchain.toml, where the 23.0.0 pin
-      # locked an ethnum that no longer compiles (1.5.0), and needs system
-      # headers (libdbus, libudev) the runner is not guaranteed to have.
+
+      - name: Check deployable artifact set
+        run: bash scripts/release_manifest.sh check-artifacts target/wasm32v1-none/release
+
+      - name: Run workspace tests
+        run: cargo test --locked --workspace --exclude amm_fuzz
+
+      - name: Run upgrade integration tests
+        run: cargo test --locked -p integration_tests upgrade
+
+      - name: Run hot-path benchmarks
+        run: cargo run --locked -p benches -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --exclude amm_fuzz -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Rust documentation check
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --workspace --exclude amm_fuzz
+
+      - name: Error documentation check
+        run: make check-docs
+
+      - name: Storage key check
+        run: make check-storage-keys
+
+      - name: Deploy script coverage check
+        run: make check-deploy-scripts
+
       - name: Install Stellar CLI
         uses: stellar/stellar-cli@v27.1.0
-      - name: Optimize WASM artifacts
+
+      - name: Confirm Stellar CLI pin
+        run: test "$(cat .stellar-version)" = "27.1.0"
+
+      - name: ABI check
+        run: bash scripts/check_abi.sh
+
+      - name: Check contract sizes (unoptimized)
+        run: bash scripts/size_report.sh
+
+      - name: Optimize contract WASM
         shell: bash
         run: |
           set -euo pipefail
@@ -49,28 +93,160 @@ jobs:
           while IFS= read -r wasm; do
             name=$(basename "$wasm")
             stellar contract optimize --wasm "$wasm" --wasm-out "release-artifacts/$name"
-          done < <(find target/wasm32v1-none/release -maxdepth 1 -name '*.wasm' -type f | sort)
-      - name: Check contract sizes (optimized, network cap)
+          done < <(find target/wasm32v1-none/release -maxdepth 1 -type f -name '*.wasm' | sort)
+
+      - name: Check exact release artifact set
+        run: bash scripts/release_manifest.sh check-strict-artifacts release-artifacts
+
+      - name: Check contract sizes (optimized)
         run: WASM_DIR=release-artifacts bash scripts/size_report.sh --fail-on-limit
-      - name: Generate checksums
-        working-directory: release-artifacts
-        run: sha256sum *.wasm > sha256sums.txt
-      - name: Update changelog
+
+      - name: Generate checksums and manifest
         shell: bash
         run: |
           set -euo pipefail
-          previous=$(git tag --sort=-creatordate | sed -n '2p' || true)
-          range="${previous:+$previous..}HEAD"
-          {
-            echo "## ${GITHUB_REF_NAME} (${GITHUB_SHA:0:12})"
-            git log --pretty='- %s' $range
-            echo
-            cat CHANGELOG.md 2>/dev/null || true
-          } > CHANGELOG.md.tmp
-          mv CHANGELOG.md.tmp CHANGELOG.md
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
+          bash scripts/release_manifest.sh write-checksums release-artifacts
+          rust_toolchain="$(rustup show active-toolchain | awk '{print $1}')"
+          stellar_version="$(stellar --version | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+\.[0-9]+).*$/\1/')"
+          bash scripts/release_manifest.sh write-manifest release-artifacts \
+            "$RELEASE_COMMIT" "$RELEASE_TAG" "$rust_toolchain" "$stellar_version"
+          bash scripts/release_manifest.sh check-release-assets release-artifacts
+          (cd release-artifacts && sha256sum -c sha256sums.txt)
+
+      - name: Test release artifact scripts
+        run: bash scripts/release_manifest.test.sh
+
+      - name: Generate notes for this changelog section
+        shell: bash
+        run: |
+          python3 - "$RELEASE_TAG" CHANGELOG.md release-notes.md <<'PY'
+          import re, sys
+          tag, source, destination = sys.argv[1:]
+          text = open(source, encoding="utf-8").read()
+          version = tag.removeprefix("v")
+          headings = list(re.finditer(r"^## .*$", text, re.M))
+          start = None
+          end = len(text)
+          for i, match in enumerate(headings):
+              heading = match.group(0)
+              if re.match(rf"^## \[?(?:{re.escape(tag)}|{re.escape(version)})\]?(?:\s|$)", heading):
+                  start = match.start()
+                  if i + 1 < len(headings):
+                      end = headings[i + 1].start()
+                  break
+          if start is None:
+              raise SystemExit(f"CHANGELOG.md has no release section for {tag}; add it in the release PR")
+          notes = text[start:end].strip()
+          if not notes:
+              raise SystemExit(f"CHANGELOG.md release section for {tag} is empty")
+          open(destination, "w", encoding="utf-8").write(notes + "\n")
+          PY
+
+      - name: Ensure the commit is eligible for release
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9][A-Za-z0-9._-]*$ ]] || {
+            echo "Release tag must start with v and a version number: $RELEASE_TAG" >&2
+            exit 1
+          }
+          git fetch origin main
+          git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main || {
+            echo "Release commit $RELEASE_COMMIT is not reachable from main" >&2
+            exit 1
+          }
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+            [[ "$tagged_commit" == "$RELEASE_COMMIT" ]] || {
+              echo "Tag $RELEASE_TAG does not point to $RELEASE_COMMIT" >&2
+              exit 1
+            }
+          elif [[ "$DRY_RUN" != "true" ]]; then
+            echo "Tag $RELEASE_TAG must exist before a non-dry-run release" >&2
+            exit 1
+          fi
+
+      - name: Attest release WASM provenance
+        uses: actions/attest-build-provenance@v4
         with:
-          generate_release_notes: true
-          body_path: CHANGELOG.md
-          files: release-artifacts/*
+          subject-path: release-artifacts/*.wasm
+
+      - name: Create draft release with artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' >/dev/null 2>&1; then
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "A published release already exists for $RELEASE_TAG" >&2
+              exit 1
+            fi
+            gh release delete "$RELEASE_TAG" --yes
+          fi
+          gh release create "$RELEASE_TAG" release-artifacts/* \
+            --draft --target "$RELEASE_COMMIT" \
+            --title "$RELEASE_TAG" --notes-file release-notes.md
+
+      - name: Download and verify draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --dir draft-assets
+          (cd draft-assets && sha256sum -c sha256sums.txt)
+
+      - name: Install smoke test identity
+        env:
+          STELLAR_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
+          SOURCE_ACCOUNT: ci-release-smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$STELLAR_SECRET_KEY" ]]; then
+            printf '%s\n' "$STELLAR_SECRET_KEY" | stellar keys add "$SOURCE_ACCOUNT" --secret-key
+          else
+            stellar keys generate "$SOURCE_ACCOUNT"
+          fi
+
+      - name: Smoke test the release artifacts on testnet
+        env:
+          STELLAR_NETWORK: testnet
+          SOURCE_ACCOUNT: ci-release-smoke
+          DEPLOY_ENV: ${{ runner.temp }}/soroban-amm-release.env
+          GOVERNANCE_SKIP_EXECUTE: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp draft-assets/*.wasm target/wasm32v1-none/release/
+          bash scripts/e2e/preflight.sh
+          bash scripts/e2e.sh
+
+      - name: Publish successful release
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+
+      - name: Upload dry-run artifacts and notes
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dry-run-${{ env.RELEASE_TAG }}
+          path: |
+            release-artifacts/*
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize dry run
+        if: env.DRY_RUN == 'true'
+        run: |
+          {
+            echo "## Release dry run passed"
+            echo
+            echo "Tag: \`$RELEASE_TAG\`  "
+            echo "Commit: \`$RELEASE_COMMIT\`  "
+            echo "Artifacts: see the `release-dry-run-$RELEASE_TAG` workflow artifact."
+            echo "A draft release was created and smoke tested; it remains unpublished."
+          } >> "$GITHUB_STEP_SUMMARY"
