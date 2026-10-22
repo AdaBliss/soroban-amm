@@ -206,11 +206,18 @@ assert_not_contains() {
 #   sees the old balance. The retry waits a ledger first. A genuine failure
 #   fails again; expect_fail turns this off (E2E_SIM_RETRY=0) so negative
 #   checks don't pay for the wait.
+#
+# - A transaction that simulated fine can still fail when it is applied with
+#   `ResourceLimitExceeded`. It hit a different swap in each of two consecutive
+#   smoke runs, so it is intermittent rather than tied to one call. A failed
+#   transaction changes no state, so repeating it is safe. The retry
+#   re-simulates and asks for extra instruction headroom.
 invoke_as() {
   local account="$1"
   local contract_id="$2"
   shift 2
   local err out rc attempt
+  local -a leeway=()
   err=$(mktemp)
   for attempt in 1 2; do
     rc=0
@@ -218,6 +225,7 @@ invoke_as() {
       --id "$contract_id" \
       --network "$NETWORK" \
       --source "$account" \
+      ${leeway[@]+"${leeway[@]}"} \
       -- "$@" 2>"$err") || rc=$?
     cat "$err" >&2
     if [[ "$rc" -eq 0 || "$attempt" -eq 2 ]]; then
@@ -225,6 +233,10 @@ invoke_as() {
     fi
     if [[ "${E2E_SIM_RETRY:-1}" == "1" ]] && grep -q 'transaction simulation failed' "$err"; then
       printf '[retry] %s simulation failed; waiting a ledger in case the RPC node lags, then retrying\n' "$1" >&2
+      sleep 6
+    elif [[ "${E2E_SIM_RETRY:-1}" == "1" ]] && grep -q 'ResourceLimitExceeded' "$err"; then
+      printf '[retry] %s: transaction exceeded its resource limits when applied (it changed no state); re-simulating with extra instruction headroom\n' "$1" >&2
+      leeway=(--instruction-leeway 5000000)
       sleep 6
     elif grep -q 'Account not found' "$err"; then
       # Rejected before submission, so repeating it cannot apply twice.
@@ -429,6 +441,17 @@ pool_token() {
 }
 
 # balance_of TOKEN ADDRESS — token balance as an integer.
+# e2e_wait_until UNIX_TS — sleep until the wall clock reaches UNIX_TS (no-op if
+# it already has). Campaign windows are measured in ledger time, which tracks
+# the wall clock closely enough for waits of this size.
+e2e_wait_until() {
+  local target="$1" now
+  now=$(date +%s)
+  if (( target > now )); then
+    sleep $(( target - now ))
+  fi
+}
+
 balance_of() {
   invoke "$1" balance --id "$2" | parse_i128
 }
