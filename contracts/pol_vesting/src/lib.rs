@@ -6,9 +6,26 @@
 
 #![no_std]
 
+#[cfg(test)]
+mod vesting_hardening_test;
+
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
 };
+
+/// The part of the LP token interface this contract reads. An LP token is
+/// minted and administered by the AMM pool that issued it.
+#[soroban_sdk::contractclient(name = "LpTokenClient")]
+pub trait LpTokenInterface {
+    fn admin(env: Env) -> Address;
+}
+
+// Export compiled WASM for tests/dev usage when the `testutils` feature is enabled.
+#[cfg(feature = "testutils")]
+pub const WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/wasm32v1-none/release/pol_vesting.wasm"
+));
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
@@ -29,11 +46,13 @@ pub enum VestingError {
     InsufficientFunding = 11,
     /// A beneficiary already holds the maximum number of live schedules.
     TooManySchedules = 12,
+    /// `lp_token` is not an LP token administered by `pool`, or is not an LP
+    /// token at all.
+    LpTokenMismatch = 13,
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const MIN_TTL: u32 = 241_920; // ~14 days (at 5s per ledger)
 const BUMP_TO: u32 = 3_110_400; // ~180 days (at 5s per ledger)
 
 /// Maximum number of live schedules a single beneficiary may hold. Bounds the
@@ -107,6 +126,36 @@ impl PolVestingContract {
             .instance()
             .set(&DataKey::Governance, &governance);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
+        // `initialize` deliberately does not require auth: a deployment script
+        // reads the stored addresses back and aborts when they differ from the
+        // intended ones. The event lets indexers see the configuration too.
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "initialized"),),
+            (governance, treasury)
+        );
+        Ok(())
+    }
+
+    /// Replace this contract's WASM. Governance only.
+    ///
+    /// Schedules, committed balances and the governance and treasury addresses
+    /// are storage the upgrade does not touch, so live schedules keep vesting.
+    pub fn upgrade(
+        env: Env,
+        governance: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), VestingError> {
+        Self::extend_ttl(&env);
+        governance.require_auth();
+        Self::require_governance(&env, &governance)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "upgraded"),),
+            (new_wasm_hash,)
+        );
         Ok(())
     }
 
@@ -285,6 +334,17 @@ impl PolVestingContract {
             return Err(VestingError::InvalidSchedule);
         }
 
+        // Only the pool that issued `lp_token` may be recorded against it. A
+        // mistyped pair would otherwise create a schedule for a token the pool
+        // never minted, and nothing would notice until release.
+        let lp_admin = LpTokenClient::new(&env, &lp_token)
+            .try_admin()
+            .ok()
+            .and_then(|r| r.ok());
+        if lp_admin != Some(pool.clone()) {
+            return Err(VestingError::LpTokenMismatch);
+        }
+
         // A beneficiary may only accumulate a bounded number of live schedules.
         // Ids come from a per-beneficiary counter, so the cap is measured on the
         // live id list rather than on the (monotonically rising) counter.
@@ -330,15 +390,15 @@ impl PolVestingContract {
             revoked: false,
         };
         env.storage().persistent().set(&key, &schedule);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, MIN_TTL, BUMP_TO);
+        Self::bump_vesting(&env, &key, end_ledger);
         env.storage()
             .persistent()
             .set(&next_id_key, &(schedule_id + 1));
-        env.storage()
-            .persistent()
-            .extend_ttl(&next_id_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &next_id_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
 
         // Record the commitment and append the schedule to the beneficiary's
         // live-id list, so the exact set of schedules can be enumerated later.
@@ -346,14 +406,18 @@ impl PolVestingContract {
         env.storage()
             .persistent()
             .set(&committed_key, &(committed + total));
-        env.storage()
-            .persistent()
-            .extend_ttl(&committed_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &committed_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
         schedule_ids.push_back(schedule_id);
         env.storage().persistent().set(&list_key, &schedule_ids);
-        env.storage()
-            .persistent()
-            .extend_ttl(&list_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &list_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
 
         soroban_amm_sdk::emit_versioned_event!(
             &env,
@@ -382,9 +446,7 @@ impl PolVestingContract {
             .get(&key)
             .ok_or(VestingError::VestingNotFound)?;
 
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, MIN_TTL, BUMP_TO);
+        Self::bump_vesting(&env, &key, schedule.end_ledger);
 
         if schedule.beneficiary != beneficiary {
             return Err(VestingError::NotBeneficiary);
@@ -417,9 +479,11 @@ impl PolVestingContract {
         env.storage()
             .persistent()
             .set(&committed_key, &new_committed);
-        env.storage()
-            .persistent()
-            .extend_ttl(&committed_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &committed_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
 
         token::Client::new(&env, &schedule.lp_token).transfer(
             &env.current_contract_address(),
@@ -442,10 +506,15 @@ impl PolVestingContract {
         schedule_id: u32,
     ) -> Result<PolVesting, VestingError> {
         Self::extend_ttl(&env);
-        env.storage()
+        let key = DataKey::Vesting(beneficiary, schedule_id);
+        let schedule: PolVesting = env
+            .storage()
             .persistent()
-            .get(&DataKey::Vesting(beneficiary, schedule_id))
-            .ok_or(VestingError::VestingNotFound)
+            .get(&key)
+            .ok_or(VestingError::VestingNotFound)?;
+        // A dashboard that only reads a schedule must still keep it alive.
+        Self::bump_schedule(&env, &key, &schedule);
+        Ok(schedule)
     }
 
     /// Total LP tokens currently committed to live schedules for `lp_token`.
@@ -467,11 +536,13 @@ impl PolVestingContract {
         schedule_id: u32,
     ) -> Result<i128, VestingError> {
         Self::extend_ttl(&env);
+        let key = DataKey::Vesting(beneficiary, schedule_id);
         let schedule: PolVesting = env
             .storage()
             .persistent()
-            .get(&DataKey::Vesting(beneficiary, schedule_id))
+            .get(&key)
             .ok_or(VestingError::VestingNotFound)?;
+        Self::bump_schedule(&env, &key, &schedule);
         Ok(Self::vested_at(&schedule, env.ledger().sequence()))
     }
 
@@ -485,11 +556,13 @@ impl PolVestingContract {
         schedule_id: u32,
     ) -> Result<i128, VestingError> {
         Self::extend_ttl(&env);
+        let key = DataKey::Vesting(beneficiary, schedule_id);
         let schedule: PolVesting = env
             .storage()
             .persistent()
-            .get(&DataKey::Vesting(beneficiary, schedule_id))
+            .get(&key)
             .ok_or(VestingError::VestingNotFound)?;
+        Self::bump_schedule(&env, &key, &schedule);
         let vested = Self::vested_at(&schedule, env.ledger().sequence());
         Ok((vested - schedule.released).max(0))
     }
@@ -504,9 +577,11 @@ impl PolVestingContract {
             .get(&key)
             .unwrap_or(Vec::new(&env));
         if env.storage().persistent().has(&key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, MIN_TTL, BUMP_TO);
+            env.storage().persistent().extend_ttl(
+                &key,
+                env.storage().max_ttl() - 1,
+                env.storage().max_ttl(),
+            );
         }
         ids.len()
     }
@@ -530,9 +605,11 @@ impl PolVestingContract {
             .get(&list_key)
             .unwrap_or(Vec::new(&env));
         if env.storage().persistent().has(&list_key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&list_key, MIN_TTL, BUMP_TO);
+            env.storage().persistent().extend_ttl(
+                &list_key,
+                env.storage().max_ttl() - 1,
+                env.storage().max_ttl(),
+            );
         }
 
         let mut schedules: Vec<PolVesting> = Vec::new(&env);
@@ -582,9 +659,10 @@ impl PolVestingContract {
             return Err(VestingError::InvalidSchedule);
         }
 
-        // Validate the destination before mutating anything: returning `Err`
-        // does not roll storage back, so a rejected move must leave the old
-        // schedule and both id lists untouched.
+        // Validate the destination before mutating anything. Returning `Err`
+        // reverts the whole invocation, so a rejected move leaves the old
+        // schedule and both id lists untouched. The checks still run first, so
+        // the function reads in the order it can fail.
         let new_list_key = DataKey::SchedulesOf(new_beneficiary.clone());
         let new_ids: Vec<u32> = env
             .storage()
@@ -609,15 +687,15 @@ impl PolVestingContract {
         schedule.beneficiary = new_beneficiary.clone();
 
         env.storage().persistent().set(&new_key, &schedule);
-        env.storage()
-            .persistent()
-            .extend_ttl(&new_key, MIN_TTL, BUMP_TO);
+        Self::bump_vesting(&env, &new_key, schedule.end_ledger);
         env.storage()
             .persistent()
             .set(&next_id_key, &(new_schedule_id + 1));
-        env.storage()
-            .persistent()
-            .extend_ttl(&next_id_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &next_id_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
 
         // Re-read the destination list: when source and destination are the same
         // beneficiary, `remove_schedule_id` above just changed it, so appending
@@ -629,9 +707,11 @@ impl PolVestingContract {
             .unwrap_or(Vec::new(&env));
         dest_ids.push_back(new_schedule_id);
         env.storage().persistent().set(&new_list_key, &dest_ids);
-        env.storage()
-            .persistent()
-            .extend_ttl(&new_list_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &new_list_key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
 
         soroban_amm_sdk::emit_versioned_event!(
             &env,
@@ -670,9 +750,7 @@ impl PolVestingContract {
             return Err(VestingError::InvalidSchedule);
         }
 
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, MIN_TTL, BUMP_TO);
+        Self::bump_vesting(&env, &key, schedule.end_ledger);
 
         let current_ledger = env.ledger().sequence();
         let vested = Self::vested_at(&schedule, current_ledger);
@@ -702,9 +780,11 @@ impl PolVestingContract {
             env.storage()
                 .persistent()
                 .set(&committed_key, &new_committed);
-            env.storage()
-                .persistent()
-                .extend_ttl(&committed_key, MIN_TTL, BUMP_TO);
+            env.storage().persistent().extend_ttl(
+                &committed_key,
+                env.storage().max_ttl() - 1,
+                env.storage().max_ttl(),
+            );
         }
 
         schedule.total = vested;
@@ -734,15 +814,53 @@ impl PolVestingContract {
     /// unreachable and cannot release vested tokens until it is restored
     /// (issue #908).
     ///
-    /// Reuses the module-level `MIN_TTL` / `BUMP_TO` already applied to the
-    /// persistent schedule entries, so instance and persistent state age at one
-    /// horizon. At the ~5s/ledger Stellar cadence:
-    /// - `MIN_TTL` = 241_920 ledgers ≈ 14 days: only rewrite when less than two
-    ///   weeks of life remains.
-    /// - `BUMP_TO` = 3_110_400 ledgers ≈ 180 days: renew toward the maximum
-    ///   persistent rent window, so one call keeps the contract live for months.
+    /// The instance is the contract itself, so it must outlive the longest
+    /// schedule it holds, not only the 180-day `BUMP_TO` window the schedule
+    /// entries are first written with. It is refreshed to the network's maximum
+    /// entry TTL on every call, not only once it is close to expiry, so a
+    /// read-only poll keeps the contract reachable. At the ~5s/ledger cadence,
+    /// the maximum is the most a single call can buy.
     fn extend_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(MIN_TTL, BUMP_TO);
+        let max_ttl = env.storage().max_ttl();
+        env.storage()
+            .instance()
+            .extend_ttl(max_ttl.saturating_sub(1), max_ttl);
+    }
+
+    /// Bump a `Vesting` entry so it stays readable until `end_ledger` plus a
+    /// claim window of `BUMP_TO` ledgers.
+    ///
+    /// `BUMP_TO` alone (about 180 days) is shorter than a long schedule, so a
+    /// schedule that ends later would archive before it vests and `release`
+    /// would need a restore transaction first. The extension is clamped to the
+    /// network's maximum entry TTL.
+    ///
+    /// The threshold sits just below the target, so every call refreshes the
+    /// entry to the full horizon. With a short threshold, a read would
+    /// only extend in the last two weeks of life, and a schedule that outlives
+    /// the network maximum would archive while nothing touched it. A read-only
+    /// poll then keeps it alive, at the cost of a TTL write on each read.
+    /// Bump a schedule for a read: the entry itself and the committed total for
+    /// its token, which `release` also needs. A read that bumped only the entry
+    /// would leave `release` to find the committed total archived.
+    fn bump_schedule(env: &Env, key: &DataKey, schedule: &PolVesting) {
+        Self::bump_vesting(env, key, schedule.end_ledger);
+        let committed = DataKey::Committed(schedule.lp_token.clone());
+        env.storage().persistent().extend_ttl(
+            &committed,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
+    }
+
+    fn bump_vesting(env: &Env, key: &DataKey, end_ledger: u32) {
+        let remaining = end_ledger.saturating_sub(env.ledger().sequence());
+        let extend_to = remaining
+            .saturating_add(BUMP_TO)
+            .min(env.storage().max_ttl());
+        env.storage()
+            .persistent()
+            .extend_ttl(key, extend_to.saturating_sub(1), extend_to);
     }
 
     fn require_governance(env: &Env, caller: &Address) -> Result<(), VestingError> {
@@ -765,9 +883,11 @@ impl PolVestingContract {
         let key = DataKey::Committed(lp_token.clone());
         match env.storage().persistent().get::<DataKey, i128>(&key) {
             Some(committed) => {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&key, MIN_TTL, BUMP_TO);
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    env.storage().max_ttl() - 1,
+                    env.storage().max_ttl(),
+                );
                 committed
             }
             None => 0,
@@ -790,9 +910,11 @@ impl PolVestingContract {
             }
         }
         env.storage().persistent().set(&key, &kept);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().extend_ttl(
+            &key,
+            env.storage().max_ttl() - 1,
+            env.storage().max_ttl(),
+        );
     }
 
     /// Linear vesting between `cliff_ledger` and `end_ledger`; 0 before the
@@ -857,9 +979,11 @@ mod tests {
         let beneficiary = Address::generate(&env);
         let pool = Address::generate(&env);
 
-        // Use the built-in Stellar asset contract as a SEP-41 token.
+        // Use the built-in Stellar asset contract as a SEP-41 token. The pool is
+        // its admin, as an AMM pool is for the LP token it issues, which is what
+        // `create_vesting` checks.
         let lp_token = env
-            .register_stellar_asset_contract_v2(governance.clone())
+            .register_stellar_asset_contract_v2(pool.clone())
             .address();
 
         let contract_id = env.register_contract(None, PolVestingContract);
@@ -1377,9 +1501,12 @@ mod tests {
     }
 
     fn lower_instance_ttl_below_min(s: &Setup) {
+        // About 14 days at 5 s per ledger: the instance is refreshed below this.
+        const MIN_TTL: u32 = 241_920;
+        let max_ttl = s.env.storage().max_ttl();
         s.env
             .ledger()
-            .with_mut(|l| l.sequence_number += BUMP_TO - MIN_TTL + 1);
+            .with_mut(|l| l.sequence_number += max_ttl - MIN_TTL + 1);
         let ttl = instance_ttl(s);
         assert!(
             ttl < MIN_TTL,
@@ -1389,9 +1516,10 @@ mod tests {
 
     fn assert_instance_ttl_bumped(s: &Setup) {
         let ttl = instance_ttl(s);
+        let max_ttl = s.env.storage().max_ttl();
         assert!(
-            ttl >= BUMP_TO - 1,
-            "instance TTL {ttl} should be bumped toward BUMP_TO"
+            ttl >= max_ttl - 1,
+            "instance TTL {ttl} should be bumped toward the network maximum {max_ttl}"
         );
     }
 
@@ -1684,14 +1812,25 @@ mod tests {
     fn test_committed_is_tracked_per_lp_token() {
         let s = setup_funded(1_000_000);
         let client = PolVestingContractClient::new(&s.env, &s.contract_id);
+        // A second LP token, issued by its own pool.
+        let other_pool = Address::generate(&s.env);
         let other = s
             .env
-            .register_stellar_asset_contract_v2(s.governance.clone())
+            .register_stellar_asset_contract_v2(other_pool.clone())
             .address();
         StellarAssetClient::new(&s.env, &other).mint(&s.contract_id, &300_000);
 
         create(&s, &s.beneficiary, &s.lp_token, 1_000_000, 0, 0, 1000).unwrap();
-        create(&s, &s.beneficiary, &other, 300_000, 0, 0, 1000).unwrap();
+        client.create_vesting(
+            &s.governance,
+            &s.beneficiary,
+            &other,
+            &other_pool,
+            &300_000,
+            &0,
+            &0,
+            &1000,
+        );
 
         assert_eq!(client.committed(&s.lp_token), 1_000_000);
         assert_eq!(client.committed(&other), 300_000);
