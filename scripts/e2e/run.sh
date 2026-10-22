@@ -11,7 +11,8 @@
 #   - shared flows (v2 factory cl governance staking twap) run against the
 #     addresses deploy.sh writes to $DEPLOY_ENV;
 #   - self-contained flows (token router dex_aggregator oracle_aggregator
-#     cl_position_nft pol_vesting twap_consumer incentive_campaigns) deploy their own instances
+#     cl_position_nft pol_vesting twap_consumer incentive_campaigns batch_auction
+#     v2_to_v3_migration) deploy their own instances
 #     and can also be run directly, e.g. `bash scripts/e2e/router.sh`.
 # deploy.sh only runs when at least one selected flow is a shared flow.
 #
@@ -25,7 +26,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/e2e/common.sh"
 
 SHARED_FLOWS=(v2 factory cl governance staking twap)
-SELF_CONTAINED_FLOWS=(token router dex_aggregator oracle_aggregator cl_position_nft pol_vesting twap_consumer twal_consumer)
+SELF_CONTAINED_FLOWS=(token router dex_aggregator oracle_aggregator cl_position_nft pol_vesting twap_consumer twal_consumer batch_auction v2_to_v3_migration)
 ALL_FLOWS=("${SHARED_FLOWS[@]}" "${SELF_CONTAINED_FLOWS[@]}")
 
 ONLY_RAW=""
@@ -126,6 +127,10 @@ source "$ROOT_DIR/e2e/pol_vesting.sh"
 source "$ROOT_DIR/e2e/twap_consumer.sh"
 # shellcheck source=scripts/e2e/incentive_campaigns.sh
 source "$ROOT_DIR/e2e/incentive_campaigns.sh"
+# shellcheck source=scripts/e2e/batch_auction.sh
+source "$ROOT_DIR/e2e/batch_auction.sh"
+# shellcheck source=scripts/e2e/v2_to_v3_migration.sh
+source "$ROOT_DIR/e2e/v2_to_v3_migration.sh"
 
 declare -A FLOW_STATUS
 declare -A FLOW_DURATION
@@ -171,6 +176,8 @@ run_flow_isolated cl_position_nft run_cl_position_nft_flow
 run_flow_isolated pol_vesting run_pol_vesting_flow
 run_flow_isolated twap_consumer run_twap_consumer_flow
 run_flow_isolated incentive_campaigns run_incentive_campaigns_flow
+run_flow_isolated batch_auction run_batch_auction_flow
+run_flow_isolated v2_to_v3_migration run_v2_to_v3_migration_flow
 
 printf '\n%s\n' "Summary"
 printf '%s\n' "-------"

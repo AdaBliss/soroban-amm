@@ -208,7 +208,7 @@ invoke_as() {
   shift 2
   local err out rc attempt
   err=$(mktemp)
-  for attempt in 1 2; do
+  for attempt in 1 2 3 4; do
     rc=0
     out=$(stellar contract invoke \
       --id "$contract_id" \
@@ -216,12 +216,17 @@ invoke_as() {
       --source "$account" \
       -- "$@" 2>"$err") || rc=$?
     cat "$err" >&2
-    if [[ "$rc" -eq 0 || "$attempt" -eq 2 ]]; then
+    if [[ "$rc" -eq 0 || "$attempt" -eq 4 ]]; then
       break
     fi
     if [[ "${E2E_SIM_RETRY:-1}" == "1" ]] && grep -q 'transaction simulation failed' "$err"; then
       printf '[retry] %s simulation failed; waiting a ledger in case the RPC node lags, then retrying\n' "$1" >&2
       sleep 6
+    elif grep -q 'Request timeout' "$err" && ! grep -qE 'Sending transaction|Transaction submitted' "$err"; then
+      # The RPC request timed out before the CLI sent the transaction, so
+      # nothing was submitted and repeating the call cannot apply it twice.
+      printf '[retry] %s: RPC request timed out before submission; waiting, then retrying\n' "$1" >&2
+      sleep 8
     elif grep -q 'Account not found' "$err"; then
       # Rejected before submission, so repeating it cannot apply twice.
       printf '[retry] %s: RPC node has not seen the account yet; waiting, then retrying\n' "$1" >&2
@@ -267,6 +272,11 @@ expect_fail() {
   out=$(trap - ERR; E2E_SIM_RETRY=0 "$@" 2>&1) || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     die "$label: expected the call to be rejected, but it succeeded: $out"
+  fi
+  # A timed-out RPC request says nothing about the contract, so it must not
+  # count as the rejection the check is looking for.
+  if grep -q 'Request timeout' <<<"$out"; then
+    die "$label: the RPC request timed out, so the outcome is unknown: $out"
   fi
   pass "$label"
 }
@@ -421,6 +431,46 @@ pool_token() {
 # balance_of TOKEN ADDRESS — token balance as an integer.
 balance_of() {
   invoke "$1" balance --id "$2" | parse_i128
+}
+
+# e2e_rpc_url — the Soroban RPC endpoint for NETWORK. Set E2E_RPC_URL to use
+# a different node, for example a local quickstart network.
+e2e_rpc_url() {
+  case "$NETWORK" in
+    testnet) printf '%s' "${E2E_RPC_URL:-https://soroban-testnet.stellar.org}" ;;
+    *) printf '%s' "${E2E_RPC_URL:?set E2E_RPC_URL for network $NETWORK}" ;;
+  esac
+}
+
+# e2e_ledger_time — close time, in seconds, of the latest ledger the RPC node
+# has. Contracts cannot report the clock, so flows that depend on ledger time
+# read it here instead of the wall clock.
+e2e_ledger_time() {
+  curl -fsS -m 30 -X POST "$(e2e_rpc_url)" \
+    -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}' \
+    | grep -Eo '"closeTime":"[0-9]+"' | grep -Eo '[0-9]+'
+}
+
+# e2e_wait_for_ledger_time TARGET LABEL — poll the ledger close time until it
+# reaches TARGET. Gives up after E2E_WAIT_TIMEOUT seconds (default 240) with a
+# message naming the flow step, so a stalled node is not a silent hang.
+e2e_wait_for_ledger_time() {
+  local target="$1"
+  local label="$2"
+  local limit=$(( $(date +%s) + ${E2E_WAIT_TIMEOUT:-240} ))
+  local now=0
+  while :; do
+    now=$(e2e_ledger_time || true)
+    now=${now:-0}
+    if (( now >= target )); then
+      return 0
+    fi
+    if (( $(date +%s) >= limit )); then
+      die "$label: ledger time did not reach $target within ${E2E_WAIT_TIMEOUT:-240}s (last close time $now)"
+    fi
+    sleep 2
+  done
 }
 
 # e2e_trap_errors — report the failing command when `set -e` aborts a flow,
