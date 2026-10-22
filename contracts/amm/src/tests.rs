@@ -1,3 +1,5 @@
+extern crate std;
+
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -5062,4 +5064,298 @@ fn test_multisig_emergency_withdraw_sweeps_accrued_fees() {
     let pool_bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&ts.amm_addr);
     assert_eq!(pool_bal_a, 0, "accrued token_a fees must be swept");
     assert_eq!(pool_bal_b, 0, "accrued token_b fees must be swept");
+}
+
+// ── add_liquidity_fot minimum-liquidity lock (#503, restored by #1096) ───────
+//
+// Regression note: commit 22736ea9 fixed `add_liquidity_fot` and added the
+// three `test_fot_*` tests below, but a later rewrite of contracts/amm replaced
+// both the function body and the tests with the older duplicated block. CI
+// stayed green because no remaining test exercised a first deposit through
+// the FOT entrypoint. Both entrypoints now share `compute_liquidity_mint`, so
+// the first-deposit rule cannot diverge again.
+
+pub(crate) use fot_token::{FotToken, FotTokenClient};
+
+mod fot_token {
+    extern crate std;
+
+    use super::*;
+
+    /// A token that burns 2% of every transferred amount (fee-on-transfer).
+    #[contract]
+    pub struct FotToken;
+
+    #[contracttype]
+    enum FotKey {
+        Balance(Address),
+    }
+
+    #[contractimpl]
+    impl FotToken {
+        pub fn mint(env: Env, to: Address, amount: i128) {
+            let bal = Self::balance(env.clone(), to.clone());
+            env.storage()
+                .instance()
+                .set(&FotKey::Balance(to), &(bal + amount));
+        }
+
+        pub fn balance(env: Env, id: Address) -> i128 {
+            env.storage()
+                .instance()
+                .get(&FotKey::Balance(id))
+                .unwrap_or(0)
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            from.require_auth();
+            let from_bal = Self::balance(env.clone(), from.clone());
+            let to_bal = Self::balance(env.clone(), to.clone());
+            let received = amount - amount * 2 / 100;
+            env.storage()
+                .instance()
+                .set(&FotKey::Balance(from), &(from_bal - amount));
+            env.storage()
+                .instance()
+                .set(&FotKey::Balance(to), &(to_bal + received));
+        }
+    }
+}
+
+fn fot_setup(fee_bps: i128) -> (TestSetup, Address) {
+    let ts = setup_pool(fee_bps);
+    let provider = Address::generate(&ts.env);
+    StellarAssetClient::new(&ts.env, &ts.ta_addr).mint(&provider, &100_000_000);
+    StellarAssetClient::new(&ts.env, &ts.tb_addr).mint(&provider, &100_000_000);
+    (ts, provider)
+}
+
+fn fot_deposit(
+    amm: &AmmPoolClient,
+    provider: &Address,
+    a: i128,
+    b: i128,
+) -> Result<Result<i128, soroban_sdk::Error>, Result<AmmError, soroban_sdk::InvokeError>> {
+    amm.try_add_liquidity_fot(provider, &a, &b, &0, &0, &0, &u64::MAX)
+}
+
+#[test]
+fn test_fot_first_deposit_locks_minimum_liquidity() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    let shares = fot_deposit(&amm, &provider, 2_000_000, 2_000_000)
+        .unwrap()
+        .unwrap();
+    assert_eq!(shares, 1_999_000);
+    assert_eq!(amm.get_info().total_shares, 2_000_000);
+    let lp = token::LpTokenClient::new(&ts.env, &ts.lp_addr);
+    assert_eq!(lp.balance(&ts.amm_addr), 1_000);
+    assert_eq!(lp.balance(&provider), 1_999_000);
+}
+
+#[test]
+fn test_fot_first_deposit_rejects_insufficient_shares() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    assert_eq!(
+        fot_deposit(&amm, &provider, 1_000, 1_000),
+        Err(Ok(AmmError::InsufficientShares))
+    );
+    assert_eq!(
+        fot_deposit(&amm, &provider, 500, 500),
+        Err(Ok(AmmError::InsufficientShares))
+    );
+}
+
+#[test]
+fn test_fot_subsequent_deposit_no_extra_lock() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    let s1 = fot_deposit(&amm, &provider, 2_000_000, 2_000_000)
+        .unwrap()
+        .unwrap();
+    let s2 = fot_deposit(&amm, &provider, 1_000_000, 1_000_000)
+        .unwrap()
+        .unwrap();
+    let lp = token::LpTokenClient::new(&ts.env, &ts.lp_addr);
+    assert_eq!(lp.balance(&ts.amm_addr), 1_000);
+    assert_eq!(lp.balance(&provider), s1 + s2);
+    assert_eq!(amm.get_info().total_shares, s1 + s2 + 1_000);
+}
+
+#[test]
+fn test_fot_first_deposit_one_share_seed_rejected() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    assert_eq!(
+        fot_deposit(&amm, &provider, 1, 1),
+        Err(Ok(AmmError::InsufficientShares))
+    );
+    assert_eq!(amm.get_info().total_shares, 0);
+}
+
+#[test]
+fn test_fot_first_lp_cannot_drain_pool() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    let shares = fot_deposit(&amm, &provider, 1_000_000, 1_000_000)
+        .unwrap()
+        .unwrap();
+    assert_eq!(shares, 999_000);
+    amm.remove_liquidity(&provider, &shares, &0, &0, &u64::MAX);
+    let info = amm.get_info();
+    assert_eq!(info.total_shares, 1_000);
+    assert_eq!(info.reserve_a, 1_000);
+    assert_eq!(info.reserve_b, 1_000);
+    // The locked shares belong to the pool and cannot be redeemed.
+    assert!(amm
+        .try_remove_liquidity(&provider, &1, &0, &0, &u64::MAX)
+        .is_err());
+}
+
+#[test]
+fn test_fot_min_shares_compares_provider_share_after_lock() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    // sqrt = 1_000_000, provider share after lock = 999_000.
+    let too_high = amm.try_add_liquidity_fot(
+        &provider,
+        &1_000_000,
+        &1_000_000,
+        &0,
+        &0,
+        &1_000_000,
+        &u64::MAX,
+    );
+    assert_eq!(too_high, Err(Ok(AmmError::SlippageExceeded)));
+    let ok = amm.add_liquidity_fot(
+        &provider,
+        &1_000_000,
+        &1_000_000,
+        &0,
+        &0,
+        &999_000,
+        &u64::MAX,
+    );
+    assert_eq!(ok, 999_000);
+}
+
+#[test]
+fn test_fot_zero_reserve_with_shares_returns_typed_error() {
+    let (ts, provider) = fot_setup(30);
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    fot_deposit(&amm, &provider, 1_000_000, 1_000_000)
+        .unwrap()
+        .unwrap();
+    ts.env.as_contract(&ts.amm_addr, || {
+        ts.env.storage().instance().set(&DataKey::ReserveA, &0_i128);
+    });
+    assert_eq!(
+        fot_deposit(&amm, &provider, 1_000, 1_000),
+        Err(Ok(AmmError::EmptyPool))
+    );
+    assert_eq!(
+        amm.try_add_liquidity(&provider, &1_000, &1_000, &0, &u64::MAX),
+        Err(Ok(AmmError::EmptyPool))
+    );
+}
+
+fn last_add_liquidity_event(env: &Env, pool: &Address) -> (i128, i128, i128) {
+    use soroban_sdk::TryFromVal;
+    let events = env.events().all();
+    let mut found = None;
+    for (addr, _topics, data) in events.iter() {
+        if &addr == pool {
+            found = Some(data);
+        }
+    }
+    let (_, tuple) =
+        <(u32, (i128, i128, i128))>::try_from_val(env, &found.expect("pool event")).unwrap();
+    tuple
+}
+
+/// Parametrised: `add_liquidity` and `add_liquidity_fot` must agree on shares,
+/// reserves and the emitted event for plain tokens, on empty and funded pools.
+#[test]
+fn test_add_liquidity_and_fot_are_equivalent() {
+    let cases: [(i128, i128, bool); 4] = [
+        (1_000_000, 1_000_000, false),
+        (4_000_000, 1_000_000, false),
+        (1_000_000, 1_000_000, true),
+        (3_000_000, 2_000_000, true),
+    ];
+    for (a, b, prefund) in cases {
+        let mut results = std::vec::Vec::new();
+        for use_fot in [false, true] {
+            let (ts, provider) = fot_setup(30);
+            let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+            if prefund {
+                amm.add_liquidity(&provider, &5_000_000, &5_000_000, &0, &u64::MAX);
+            }
+            let shares = if use_fot {
+                amm.add_liquidity_fot(&provider, &a, &b, &0, &0, &0, &u64::MAX)
+            } else {
+                amm.add_liquidity(&provider, &a, &b, &0, &u64::MAX)
+            };
+            let info = amm.get_info();
+            let ev = last_add_liquidity_event(&ts.env, &ts.amm_addr);
+            results.push((
+                shares,
+                info.reserve_a,
+                info.reserve_b,
+                info.total_shares,
+                ev,
+            ));
+        }
+        assert_eq!(results[0], results[1], "case ({a}, {b}, {prefund})");
+    }
+}
+
+#[test]
+fn test_fot_token_two_percent_deduction_mints_from_actual_and_locks() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(12345);
+    let admin = Address::generate(&env);
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "AMM LP Token"),
+        &soroban_sdk::String::from_str(&env, "ALP"),
+        &7u32,
+    );
+    let fot_addr = env.register_contract(None, FotToken);
+    let (tb, tb_sac) = create_sac(&env, &admin);
+    let amm = AmmPoolClient::new(&env, &amm_addr);
+    amm.initialize(
+        &admin,
+        &fot_addr,
+        &tb.address,
+        &lp_addr,
+        &30_i128,
+        &admin,
+        &0_i128,
+    );
+    let provider = Address::generate(&env);
+    FotTokenClient::new(&env, &fot_addr).mint(&provider, &2_000_000);
+    tb_sac.mint(&provider, &1_960_000);
+
+    // Pool receives 98% of 2_000_000 = 1_960_000 of token A.
+    let shares = amm.add_liquidity_fot(
+        &provider,
+        &2_000_000,
+        &1_960_000,
+        &1_960_000,
+        &0,
+        &0,
+        &u64::MAX,
+    );
+    // sqrt(1_960_000 * 1_960_000) = 1_960_000, minus the 1_000 lock.
+    assert_eq!(shares, 1_959_000);
+    let info = amm.get_info();
+    assert_eq!(info.reserve_a, 1_960_000);
+    assert_eq!(info.total_shares, 1_960_000);
+    let lp = token::LpTokenClient::new(&env, &lp_addr);
+    assert_eq!(lp.balance(&amm_addr), 1_000);
 }

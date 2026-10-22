@@ -1684,42 +1684,15 @@ impl AmmPool {
         let lp_token: Address = Self::read_lp_token(&env)?;
         let total_shares: i128 = Self::get_total_shares(env.clone());
 
-        // Compute shares to mint.
-        // Compute shares to mint.
-        let shares = if total_shares == 0 {
-            // Initial liquidity: geometric mean of deposits.
-            Self::sqrt(amount_a * amount_b)
-        } else {
-            // Proportional shares — use the lesser of the two ratios.
-            let shares_a = amount_a * total_shares / reserve_a;
-            let shares_b = amount_b * total_shares / reserve_b;
-            shares_a.min(shares_b)
-        };
-
-        if shares <= 0 {
-            return Err(AmmError::ZeroAmount);
-        }
-
-        // Issue #294: on the very first deposit, permanently lock MINIMUM_LIQUIDITY
-        // LP tokens to the zero address so the pool can never be fully drained.
-        const MINIMUM_LIQUIDITY: i128 = 1_000;
-        let already_locked: bool = env
-            .storage()
-            .instance()
-            .get(&DataKey::MinLiquidityLocked)
-            .unwrap_or(false);
-        let (shares_to_provider, shares_locked) = if total_shares == 0 && !already_locked {
-            if shares <= MINIMUM_LIQUIDITY {
-                return Err(AmmError::InsufficientShares);
-            }
-            (shares - MINIMUM_LIQUIDITY, MINIMUM_LIQUIDITY)
-        } else {
-            (shares, 0)
-        };
-
-        if shares_to_provider < min_shares {
-            return Err(AmmError::SlippageExceeded);
-        }
+        let (shares_to_provider, shares_locked) = Self::compute_liquidity_mint(
+            &env,
+            amount_a,
+            amount_b,
+            reserve_a,
+            reserve_b,
+            total_shares,
+            min_shares,
+        )?;
 
         // Pull tokens from provider into the pool contract.
         let client_a = SepTokenClient::new(&env, &token_a);
@@ -3174,20 +3147,15 @@ impl AmmPool {
         let reserve_b: i128 = Self::get_reserve_b(env.clone());
         let total_shares: i128 = Self::get_total_shares(env.clone());
 
-        let shares = if total_shares == 0 {
-            Self::sqrt(actual_a * actual_b)
-        } else {
-            let shares_a = actual_a * total_shares / reserve_a;
-            let shares_b = actual_b * total_shares / reserve_b;
-            shares_a.min(shares_b)
-        };
-
-        if shares <= 0 {
-            return Err(AmmError::ZeroAmount);
-        }
-        if shares < min_shares {
-            return Err(AmmError::SlippageExceeded);
-        }
+        let (shares, shares_locked) = Self::compute_liquidity_mint(
+            &env,
+            actual_a,
+            actual_b,
+            reserve_a,
+            reserve_b,
+            total_shares,
+            min_shares,
+        )?;
 
         env.storage()
             .instance()
@@ -3195,11 +3163,19 @@ impl AmmPool {
         env.storage()
             .instance()
             .set(&DataKey::ReserveB, &(reserve_b + actual_b));
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalShares, &(total_shares + shares));
+        env.storage().instance().set(
+            &DataKey::TotalShares,
+            &(total_shares + shares + shares_locked),
+        );
 
-        LpTokenClient::new(&env, &lp_token).mint(&provider, &shares);
+        let lp_client = LpTokenClient::new(&env, &lp_token);
+        if shares_locked > 0 {
+            lp_client.mint(&env.current_contract_address(), &shares_locked);
+            env.storage()
+                .instance()
+                .set(&DataKey::MinLiquidityLocked, &true);
+        }
+        lp_client.mint(&provider, &shares);
 
         soroban_amm_sdk::emit_versioned_event!(
             env,
@@ -3211,6 +3187,60 @@ impl AmmPool {
     }
 
     // ── Internals ─────────────────────────────────────────────────────────────
+
+    /// Shared first-deposit / proportional share computation used by both
+    /// dd_liquidity and dd_liquidity_fot.
+    ///
+    /// Returns (shares_to_provider, shares_locked). On a pool's first deposit
+    /// MINIMUM_LIQUIDITY shares are carved out and locked (Issue #294); the
+    /// provider's share (after the lock) is compared against min_shares.
+    /// Returns EmptyPool rather than dividing by zero when shares exist but a
+    /// reserve is zero.
+    #[allow(clippy::too_many_arguments)]
+    fn compute_liquidity_mint(
+        env: &Env,
+        amount_a: i128,
+        amount_b: i128,
+        reserve_a: i128,
+        reserve_b: i128,
+        total_shares: i128,
+        min_shares: i128,
+    ) -> Result<(i128, i128), AmmError> {
+        const MINIMUM_LIQUIDITY: i128 = 1_000;
+        let shares = if total_shares == 0 {
+            Self::sqrt(amount_a * amount_b)
+        } else {
+            if reserve_a <= 0 || reserve_b <= 0 {
+                return Err(AmmError::EmptyPool);
+            }
+            let shares_a = amount_a * total_shares / reserve_a;
+            let shares_b = amount_b * total_shares / reserve_b;
+            shares_a.min(shares_b)
+        };
+
+        if shares <= 0 {
+            return Err(AmmError::ZeroAmount);
+        }
+
+        let already_locked: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinLiquidityLocked)
+            .unwrap_or(false);
+        let (shares_to_provider, shares_locked) = if total_shares == 0 && !already_locked {
+            if shares <= MINIMUM_LIQUIDITY {
+                return Err(AmmError::InsufficientShares);
+            }
+            (shares - MINIMUM_LIQUIDITY, MINIMUM_LIQUIDITY)
+        } else {
+            (shares, 0)
+        };
+
+        if shares_to_provider < min_shares {
+            return Err(AmmError::SlippageExceeded);
+        }
+        Ok((shares_to_provider, shares_locked))
+    }
 
     /// Returns the cumulative liquidity accumulator and the timestamp of the last update.
     pub fn get_liquidity_cumulative(env: Env) -> (i128, u64) {
