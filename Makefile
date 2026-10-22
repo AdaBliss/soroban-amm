@@ -7,7 +7,7 @@ WASM_DIR := target/wasm32v1-none/release
 SHELL := bash
 
 .PHONY: all help build release-build optimize test test-all fmt lint lint-js check-node-versions check check-docs check-storage-keys check-deploy-scripts \
-        size size-check doc audit bench deploy e2e clean fuzz-cl
+        size size-check doc audit bench deploy e2e clean fuzz-amm fuzz-amm-nightly fuzz-cl
 
 # Bare `make` explains itself instead of building.
 .DEFAULT_GOAL := help
@@ -43,6 +43,14 @@ test: build ## Build, then run the full workspace test suite
 
 test-all: ## Run tests for the whole workspace
 	cargo test --workspace
+
+fuzz-amm: ## Build AMM WASM and run the deployed stateful invariant suite (CI case count)
+	cargo build --release --target wasm32v1-none -p amm -p token
+	PROPTEST_CASES=$${PROPTEST_CASES:-256} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
+
+fuzz-amm-nightly: ## Run 10,000 deployed AMM state-machine cases
+	cargo build --release --target wasm32v1-none -p amm -p token
+	PROPTEST_CASES=$${PROPTEST_CASES:-10000} cargo test -p amm_fuzz contract_stateful_invariants -- --nocapture
 
 fuzz-cl: ## Build the wasm deps amm_fuzz imports, then run the full amm_fuzz suite incl. CL stateful properties
 	cargo build --release --target wasm32v1-none -p concentrated_liquidity -p amm -p token

@@ -14,6 +14,8 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { invoke } from "./internal/invoke.js";
+import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -83,6 +85,11 @@ export class RouterClient {
 
   private async simulate(method: string, ...args: xdr.ScVal[]): Promise<xdr.ScVal> {
     return simulateRead(this.server, this.contract, this.networkPassphrase, method, args);
+  }
+
+  private async execute<T>(method: string, args: xdr.ScVal[], signer: Signer, options?: InvokeOptions): Promise<InvocationResult<T>> {
+    return invoke<T>({ server: this.server, contract: this.contract, method, args,
+      source: await signer.publicKey(), signer, networkPassphrase: this.networkPassphrase, ...options });
   }
 
   // ── Read-only methods ──────────────────────────────────────────────────────
@@ -157,5 +164,13 @@ export class RouterClient {
       i128(input.maxIn),
       u64(input.deadline),
     ];
+  }
+
+  async swapExactIn(input: SwapExactInInput, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<bigint>> {
+    return this.execute("swap_exact_in", this.swapExactInParams(input), signer, options);
+  }
+
+  async swapExactOut(input: SwapExactOutInput, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<bigint>> {
+    return this.execute("swap_exact_out", this.swapExactOutParams(input), signer, options);
   }
 }

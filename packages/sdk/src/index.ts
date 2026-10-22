@@ -19,6 +19,20 @@ export { AmmPool, AmmContractError, decodeError } from "./AmmPool.js";
 export { RouterClient } from "./router.js";
 export type { SwapExactInInput, SwapExactOutInput } from "./router.js";
 export { SIMULATION_SOURCE_ACCOUNT } from "./internal/simulate.js";
+export {
+  invoke,
+  keypairSigner,
+  waitForTransaction,
+  SimulationError,
+  TransactionFailedError,
+  TransactionTimeoutError,
+} from "./internal/invoke.js";
+export type {
+  Signer,
+  InvokeOptions,
+  InvokeRequest,
+  InvocationResult,
+} from "./internal/invoke.js";
 export { TokenClient } from "./token.js";
 export { FactoryClient } from "./factory.js";
 export type { CreatePoolResult } from "./factory.js";

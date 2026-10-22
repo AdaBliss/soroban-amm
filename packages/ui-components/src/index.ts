@@ -6,6 +6,11 @@ export type { FeeTierComparisonProps } from "./FeeTierComparison.js";
 
 export { CapitalEfficiencyCalc } from "./CapitalEfficiencyCalc.js";
 export type { CapitalEfficiencyCalcProps } from "./CapitalEfficiencyCalc.js";
+export {
+  computeEfficiency,
+  computeEfficiencyFromTicks,
+  formatEfficiency,
+} from "./lib/capitalEfficiency.js";
 
 export { RiskIndicator, assessPositionRisk } from "./RiskIndicator.js";
 export type { RiskIndicatorProps } from "./RiskIndicator.js";

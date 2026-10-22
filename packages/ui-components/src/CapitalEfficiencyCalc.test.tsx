@@ -34,8 +34,7 @@ describe("CapitalEfficiencyCalc", () => {
     render(
       <CapitalEfficiencyCalc currentPrice={90} priceRange={{ lower: 80, upper: 100 }} />,
     );
-    // eff = 1/(1 - sqrt(0.8)) ≈ 9.5
-    expect(screen.getByRole("status")).toHaveTextContent("9.5x");
+    expect(screen.getByRole("status")).toHaveTextContent("18.4x");
   });
 
   it("displays a ~1x multiplier and the inactive caption when out of range", () => {
@@ -65,8 +64,7 @@ describe("CapitalEfficiencyCalc", () => {
     );
     expect(screen.getByText("Full range (v2-style)")).toBeInTheDocument();
     expect(screen.getByText("Concentrated (80.0000 – 100.0000)")).toBeInTheDocument();
-    // concentrated capital = 10000 / 9.472135955 ≈ 1055.728 → "$1,055.73"
-    expect(screen.getByText("$1,055.73")).toBeInTheDocument();
+    expect(screen.getByText("$542.54")).toBeInTheDocument();
   });
 
   it("renders range width, bounds and current price information", () => {

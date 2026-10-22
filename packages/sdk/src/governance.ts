@@ -36,6 +36,8 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { invoke } from "./internal/invoke.js";
+import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
 import { toBigInt, toText, toVariant } from "./internal/decode.js";
 
 // ── Contract error ─────────────────────────────────────────────────────────────
@@ -682,6 +684,12 @@ export class GovernanceClient {
     );
   }
 
+  private async executeWrite<T>(method: string, args: xdr.ScVal[], signer: Signer, options?: InvokeOptions): Promise<InvocationResult<T>> {
+    return invoke<T>({ server: this.server, contract: this.contract, method, args,
+      source: await signer.publicKey(), signer, networkPassphrase: this.networkPassphrase,
+      decodeError: decodeGovernanceError, ...options });
+  }
+
   private proposalFromNative(
     native: Record<string, unknown>,
     fallbackId?: number
@@ -1059,5 +1067,33 @@ export class GovernanceClient {
   /** Parameters for `undelegate(from)`. */
   undelegateParams(from: string): xdr.ScVal[] {
     return [addr(from)];
+  }
+
+  async propose(proposer: string, kind: ProposalKind, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<number>> {
+    return this.executeWrite("propose", this.proposeParams(proposer, kind), signer, options);
+  }
+
+  async vote(voter: string, proposalId: number, choice: VoteChoice, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("vote", this.voteParams(voter, proposalId, choice), signer, options);
+  }
+
+  async execute(proposalId: number, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("execute", this.executeParams(proposalId), signer, options);
+  }
+
+  async cancel(proposalId: number, proposer: string, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("cancel_proposal", this.cancelParams(proposalId, proposer), signer, options);
+  }
+
+  async delegate(from: string, to: string, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("delegate", this.delegateParams(from, to), signer, options);
+  }
+
+  async undelegate(from: string, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("undelegate", this.undelegateParams(from), signer, options);
+  }
+
+  async unlockVote(voter: string, proposalId: number, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.executeWrite("unlock_vote", this.unlockVoteParams(voter, proposalId), signer, options);
   }
 }

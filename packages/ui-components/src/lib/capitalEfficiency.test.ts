@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeEfficiency,
+  computeEfficiencyFromTicks,
   formatEfficiency,
   isInRange,
   rangePct,
@@ -8,17 +9,18 @@ import {
 
 describe("computeEfficiency", () => {
   it("returns ~1x for a full-range position", () => {
-    // A very wide range (1 .. 1e9) is effectively a full-range position.
-    const eff = computeEfficiency(10, 1, 1_000_000_000);
+    // A range spanning twelve orders of magnitude on each side is effectively full range.
+    const eff = computeEfficiency(1, 1e-12, 1e12);
     expect(eff).toBeGreaterThan(0.999);
     expect(eff).toBeLessThan(1.01);
   });
 
   it("returns the hand-computed multiplier for a concentrated range", () => {
-    // lower=80, upper=100: sqrt(80/100)=sqrt(0.8)=0.894427.
-    // eff = 1/(1-0.894427) = 9.472135...
+    // Uses current price as well as both sqrt-price bounds.
     const eff = computeEfficiency(90, 80, 100);
-    expect(eff).toBeCloseTo(Math.sqrt(0.8) ? 1 / (1 - Math.sqrt(0.8)) : NaN, 5);
+    const expected = (2 * Math.sqrt(90)) /
+      (2 * Math.sqrt(90) - Math.sqrt(80) - 90 / Math.sqrt(100));
+    expect(eff).toBeCloseTo(expected, 10);
   });
 
   it("computes a tighter range as more efficient", () => {
@@ -26,6 +28,13 @@ describe("computeEfficiency", () => {
     const tight = computeEfficiency(100, 90, 110);
     expect(tight).toBeGreaterThan(wide);
     expect(wide).toBeGreaterThan(1);
+  });
+
+  it("matches the concentrated-liquidity sqrt-price capital ratio", () => {
+    // The contract math represents prices through sqrt-price. At P=100 in
+    // [50, 200], equal L needs 200 quote units full-range and
+    // 2*sqrt(100)-sqrt(50)-100/sqrt(200) concentrated units per L.
+    expect(computeEfficiency(100, 50, 200)).toBeCloseTo(3.414213562373095, 12);
   });
 
   it("returns 1 for a position entirely below the current price", () => {
@@ -44,6 +53,22 @@ describe("computeEfficiency", () => {
     // At exactly lower / upper the price is still "in range".
     expect(computeEfficiency(80, 80, 120)).toBeGreaterThan(1);
     expect(computeEfficiency(120, 80, 120)).toBeGreaterThan(1);
+  });
+});
+
+describe("computeEfficiencyFromTicks", () => {
+  it("agrees with price inputs derived from the same ticks", () => {
+    const lowerTick = -1000;
+    const currentTick = 0;
+    const upperTick = 1000;
+    expect(computeEfficiencyFromTicks(currentTick, lowerTick, upperTick)).toBeCloseTo(
+      computeEfficiency(
+        Math.pow(1.0001, currentTick),
+        Math.pow(1.0001, lowerTick),
+        Math.pow(1.0001, upperTick),
+      ),
+      10,
+    );
   });
 });
 

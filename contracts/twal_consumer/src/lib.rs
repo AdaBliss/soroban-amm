@@ -9,6 +9,23 @@ use soroban_sdk::{
 #[contractclient(name = "AmmPoolLiquidityClient")]
 pub trait AmmPoolLiquidityOracle {
     fn get_liquidity_cumulative(env: Env) -> (i128, u64);
+    fn get_info(env: Env) -> AmmPoolInfo;
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AmmPoolInfo {
+    pub token_a: Address,
+    pub token_b: Address,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub total_shares: i128,
+    pub fee_bps: i128,
+    pub flash_loan_fee_bps: i128,
+    pub admin: Address,
+    pub fee_recipient: Address,
+    pub protocol_fee_bps: i128,
+    pub lp_rebate_bps: i128,
 }
 
 #[contractclient(name = "ClPoolLiquidityClient")]
@@ -47,6 +64,8 @@ pub enum TwalError {
     /// extrapolate to the current ledger time. Call `save_cl_snapshot` for the
     /// pool (which writes both) before querying `get_cl_twal`.
     MissingClAccumulator = 12,
+    /// Reserve multiplication or cumulative extrapolation overflowed i128.
+    ArithmeticOverflow = 13,
 }
 
 #[contracttype]
@@ -113,6 +132,14 @@ pub struct TwalEntry {
     /// Populated when `ok == false`; the `TwalError` discriminant that
     /// caused this pool to be skipped. Meaningless (`0`) when `ok == true`.
     pub error_code: u32,
+}
+
+/// A TWAL value together with the ledger-time interval it actually covers.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwalResult {
+    pub twal: i128,
+    pub window_used: u64,
 }
 
 /// Running integral of a CL pool's active liquidity over ledger time.
@@ -272,7 +299,7 @@ impl TwalConsumer {
     /// Binary-search the pool's snapshots for the most recent one at or
     /// before `then_ts` (the "floor"). Returns `None` if no snapshot that old
     /// exists.
-    fn floor_snapshot(env: &Env, pool: &Address, then_ts: u64) -> Option<LiquiditySnapshot> {
+    fn floor_snapshot_entry(env: &Env, pool: &Address, then_ts: u64) -> Option<SnapshotEntry> {
         let snapshots = Self::load_snapshots(env, pool);
         let mut lo: u32 = 0;
         let mut hi: u32 = snapshots.len();
@@ -287,10 +314,74 @@ impl TwalConsumer {
         if lo == 0 {
             return None;
         }
-        let (_, cum_liquidity, pool_ts) = snapshots.get(lo - 1).unwrap();
-        Some(LiquiditySnapshot {
-            cum_liquidity,
-            pool_ts,
+        snapshots.get(lo - 1)
+    }
+
+    fn integer_sqrt(n: i128) -> Result<i128, TwalError> {
+        if n < 0 {
+            return Err(TwalError::ArithmeticOverflow);
+        }
+        if n == 0 {
+            return Ok(0);
+        }
+        let mut x = n;
+        let mut y = x / 2 + x % 2;
+        while y < x {
+            x = y;
+            y = (x + n / x) / 2;
+        }
+        Ok(x)
+    }
+
+    /// Extrapolate the pool accumulator to ledger time using the same
+    /// geometric-mean liquidity formula as `amm::checkpoint_twal`.
+    fn get_amm_twal_checked(
+        env: &Env,
+        pool: &Address,
+        window_seconds: u64,
+    ) -> Result<TwalResult, TwalError> {
+        if window_seconds == 0 {
+            return Err(TwalError::ZeroWindow);
+        }
+        if window_seconds > Self::MAX_WINDOW_SECONDS {
+            return Err(TwalError::WindowTooLarge);
+        }
+        let ledger_ts_now = env.ledger().timestamp();
+        if ledger_ts_now < window_seconds {
+            return Err(TwalError::InsufficientHistory);
+        }
+
+        let client = AmmPoolLiquidityClient::new(env, pool);
+        let (cum_stored, pool_ts_now) = match client.try_get_liquidity_cumulative() {
+            Ok(Ok(value)) => value,
+            _ => return Err(TwalError::CrossContractCallFailed),
+        };
+        let info = match client.try_get_info() {
+            Ok(Ok(value)) => value,
+            _ => return Err(TwalError::CrossContractCallFailed),
+        };
+        let reserve_product = info
+            .reserve_a
+            .checked_mul(info.reserve_b)
+            .ok_or(TwalError::ArithmeticOverflow)?;
+        let liquidity = Self::integer_sqrt(reserve_product)?;
+        let idle_elapsed = ledger_ts_now.saturating_sub(pool_ts_now) as i128;
+        let extrapolated = liquidity
+            .checked_mul(idle_elapsed)
+            .and_then(|delta| cum_stored.checked_add(delta))
+            .ok_or(TwalError::ArithmeticOverflow)?;
+
+        let then_ts = ledger_ts_now - window_seconds;
+        let (snapshot_ts, snapshot_cumulative, _) =
+            Self::floor_snapshot_entry(env, pool, then_ts).ok_or(TwalError::NoSnapshotFound)?;
+        let window_used = ledger_ts_now.saturating_sub(snapshot_ts);
+        if window_used == 0 {
+            return Err(TwalError::ElapsedZero);
+        }
+        let delta = (extrapolated as u128).wrapping_sub(snapshot_cumulative as u128) as i128;
+        Ok(TwalResult {
+            twal: delta / window_used as i128,
+            window_used,
         })
     }
 
@@ -407,8 +498,8 @@ impl TwalConsumer {
         // No snapshot at or before the window start: the pool's recorded
         // history does not reach back far enough, mirroring
         // `get_twal_liquidity`'s treatment of the same condition.
-        let snapshot =
-            Self::floor_snapshot(env, pool, then_ts).ok_or(TwalError::InsufficientHistory)?;
+        let (snapshot_ts, snapshot_cumulative, _) =
+            Self::floor_snapshot_entry(env, pool, then_ts).ok_or(TwalError::InsufficientHistory)?;
         let accumulator: ClLiquidityAccumulator = env
             .storage()
             .persistent()
@@ -418,11 +509,11 @@ impl TwalConsumer {
         let elapsed_since_update = ledger_ts_now.saturating_sub(accumulator.last_ts) as i128;
         let cum_now = accumulator.cum_liquidity + accumulator.last_active * elapsed_since_update;
 
-        let elapsed = (ledger_ts_now - snapshot.pool_ts) as i128;
+        let elapsed = ledger_ts_now.saturating_sub(snapshot_ts) as i128;
         if elapsed <= 0 {
             return Err(TwalError::ElapsedZero);
         }
-        Ok((cum_now - snapshot.cum_liquidity) / elapsed)
+        Ok((cum_now - snapshot_cumulative) / elapsed)
     }
 
     /// Computes a single pool's TWAL entry without ever panicking or
@@ -463,34 +554,15 @@ impl TwalConsumer {
                 },
                 Err(e) => fail(e),
             },
-            PoolType::Amm => {
-                let (cum_now, pool_ts_now) =
-                    match AmmPoolLiquidityClient::new(env, &pool).try_get_liquidity_cumulative() {
-                        Ok(Ok(v)) => v,
-                        _ => return fail(TwalError::CrossContractCallFailed),
-                    };
-
-                let ledger_ts_now = env.ledger().timestamp();
-                if ledger_ts_now < window_seconds {
-                    return fail(TwalError::InsufficientHistory);
-                }
-                let then_ts = ledger_ts_now - window_seconds;
-                let Some(snapshot) = Self::floor_snapshot(env, &pool, then_ts) else {
-                    return fail(TwalError::NoSnapshotFound);
-                };
-
-                let delta = (cum_now as u128).wrapping_sub(snapshot.cum_liquidity as u128) as i128;
-                let elapsed = (pool_ts_now - snapshot.pool_ts) as i128;
-                if elapsed <= 0 {
-                    return fail(TwalError::ElapsedZero);
-                }
-                TwalEntry {
+            PoolType::Amm => match Self::get_amm_twal_checked(env, &pool, window_seconds) {
+                Ok(result) => TwalEntry {
                     pool,
-                    twal: delta / elapsed,
+                    twal: result.twal,
                     ok: true,
                     error_code: 0,
-                }
-            }
+                },
+                Err(e) => fail(e),
+            },
         }
     }
 
@@ -502,6 +574,7 @@ impl TwalConsumer {
             6 => TwalError::ElapsedZero,
             9 => TwalError::WindowTooLarge,
             12 => TwalError::MissingClAccumulator,
+            13 => TwalError::ArithmeticOverflow,
             _ => TwalError::CrossContractCallFailed,
         }
     }
@@ -512,28 +585,26 @@ impl TwalConsumer {
         window_seconds: u64,
     ) -> Result<i128, TwalError> {
         Self::extend_ttl(&env);
-        if window_seconds == 0 {
-            return Err(TwalError::ZeroWindow);
-        }
-        if window_seconds > Self::MAX_WINDOW_SECONDS {
-            return Err(TwalError::WindowTooLarge);
-        }
-        let (cum_now, pool_ts_now) =
-            AmmPoolLiquidityClient::new(&env, &pool).get_liquidity_cumulative();
-        let ledger_ts_now = env.ledger().timestamp();
-        if ledger_ts_now < window_seconds {
-            return Err(TwalError::InsufficientHistory);
-        }
-        let then_ts = ledger_ts_now - window_seconds;
-        let snapshot =
-            Self::floor_snapshot(&env, &pool, then_ts).ok_or(TwalError::InsufficientHistory)?;
+        Self::get_amm_twal_checked(&env, &pool, window_seconds)
+            .map(|result| result.twal)
+            .map_err(|error| match error {
+                TwalError::NoSnapshotFound => TwalError::InsufficientHistory,
+                other => other,
+            })
+    }
 
-        let delta = (cum_now as u128).wrapping_sub(snapshot.cum_liquidity as u128) as i128;
-        let elapsed = (pool_ts_now - snapshot.pool_ts) as i128;
-        if elapsed <= 0 {
-            return Err(TwalError::ElapsedZero);
-        }
-        Ok(delta / elapsed)
+    /// Return AMM TWAL and the effective ledger-time window selected by the
+    /// nearest retained snapshot at or before the requested boundary.
+    pub fn get_twal_liquidity_detailed(
+        env: Env,
+        pool: Address,
+        window_seconds: u64,
+    ) -> Result<TwalResult, TwalError> {
+        Self::extend_ttl(&env);
+        Self::get_amm_twal_checked(&env, &pool, window_seconds).map_err(|error| match error {
+            TwalError::NoSnapshotFound => TwalError::InsufficientHistory,
+            other => other,
+        })
     }
 
     /// Fault-isolated batch read over every currently tracked pool. Returns
@@ -988,6 +1059,9 @@ mod tests {
         env.ledger().with_mut(|l| l.timestamp = 10_075);
         let twal = consumer.get_twal_liquidity(&amm_addr, &50);
         assert!(twal > 0);
+        let detailed = consumer.get_twal_liquidity_detailed(&amm_addr, &50);
+        assert_eq!(detailed.twal, twal);
+        assert_eq!(detailed.window_used, 75);
     }
 
     #[test]
@@ -1639,15 +1713,15 @@ mod tests {
     }
 
     #[test]
-    fn test_cl_twal_elapsed_zero_returns_typed_error() {
+    fn test_cl_twal_uses_snapshot_ledger_time_not_pool_update_time() {
         let env = Env::default();
         let (pool_addr, consumer) = setup_cl_pool(&env);
         let consumer_addr = consumer.address.clone();
 
         env.ledger().with_mut(|l| l.timestamp = 10_600);
 
-        // Backdate nothing but the floor snapshot pool_ts to *now*, so the
-        // averaging span collapses to zero.
+        // Changing only the historical pool-update timestamp must not change
+        // the ledger-time denominator used by the average.
         env.as_contract(&consumer_addr, || {
             let key = DataKey::Snapshots(pool_addr.clone());
             let mut snapshots: Vec<SnapshotEntry> = env.storage().persistent().get(&key).unwrap();
@@ -1657,10 +1731,7 @@ mod tests {
             env.storage().persistent().set(&key, &snapshots);
         });
 
-        assert_eq!(
-            consumer.try_get_cl_twal(&pool_addr, &600),
-            Err(Ok(TwalError::ElapsedZero))
-        );
+        assert_eq!(consumer.try_get_cl_twal(&pool_addr, &600), Ok(Ok(5_000)));
     }
 
     #[test]

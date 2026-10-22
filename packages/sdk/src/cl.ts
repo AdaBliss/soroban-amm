@@ -14,6 +14,8 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { invoke } from "./internal/invoke.js";
+import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
 import { toBigInt } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -102,6 +104,11 @@ export class ConcentratedLiquidityClient {
 
   private async simulate(method: string, ...args: xdr.ScVal[]): Promise<xdr.ScVal> {
     return simulateRead(this.server, this.contract, this.networkPassphrase, method, args);
+  }
+
+  private async execute<T>(method: string, args: xdr.ScVal[], signer: Signer, options?: InvokeOptions): Promise<InvocationResult<T>> {
+    return invoke<T>({ server: this.server, contract: this.contract, method, args,
+      source: await signer.publicKey(), signer, networkPassphrase: this.networkPassphrase, ...options });
   }
 
   // ── Read-only methods ──────────────────────────────────────────────────────
@@ -402,5 +409,33 @@ export class ConcentratedLiquidityClient {
       i128(minAmountOut),
       u64(deadline),
     ];
+  }
+
+  swapExactOutParams(sender: string, zeroForOne: boolean, amountOut: bigint, sqrtPriceLimitX96: bigint, maxAmountIn: bigint, deadline: bigint): xdr.ScVal[] {
+    return [addr(sender), nativeToScVal(zeroForOne, { type: "bool" }), i128(amountOut), u128(sqrtPriceLimitX96), i128(maxAmountIn), u64(deadline)];
+  }
+
+  async mintPosition(provider: string, lowerTick: number, upperTick: number, amountADesired: bigint, amountBDesired: bigint, minA: bigint, minB: bigint, deadline: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<PositionQuote>> {
+    return this.execute("mint_position", this.mintPositionParams(provider, lowerTick, upperTick, amountADesired, amountBDesired, minA, minB, deadline), signer, options);
+  }
+
+  async modifyPosition(provider: string, lowerTick: number, upperTick: number, liquidityDelta: bigint, minA: bigint, minB: bigint, deadline: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<[bigint, bigint]>> {
+    return this.execute("modify_position", this.modifyPositionParams(provider, lowerTick, upperTick, liquidityDelta, minA, minB, deadline), signer, options);
+  }
+
+  async burnPosition(provider: string, lowerTick: number, upperTick: number, liquidity: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<[bigint, bigint]>> {
+    return this.execute("burn_position", this.burnPositionParams(provider, lowerTick, upperTick, liquidity), signer, options);
+  }
+
+  async collectFees(provider: string, lowerTick: number, upperTick: number, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<[bigint, bigint]>> {
+    return this.execute("collect_fees", this.collectFeesParams(provider, lowerTick, upperTick), signer, options);
+  }
+
+  async swap(sender: string, zeroForOne: boolean, amountIn: bigint, sqrtPriceLimitX96: bigint, minAmountOut: bigint, deadline: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<bigint>> {
+    return this.execute("swap", this.swapParams(sender, zeroForOne, amountIn, sqrtPriceLimitX96, minAmountOut, deadline), signer, options);
+  }
+
+  async swapExactOut(sender: string, zeroForOne: boolean, amountOut: bigint, sqrtPriceLimitX96: bigint, maxAmountIn: bigint, deadline: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<bigint>> {
+    return this.execute("swap_exact_out", this.swapExactOutParams(sender, zeroForOne, amountOut, sqrtPriceLimitX96, maxAmountIn, deadline), signer, options);
   }
 }

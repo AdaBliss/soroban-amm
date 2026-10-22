@@ -15,6 +15,36 @@ The SDK provides typed clients for each contract. All clients take the same cons
 
 Property values of type `i128` are represented as `bigint` throughout.
 
+### Signing and submitting writes
+
+Write methods simulate and assemble the Soroban footprint and authorization,
+restore archived entries when required, sign, submit, and wait for a terminal
+ledger result. Slippage limits and deadlines are always explicit.
+
+```ts
+import { AmmPool, keypairSigner } from "@soroban-amm/sdk";
+
+const signer = keypairSigner(process.env.STELLAR_SECRET!);
+const trader = await signer.publicKey();
+const result = await pool.swap(
+  {
+    trader,
+    tokenIn: info.tokenA,
+    amountIn: 1_000_000n,
+    minAmountOut: 990_000n,
+    deadline: BigInt(Math.floor(Date.now() / 1000) + 300),
+  },
+  signer,
+  { timeoutSeconds: 90, pollIntervalMs: 1_000, feeMultiplier: 1.2 },
+);
+console.log(result.hash, result.ledger, result.returnValue);
+```
+
+Never put a secret key in browser code, logs, source control, or analytics.
+Browser wallets should implement the exported `Signer` interface and keep key
+material inside the wallet. `keypairSigner` is intended for controlled server
+or command-line environments.
+
 ### AmmPool
 
 ```ts 

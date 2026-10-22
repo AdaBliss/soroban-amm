@@ -42,7 +42,7 @@ pub mod cl;
 
 use proptest::prelude::*;
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Ledger},
     token::{StellarAssetClient, TokenClient as StellarTokenClient},
     Address, Env,
 };
@@ -201,9 +201,16 @@ struct Pool<'a> {
     client: amm_wasm::Client<'a>,
     ta: Address,
     tb: Address,
+    lp: Address,
+    admin: Address,
+    provider: Address,
 }
 
 fn deploy_pool(env: &Env, fee_bps: i128) -> Pool<'_> {
+    deploy_pool_with_ratio(env, fee_bps, 1_000_000, 1_000_000)
+}
+
+fn deploy_pool_with_ratio(env: &Env, fee_bps: i128, initial_a: i128, initial_b: i128) -> Pool<'_> {
     // These fuzz properties check contract *correctness*, not gas cost — that's
     // `benches`'s job. The default test budget models real network CPU limits,
     // but `amm.wasm`/`token.wasm` here are unoptimized debug-adjacent builds
@@ -251,15 +258,9 @@ fn deploy_pool(env: &Env, fee_bps: i128) -> Pool<'_> {
     );
 
     let provider = Address::generate(env);
-    ta_sac.mint(&provider, &1_000_000_i128);
-    tb_sac.mint(&provider, &1_000_000_i128);
-    client.add_liquidity(
-        &provider,
-        &1_000_000_i128,
-        &1_000_000_i128,
-        &0_i128,
-        &u64::MAX,
-    );
+    ta_sac.mint(&provider, &initial_a);
+    tb_sac.mint(&provider, &initial_b);
+    client.add_liquidity(&provider, &initial_a, &initial_b, &0_i128, &u64::MAX);
 
     let ta_addr = ta.address.clone();
     let tb_addr = tb.address.clone();
@@ -269,6 +270,9 @@ fn deploy_pool(env: &Env, fee_bps: i128) -> Pool<'_> {
         client,
         ta: ta_addr,
         tb: tb_addr,
+        lp: lp_addr,
+        admin,
+        provider,
     }
 }
 
@@ -568,6 +572,99 @@ mod contract_props {
         (ra, rb)
     }
 
+    #[derive(Clone, Debug)]
+    enum Operation {
+        AddLiquidity(i128),
+        RemoveLiquidity(i128),
+        RemoveLiquidityOneSided(bool, i128),
+        Swap(bool, i128),
+        SwapExactOut(bool, i128),
+        FlashLoanShort(i128),
+        WithdrawProtocolFees,
+        UpdateFee(i128),
+        SetProtocolFee(i128),
+        SetLpRebate(i128),
+        AdvanceLedger(u64),
+        EmergencyWithdraw,
+    }
+
+    fn operation_strategy() -> impl Strategy<Value = Operation> {
+        prop_oneof![
+            (1_i128..=10_000).prop_map(Operation::AddLiquidity),
+            (1_i128..=10_000).prop_map(Operation::RemoveLiquidity),
+            (any::<bool>(), 1_i128..=10_000).prop_map(|(direction, amount)| {
+                Operation::RemoveLiquidityOneSided(direction, amount)
+            }),
+            (any::<bool>(), 1_i128..=10_000)
+                .prop_map(|(direction, amount)| Operation::Swap(direction, amount)),
+            (any::<bool>(), 1_i128..=5_000)
+                .prop_map(|(direction, amount)| Operation::SwapExactOut(direction, amount)),
+            (1_i128..=10_000).prop_map(Operation::FlashLoanShort),
+            Just(Operation::WithdrawProtocolFees),
+            (0_i128..=300).prop_map(Operation::UpdateFee),
+            (0_i128..=100).prop_map(Operation::SetProtocolFee),
+            (0_i128..=10_000).prop_map(Operation::SetLpRebate),
+            (1_u64..=3_600).prop_map(Operation::AdvanceLedger),
+            Just(Operation::EmergencyWithdraw),
+        ]
+    }
+
+    /// Quarantines are deliberately keyed by invariant and operation. A new
+    /// operation/invariant pair may not be skipped without an issue reference.
+    const KNOWN_FAILURES: &[(&str, &str, &str)] = &[
+        ("reserve_accounting", "remove_liquidity_one_sided", "#1093"),
+        ("exact_out_delivery", "swap_exact_out", "#1097"),
+        ("lp_supply", "emergency_withdraw", "#1096"),
+        ("fot_accounting", "add_liquidity_fot", "#1094"),
+        ("fot_accounting", "swap_fot", "#1095"),
+        ("flash_loan_accounting", "flash_loan", "#1107"),
+    ];
+
+    fn is_known_failure(invariant: &str, operation: &str) -> bool {
+        KNOWN_FAILURES
+            .iter()
+            .any(|(known_invariant, known_operation, _)| {
+                *known_invariant == invariant && *known_operation == operation
+            })
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct State {
+        reserve_a: i128,
+        reserve_b: i128,
+        accrued_a: i128,
+        accrued_b: i128,
+        pool_balance_a: i128,
+        pool_balance_b: i128,
+        total_shares: i128,
+        lp_supply: i128,
+    }
+
+    fn state(env: &Env, pool: &Pool<'_>) -> State {
+        let info = pool.client.get_info();
+        let accrued = pool.client.get_accrued_fees();
+        let (pool_balance_a, pool_balance_b) =
+            pool_reserves(env, &pool.client.address, &pool.ta, &pool.tb);
+        State {
+            reserve_a: info.reserve_a,
+            reserve_b: info.reserve_b,
+            accrued_a: accrued.0,
+            accrued_b: accrued.1,
+            pool_balance_a,
+            pool_balance_b,
+            total_shares: info.total_shares,
+            lp_supply: token_wasm::Client::new(env, &pool.lp).total_supply(),
+        }
+    }
+
+    fn tracked_token_total(env: &Env, token: &Address, pool: &Pool<'_>, actor: &Address) -> i128 {
+        let client = StellarTokenClient::new(env, token);
+        client.balance(&pool.client.address)
+            + client.balance(actor)
+            + client.balance(&pool.admin)
+            + client.balance(&pool.provider)
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -748,6 +845,156 @@ mod contract_props {
                      after op kind={kind} amount={amount}",
                 );
             }
+        }
+
+        /// Stateful deployed-contract harness. Every successful operation is
+        /// followed by accounting, supply and conservation checks; every
+        /// rejected operation must leave the complete observable state intact.
+        #[test]
+        fn contract_stateful_invariants(
+            ops in proptest::collection::vec(operation_strategy(), 1..20),
+            fee_bps in 1_i128..=300_i128,
+            unbalanced in any::<bool>(),
+        ) {
+            let env = Env::default();
+            env.mock_all_auths();
+            env.ledger().with_mut(|ledger| ledger.timestamp = 1_000_000);
+            let initial_b = if unbalanced { 1_000_000_000 } else { 1_000_000 };
+            let pool = deploy_pool_with_ratio(&env, fee_bps, 1_000_000, initial_b);
+            let actor = Address::generate(&env);
+            StellarAssetClient::new(&env, &pool.ta).mint(&actor, &100_000_000);
+            StellarAssetClient::new(&env, &pool.tb).mint(&actor, &100_000_000);
+            let total_a = tracked_token_total(&env, &pool.ta, &pool, &actor);
+            let total_b = tracked_token_total(&env, &pool.tb, &pool, &actor);
+            let mut drained = false;
+            let mut reserve_accounting_quarantined = false;
+
+            for op in ops {
+                let before = state(&env, &pool);
+                let mut operation = "configuration";
+                let mut succeeded = true;
+                let mut exact_out_observation: Option<(i128, i128, i128, i128)> = None;
+
+                match op {
+                    Operation::AddLiquidity(amount_a) => {
+                        operation = "add_liquidity";
+                        let amount_b = if before.reserve_a > 0 {
+                            amount_a.saturating_mul(before.reserve_b) / before.reserve_a
+                        } else { amount_a };
+                        succeeded = matches!(pool.client.try_add_liquidity(&actor, &amount_a, &amount_b, &0, &u64::MAX), Ok(Ok(_)));
+                    }
+                    Operation::RemoveLiquidity(amount) => {
+                        operation = "remove_liquidity";
+                        let shares = pool.client.shares_of(&actor);
+                        let burn = amount.min(shares);
+                        succeeded = matches!(pool.client.try_remove_liquidity(&actor, &burn, &0, &0, &u64::MAX), Ok(Ok(_)));
+                    }
+                    Operation::RemoveLiquidityOneSided(direction, amount) => {
+                        operation = "remove_liquidity_one_sided";
+                        let shares = pool.client.shares_of(&actor);
+                        let burn = amount.min(shares);
+                        let token_out = if direction { &pool.ta } else { &pool.tb };
+                        succeeded = matches!(pool.client.try_remove_liquidity_one_sided(&actor, &burn, token_out, &0, &u64::MAX), Ok(Ok(_)));
+                        reserve_accounting_quarantined |= succeeded;
+                    }
+                    Operation::Swap(direction, amount) => {
+                        operation = "swap";
+                        let token_in = if direction { &pool.ta } else { &pool.tb };
+                        succeeded = matches!(pool.client.try_swap(&actor, token_in, &amount, &0, &u64::MAX), Ok(Ok(_)));
+                    }
+                    Operation::SwapExactOut(direction, amount_out) => {
+                        operation = "swap_exact_out";
+                        let token_out = if direction { &pool.tb } else { &pool.ta };
+                        let token_in = if direction { &pool.ta } else { &pool.tb };
+                        let input_before = StellarTokenClient::new(&env, token_in).balance(&actor);
+                        let output_before = StellarTokenClient::new(&env, token_out).balance(&actor);
+                        let quoted = pool.client.try_get_amount_in(token_out, &amount_out);
+                        let max_in = match quoted { Ok(Ok(value)) => value.saturating_add(1), _ => 1 };
+                        succeeded = matches!(pool.client.try_swap_exact_out(&actor, token_out, &amount_out, &max_in, &u64::MAX), Ok(Ok(_)));
+                        if succeeded {
+                            let input_after = StellarTokenClient::new(&env, token_in).balance(&actor);
+                            let output_after = StellarTokenClient::new(&env, token_out).balance(&actor);
+                            exact_out_observation = Some((input_before - input_after, output_after - output_before, max_in, amount_out));
+                        }
+                    }
+                    Operation::FlashLoanShort(amount) => {
+                        operation = "flash_loan";
+                        succeeded = matches!(pool.client.try_flash_loan(&actor, &amount, &0, &soroban_sdk::Bytes::new(&env)), Ok(Ok(_)));
+                    }
+                    Operation::WithdrawProtocolFees => {
+                        operation = "withdraw_protocol_fees";
+                        succeeded = matches!(pool.client.try_withdraw_protocol_fees(), Ok(Ok(_)));
+                    }
+                    Operation::UpdateFee(new_fee) => {
+                        succeeded = matches!(pool.client.try_update_fee(&new_fee), Ok(Ok(_)));
+                    }
+                    Operation::SetProtocolFee(protocol_fee) => {
+                        succeeded = matches!(pool.client.try_set_protocol_fee(&pool.admin, &pool.admin, &protocol_fee), Ok(Ok(_)));
+                    }
+                    Operation::SetLpRebate(rebate) => {
+                        succeeded = matches!(pool.client.try_set_lp_rebate(&pool.admin, &rebate), Ok(Ok(_)));
+                    }
+                    Operation::AdvanceLedger(seconds) => {
+                        env.ledger().with_mut(|ledger| {
+                            ledger.timestamp = ledger.timestamp.saturating_add(seconds);
+                            ledger.sequence_number = ledger.sequence_number.saturating_add(1);
+                        });
+                    }
+                    Operation::EmergencyWithdraw => {
+                        operation = "emergency_withdraw";
+                        succeeded = matches!(pool.client.try_emergency_withdraw(&pool.admin), Ok(Ok(_)));
+                        drained |= succeeded;
+                    }
+                }
+
+                let after = state(&env, &pool);
+                if !succeeded {
+                    prop_assert_eq!(after, before, "failed {operation} changed observable state");
+                    continue;
+                }
+
+                if !reserve_accounting_quarantined && !is_known_failure("reserve_accounting", operation) {
+                    prop_assert_eq!(after.reserve_a + after.accrued_a, after.pool_balance_a,
+                        "token A reserve accounting diverged after {operation}");
+                    prop_assert_eq!(after.reserve_b + after.accrued_b, after.pool_balance_b,
+                        "token B reserve accounting diverged after {operation}");
+                }
+                if !drained && !is_known_failure("lp_supply", operation) {
+                    prop_assert_eq!(after.total_shares, after.lp_supply,
+                        "LP supply diverged after {operation}");
+                }
+                prop_assert_eq!(tracked_token_total(&env, &pool.ta, &pool, &actor), total_a,
+                    "token A was created or destroyed after {operation}");
+                prop_assert_eq!(tracked_token_total(&env, &pool.tb, &pool, &actor), total_b,
+                    "token B was created or destroyed after {operation}");
+
+                if (operation == "swap" || operation == "swap_exact_out")
+                    && !is_known_failure("exact_out_delivery", operation)
+                {
+                    let k_before = before.reserve_a.saturating_mul(before.reserve_b);
+                    let k_after = after.reserve_a.saturating_mul(after.reserve_b);
+                    prop_assert!(k_after >= k_before, "k decreased after {operation}");
+                }
+
+                if let Some((spent, received, quoted_max, expected_out)) = exact_out_observation {
+                    if !is_known_failure("exact_out_delivery", operation) {
+                        prop_assert_eq!(received, expected_out);
+                        prop_assert!(spent <= quoted_max, "exact-out spent above its quote");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn known_failure_quarantine_is_specific_and_traceable() {
+        let mut pairs = std::collections::BTreeSet::new();
+        for (invariant, operation, issue) in KNOWN_FAILURES {
+            assert!(issue.starts_with('#'));
+            assert!(
+                pairs.insert((*invariant, *operation)),
+                "duplicate quarantine entry"
+            );
         }
     }
 }

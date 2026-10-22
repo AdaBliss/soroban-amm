@@ -14,6 +14,8 @@ import {
 } from "@stellar/stellar-sdk";
 import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
+import { invoke } from "./internal/invoke.js";
+import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -48,6 +50,19 @@ export class TokenClient {
 
   private async simulate(method: string, ...args: xdr.ScVal[]): Promise<xdr.ScVal> {
     return simulateRead(this.server, this.contract, this.networkPassphrase, method, args);
+  }
+
+  private async execute<T>(method: string, args: xdr.ScVal[], signer: Signer, options?: InvokeOptions): Promise<InvocationResult<T>> {
+    return invoke<T>({
+      server: this.server,
+      contract: this.contract,
+      networkPassphrase: this.networkPassphrase,
+      source: await signer.publicKey(),
+      signer,
+      method,
+      args,
+      ...options,
+    });
   }
 
   // ── Read-only methods ──────────────────────────────────────────────────────
@@ -156,5 +171,17 @@ export class TokenClient {
    */
   burnParams(from: string, amount: bigint): xdr.ScVal[] {
     return [addr(from), i128(amount)];
+  }
+
+  async transfer(from: string, to: string, amount: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.execute("transfer", this.transferParams(from, to, amount), signer, options);
+  }
+
+  async transferFrom(spender: string, from: string, to: string, amount: bigint, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.execute("transfer_from", this.transferFromParams(spender, from, to, amount), signer, options);
+  }
+
+  async approve(from: string, spender: string, amount: bigint, liveUntilLedger: number, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<void>> {
+    return this.execute("approve", this.approveParams(from, spender, amount, liveUntilLedger), signer, options);
   }
 }
