@@ -2149,6 +2149,2153 @@
           ]
         }
       ]
+    },
+    "staking": {
+      "source": "contracts/staking/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_admin",
+          "inputs": [
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "add_rewards",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "boost_expires_at",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "claim",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "current_boost",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "effective_staked",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "emergency_withdraw",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "extend_lock",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            },
+            {
+              "name": "new_duration_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_locked_position",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_owed_rewards",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_pool_info",
+          "inputs": []
+        },
+        {
+          "name": "get_staker_info",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "lp_token",
+              "type": "Address"
+            },
+            {
+              "name": "reward_token",
+              "type": "Address"
+            },
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "initialize_with_boost_config",
+          "inputs": [
+            {
+              "name": "lp_token",
+              "type": "Address"
+            },
+            {
+              "name": "reward_token",
+              "type": "Address"
+            },
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "min_boost_scaled",
+              "type": "i128"
+            },
+            {
+              "name": "max_boost_scaled",
+              "type": "i128"
+            },
+            {
+              "name": "min_lock_duration_secs",
+              "type": "u64"
+            },
+            {
+              "name": "max_lock_duration_secs",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "is_emergency_mode",
+          "inputs": []
+        },
+        {
+          "name": "is_paused",
+          "inputs": []
+        },
+        {
+          "name": "list_expired_boosts",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "lock",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "name": "lock_duration_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "pause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "pending_rewards",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "propose_admin",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "reconcile_reward_accounting",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            },
+            {
+              "name": "done",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "register_existing_stakers",
+          "inputs": [
+            {
+              "name": "stakers",
+              "type": "Vec<Address>"
+            }
+          ]
+        },
+        {
+          "name": "set_emergency_mode",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "enabled",
+              "type": "bool"
+            }
+          ]
+        },
+        {
+          "name": "set_max_reward_pool_balance",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "max_balance",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "settle_boost",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "settle_boost_batch",
+          "inputs": [
+            {
+              "name": "stakers",
+              "type": "Vec<Address>"
+            }
+          ]
+        },
+        {
+          "name": "stake",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "stake_locked",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            },
+            {
+              "name": "lock_duration_secs",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "total_effective_staked",
+          "inputs": []
+        },
+        {
+          "name": "unlock",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "unpause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "unstake",
+          "inputs": [
+            {
+              "name": "staker",
+              "type": "Address"
+            },
+            {
+              "name": "amount",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "update_rewards",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_rewards",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ]
+        }
+      ]
+    },
+    "incentive_campaigns": {
+      "source": "contracts/incentive_campaigns/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_governance",
+          "inputs": [
+            {
+              "name": "new_governance",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "claim_rewards",
+          "inputs": [
+            {
+              "name": "provider",
+              "type": "Address"
+            },
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "create_campaign",
+          "inputs": [
+            {
+              "name": "caller",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "lp_token",
+              "type": "Address"
+            },
+            {
+              "name": "reward_token",
+              "type": "Address"
+            },
+            {
+              "name": "start_time",
+              "type": "u64"
+            },
+            {
+              "name": "end_time",
+              "type": "u64"
+            },
+            {
+              "name": "reward_rate",
+              "type": "i128"
+            },
+            {
+              "name": "funding_amount",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "get_active_campaigns",
+          "inputs": []
+        },
+        {
+          "name": "get_active_campaigns_paged",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_active_campaigns_paginated",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_campaign",
+          "inputs": [
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_campaign_accrual",
+          "inputs": [
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_campaign_count",
+          "inputs": []
+        },
+        {
+          "name": "get_campaigns",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_campaigns_by_creator",
+          "inputs": [
+            {
+              "name": "creator",
+              "type": "Address"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_campaigns_paginated",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_claim_history",
+          "inputs": [
+            {
+              "name": "provider",
+              "type": "Address"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_distribution_count",
+          "inputs": [
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_distribution_record",
+          "inputs": [
+            {
+              "name": "record_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_governance",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_governance",
+          "inputs": []
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "is_campaign_active",
+          "inputs": [
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "list_campaigns",
+          "inputs": []
+        },
+        {
+          "name": "list_campaigns_paginated",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "list_distribution_records",
+          "inputs": [
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "propose_governance",
+          "inputs": [
+            {
+              "name": "caller",
+              "type": "Address"
+            },
+            {
+              "name": "new_governance",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "recover_leftover_funds",
+          "inputs": [
+            {
+              "name": "caller",
+              "type": "Address"
+            },
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "name": "recipient",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_campaign_rate",
+          "inputs": [
+            {
+              "name": "caller",
+              "type": "Address"
+            },
+            {
+              "name": "campaign_id",
+              "type": "u64"
+            },
+            {
+              "name": "new_rate",
+              "type": "i128"
+            }
+          ]
+        }
+      ]
+    },
+    "pol_vesting": {
+      "source": "contracts/pol_vesting/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_governance",
+          "inputs": [
+            {
+              "name": "new_governance",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "accept_treasury",
+          "inputs": [
+            {
+              "name": "new_treasury",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "change_beneficiary",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            },
+            {
+              "name": "old_beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "old_schedule_id",
+              "type": "u32"
+            },
+            {
+              "name": "new_beneficiary",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "committed",
+          "inputs": [
+            {
+              "name": "lp_token",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "create_vesting",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            },
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "lp_token",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "total",
+              "type": "i128"
+            },
+            {
+              "name": "start_ledger",
+              "type": "u32"
+            },
+            {
+              "name": "cliff_ledger",
+              "type": "u32"
+            },
+            {
+              "name": "end_ledger",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_governance",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_governance",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_treasury",
+          "inputs": []
+        },
+        {
+          "name": "get_treasury",
+          "inputs": []
+        },
+        {
+          "name": "get_vesting",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "schedule_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            },
+            {
+              "name": "treasury",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "list_schedules",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "propose_governance",
+          "inputs": [
+            {
+              "name": "current_governance",
+              "type": "Address"
+            },
+            {
+              "name": "new_governance",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "propose_treasury",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            },
+            {
+              "name": "new_treasury",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "releasable_amount",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "schedule_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "release",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "schedule_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "revoke_vesting",
+          "inputs": [
+            {
+              "name": "governance",
+              "type": "Address"
+            },
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "schedule_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "schedule_count",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "vested_amount",
+          "inputs": [
+            {
+              "name": "beneficiary",
+              "type": "Address"
+            },
+            {
+              "name": "schedule_id",
+              "type": "u32"
+            }
+          ]
+        }
+      ]
+    },
+    "oracle_aggregator": {
+      "source": "contracts/oracle_aggregator/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_admin",
+          "inputs": [
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_max_deviation_bps",
+          "inputs": []
+        },
+        {
+          "name": "get_max_staleness",
+          "inputs": []
+        },
+        {
+          "name": "get_price",
+          "inputs": [
+            {
+              "name": "token_a",
+              "type": "Address"
+            },
+            {
+              "name": "token_b",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_price_detailed",
+          "inputs": [
+            {
+              "name": "token_a",
+              "type": "Address"
+            },
+            {
+              "name": "token_b",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_price_safe",
+          "inputs": [
+            {
+              "name": "token_a",
+              "type": "Address"
+            },
+            {
+              "name": "token_b",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_price_spread_bps",
+          "inputs": [
+            {
+              "name": "token_a",
+              "type": "Address"
+            },
+            {
+              "name": "token_b",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "max_staleness_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "is_paused",
+          "inputs": []
+        },
+        {
+          "name": "list_sources",
+          "inputs": []
+        },
+        {
+          "name": "migrate_sources",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "pause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "propose_admin",
+          "inputs": [
+            {
+              "name": "current_admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "register_source",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "source_contract",
+              "type": "Address"
+            },
+            {
+              "name": "source_type",
+              "type": "OracleSourceType"
+            },
+            {
+              "name": "weight",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "remove_source",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "source_contract",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_max_deviation_bps",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "max_deviation_bps",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "set_max_staleness",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "max_staleness_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "set_source_weight",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "source_contract",
+              "type": "Address"
+            },
+            {
+              "name": "weight",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "unpause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ]
+        }
+      ]
+    },
+    "twap_consumer": {
+      "source": "contracts/twap_consumer/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "assert_lending_price_safe",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            },
+            {
+              "name": "spot_price",
+              "type": "i128"
+            },
+            {
+              "name": "max_deviation_bps",
+              "type": "i128"
+            },
+            {
+              "name": "collateral_amount",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "configure_public_snapshots",
+          "inputs": [
+            {
+              "name": "factory",
+              "type": "Address"
+            },
+            {
+              "name": "min_interval_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "delete_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "ledger_ts",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_cl_twap",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_cl_twap_detailed",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_keeper",
+          "inputs": []
+        },
+        {
+          "name": "get_latest_snapshot_timestamp",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_retention_policy",
+          "inputs": []
+        },
+        {
+          "name": "get_snapshot_count",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_snapshots",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "from_ts",
+              "type": "u64"
+            },
+            {
+              "name": "to_ts",
+              "type": "u64"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_tracked_pools",
+          "inputs": []
+        },
+        {
+          "name": "get_tracked_pools_typed",
+          "inputs": []
+        },
+        {
+          "name": "get_twap_all",
+          "inputs": [
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twap_both",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twap_price",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twap_price_detailed",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "keeper",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "list_snapshot_timestamps",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "prune_all",
+          "inputs": [
+            {
+              "name": "max_to_remove_per_pool",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "prune_snapshots",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "max_to_remove",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "save_cl_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "save_cl_snapshot_public",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "save_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "save_snapshot_public",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_retention_policy",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "policy",
+              "type": "RetentionPolicy"
+            }
+          ]
+        },
+        {
+          "name": "validate_price",
+          "inputs": [
+            {
+              "name": "spot_price",
+              "type": "i128"
+            },
+            {
+              "name": "twap_price",
+              "type": "i128"
+            },
+            {
+              "name": "max_deviation_bps",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "validate_price_against_twap",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            },
+            {
+              "name": "spot_price",
+              "type": "i128"
+            },
+            {
+              "name": "max_deviation_bps",
+              "type": "i128"
+            }
+          ]
+        }
+      ]
+    },
+    "twal_consumer": {
+      "source": "contracts/twal_consumer/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "add_tracked_pool",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "pool_type",
+              "type": "PoolType"
+            }
+          ]
+        },
+        {
+          "name": "delete_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "ledger_ts",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_cl_twal",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_keeper",
+          "inputs": []
+        },
+        {
+          "name": "get_snapshot_count",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_tracked_pool_count",
+          "inputs": []
+        },
+        {
+          "name": "get_tracked_pools",
+          "inputs": []
+        },
+        {
+          "name": "get_tracked_pools_paginated",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_twal_all",
+          "inputs": [
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twal_all_safe",
+          "inputs": [
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twal_batch",
+          "inputs": [
+            {
+              "name": "pools",
+              "type": "Vec<(Address, PoolType)>"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_twal_liquidity",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "window_seconds",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "keeper",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "is_tracked",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "remove_tracked_pool",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "save_cl_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "save_snapshot",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        }
+      ]
+    },
+    "dex_aggregator": {
+      "source": "contracts/dex_aggregator/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "execute_route",
+          "inputs": [
+            {
+              "name": "route",
+              "type": "RouteQuote"
+            },
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "min_out",
+              "type": "i128"
+            },
+            {
+              "name": "deadline",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "find_best_route",
+          "inputs": [
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "max_hops",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_quote",
+          "inputs": [
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "max_hops",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "factory",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "is_paused",
+          "inputs": []
+        },
+        {
+          "name": "is_price_within_tolerance",
+          "inputs": [
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "quoted_out",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "pause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "register_cl_pool",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "token_a",
+              "type": "Address"
+            },
+            {
+              "name": "token_b",
+              "type": "Address"
+            },
+            {
+              "name": "fee_bps",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "remove_cl_pool",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_max_hops",
+          "inputs": [
+            {
+              "name": "max_hops",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "set_routing_tokens",
+          "inputs": [
+            {
+              "name": "tokens",
+              "type": "Vec<Address>"
+            }
+          ]
+        },
+        {
+          "name": "swap_best",
+          "inputs": [
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "min_out",
+              "type": "i128"
+            },
+            {
+              "name": "deadline",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "unpause",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            }
+          ]
+        }
+      ]
+    },
+    "batch_auction": {
+      "source": "contracts/batch_auction/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_admin",
+          "inputs": [
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "add_venue",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "pool_type",
+              "type": "PoolType"
+            }
+          ]
+        },
+        {
+          "name": "cancel_order",
+          "inputs": [
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "order_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "claim_refund",
+          "inputs": [
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "order_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "expire_order",
+          "inputs": [
+            {
+              "name": "order_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_batch_info",
+          "inputs": []
+        },
+        {
+          "name": "get_claimable",
+          "inputs": [
+            {
+              "name": "order_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "get_expired_orders",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_pending_orders",
+          "inputs": []
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "batch_window_secs",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "is_venue_allowed",
+          "inputs": [
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "list_venues",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "propose_admin",
+          "inputs": [
+            {
+              "name": "current_admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "quote_order",
+          "inputs": [
+            {
+              "name": "order_id",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "remove_venue",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_batch_window",
+          "inputs": [
+            {
+              "name": "batch_window_secs",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "set_factory",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "factory",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_max_orders",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "n",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "settle_batch",
+          "inputs": []
+        },
+        {
+          "name": "submit_order",
+          "inputs": [
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "min_out",
+              "type": "i128"
+            },
+            {
+              "name": "deadline",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "submit_order_cl",
+          "inputs": [
+            {
+              "name": "trader",
+              "type": "Address"
+            },
+            {
+              "name": "pool",
+              "type": "Address"
+            },
+            {
+              "name": "token_in",
+              "type": "Address"
+            },
+            {
+              "name": "token_out",
+              "type": "Address"
+            },
+            {
+              "name": "amount_in",
+              "type": "i128"
+            },
+            {
+              "name": "min_out",
+              "type": "i128"
+            },
+            {
+              "name": "zero_for_one",
+              "type": "bool"
+            },
+            {
+              "name": "sqrt_price_limit",
+              "type": "u128"
+            },
+            {
+              "name": "alt_amm_pool",
+              "type": "Option<Address>"
+            },
+            {
+              "name": "deadline",
+              "type": "u64"
+            }
+          ]
+        }
+      ]
     }
   }
 }

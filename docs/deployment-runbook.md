@@ -128,6 +128,7 @@ concentrated_liquidity.wasm
 governance.wasm
 staking.wasm
 twap_consumer.wasm
+oracle_adapters.wasm
 twal_consumer.wasm
 oracle_aggregator.wasm
 router.wasm

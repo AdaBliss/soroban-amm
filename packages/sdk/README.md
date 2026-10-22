@@ -1,6 +1,8 @@
-##@ soroban-amm/sdk
-TypeScript/JavaScript SDK for the Soroban AMM contracts - Issue #104. 
-Includes clients for the AmmPool, Factory, Governance, ConcentratedLiquidity, Staking, IncentiveCampaigns, and Router contracts.
+# @soroban-amm/sdk
+
+Typed TypeScript clients for the Soroban AMM protocol. The package covers the
+core pools and factory plus routing, governance, staking, incentives, vesting,
+oracle consumers, aggregation and batch auctions.
 
 ## Installation
 
@@ -11,7 +13,7 @@ npm install @soroban-amm/sdk @stellar/stellar-sdk
 ## Usage
 
 The SDK provides typed clients for each contract. All clients take the same constructor options:
-`+{ rpcUrl, networkPassphrase, contractId }`.
+`{ rpcUrl, networkPassphrase, contractId }`.
 
 Property values of type `i128` are represented as `bigint` throughout.
 
@@ -82,29 +84,10 @@ const staking = new StakingClient({
   contractId: "C...",
 });
 
-// Read pool information
+// Read pool information and encode write arguments for a transaction builder.
 const poolInfo = await staking.getPoolInfo();
-
-// Human boost multiplier (10000 = 1x)
-const multiplier = staking.boostMultiplierHuman(poolInfo.boostMultiplier);
-
-// Stake tokens
-let result = await staking.stake({
-  source: "G...",
-  token: "C...",
-  amount: 1000n[
-});
-
-// Stake with lock and get seconds remaining
-let result = await staking.stakeLocked({
-  source: "G...",
-  token: "C...",
-  amount: 500n,
-  duration: 1200,
-});
-for (const position of staking.getLockedPositions({ source: "G..."" })) {
-  console.log(staking.lockSecondsRemaining(position));
-}
+const multiplier = staking.boostMultiplierHuman(await staking.currentBoost("G..."));
+const args = staking.stakeLockedParams("G...", 500n, 1200n);
 ```
 
 ### IncentiveCampaignsClient
@@ -118,25 +101,10 @@ const incentives = new IncentiveCampaignsClient({
   contractId: "C...",
 });
 
-// List all campaigns
-let campaigns = await incentives.listCampaigns();
-
-const camp = await incentives.getCampaign({
-  campaignId: 1,
-});
-
-// Create a campaign
-let result = await incentives.createCampaign({
-  source: "G...",
-  amount: 1000n[
-  token: "C...",
-  duration: 604800,
-  rate: 10],
-});
-
-// Claim rewards for a user
-let result = await incentives.claimRewards(user: "G...");
-`+`
+const campaigns = await incentives.listCampaignsPaginated(0, 20);
+const campaign = await incentives.getCampaign(campaigns[0]);
+const claimArgs = incentives.claimRewardsParams("G...", campaign.id);
+```
 
 ### RouterClient
 
@@ -150,26 +118,15 @@ const router = new RouterClient({
 });
 
 // Quote an out amount for a path
-let amountOut = await router.getAmountOutPath({
-  path: ["A", "B", "C"],
-  amountIn: 1000_n000n,
-});
+const amountOut = await router.getAmountOutPath(["C...", "C..."], 1_000_000n);
 
 // Swap exact in (with default deadline now+300s)
-let result = await router.swapExactIn({
-  source: "G...",
-  path: ["A", "B", "C"],
-  amountIn: 1000_n000n,
-  minAmountOut: 1_n,
-});
-
-// Swap with a custom deadline in seconds
-let result = await router.swapExactOut({
-  source: "G...",
-  path: ["A", "B", "C"],
-  amountOut: 100_n,
-  maxAmountIn: 1_n,
-  deadlineSeconds: 1200,
+const swapArgs = router.swapExactInParams({
+  trader: "G...",
+  path: ["C...", "C..."],
+  amountIn: 1_000_000n,
+  minAmountOut: 1n,
+  deadline: BigInt(Math.floor(Date.now() / 1000) + 300),
 });
 ```
 

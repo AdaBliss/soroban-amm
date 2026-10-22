@@ -47,6 +47,7 @@ ALL_CONTRACTS=(
   governance
   oracle_aggregator
   twap_consumer
+  oracle_adapters
   twal_consumer
   staking
   incentive_campaigns
@@ -72,6 +73,7 @@ declare -A WASM_FILE=(
   [twap_consumer]="twap_consumer.wasm"
   [twal_consumer]="twal_consumer.wasm"
   [oracle_aggregator]="oracle_aggregator.wasm"
+  [oracle_adapters]="oracle_adapters.wasm"
   [router]="router.wasm"
   [batch_router]="batch_router.wasm"
   [dex_aggregator]="dex_aggregator.wasm"

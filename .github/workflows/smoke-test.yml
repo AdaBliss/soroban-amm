@@ -170,6 +170,7 @@ jobs:
             echo "| Trigger | \`${{ github.event_name }}\` |"
             echo "| Commit | \`${{ github.sha }}\` |"
             echo "| Detail | $reason |"
+            echo "| Coverage | Includes the incentive campaign create, claim, rate update, recovery and governance handover flow. |"
             if grep -qs '^Summary$' "$RUNNER_TEMP/e2e.log"; then
               echo
               echo '```'

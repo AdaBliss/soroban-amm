@@ -26,7 +26,12 @@ cum_a += (reserve_b * 1_000_000 / reserve_a) * elapsed_seconds
 cum_b += (reserve_a * 1_000_000 / reserve_b) * elapsed_seconds
 ```
 
-The `twap_consumer` contract reads two snapshots of these accumulators separated by `window_seconds` and computes:
+The `twap_consumer` contract reads a retained snapshot and extrapolates the
+pool cumulative through the current ledger timestamp using the latest reserve
+ratio. This makes an idle constant-price pool observable and defines the
+average over ledger time rather than only over pool update timestamps. The
+`get_twap_price_detailed` view returns both the price and the effective
+`window_used` when the floor snapshot predates the requested boundary.
 
 ```
 twap = (cum_a_now - cum_a_then) / (pool_ts_now - pool_ts_then)

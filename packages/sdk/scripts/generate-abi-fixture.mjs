@@ -43,6 +43,14 @@ const CONTRACTS = {
     source: "contracts/concentrated_liquidity/src/lib.rs",
     impl: "#[contractimpl]\nimpl ConcentratedLiquidity",
   },
+  staking: { source: "contracts/staking/src/lib.rs", impl: "#[contractimpl]\nimpl Staking" },
+  incentive_campaigns: { source: "contracts/incentive_campaigns/src/lib.rs", impl: "#[contractimpl]\nimpl IncentiveCampaigns" },
+  pol_vesting: { source: "contracts/pol_vesting/src/lib.rs", impl: "#[contractimpl]\nimpl PolVestingContract" },
+  oracle_aggregator: { source: "contracts/oracle_aggregator/src/lib.rs", impl: "#[contractimpl]\nimpl OracleAggregator" },
+  twap_consumer: { source: "contracts/twap_consumer/src/lib.rs", impl: "#[contractimpl]\nimpl TwapConsumer" },
+  twal_consumer: { source: "contracts/twal_consumer/src/lib.rs", impl: "#[contractimpl]\nimpl TwalConsumer" },
+  dex_aggregator: { source: "contracts/dex_aggregator/src/lib.rs", impl: "#[contractimpl]\nimpl DexAggregator" },
+  batch_auction: { source: "contracts/batch_auction/src/lib.rs", impl: "#[contractimpl]\nimpl BatchAuction" },
 };
 
 /** Slice a top-level block: from the line holding `header` to the first line that is exactly `}`. */

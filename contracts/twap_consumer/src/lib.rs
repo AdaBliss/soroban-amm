@@ -8,11 +8,18 @@ use soroban_sdk::{
 #[contractclient(name = "AmmPoolOracleClient")]
 pub trait AmmPoolOracle {
     fn get_price_cumulative(env: Env) -> (i128, i128, u64);
+    fn get_info(env: Env) -> AmmPoolInfo;
 }
 
 #[contractclient(name = "ClPoolOracleClient")]
 pub trait ClPoolOracle {
     fn get_tick_cumulative(env: Env) -> (i64, u64);
+    fn observe(env: Env, seconds_ago: u64) -> i64;
+}
+
+#[contractclient(name = "FactoryRegistryClient")]
+pub trait FactoryRegistry {
+    fn get_pool_tokens(env: Env, pool: Address) -> Option<(Address, Address)>;
 }
 
 #[contracterror]
@@ -38,6 +45,8 @@ pub enum TwapError {
     /// instead of trapping so a caller can tell a bad pool from a broken
     /// consumer (#964).
     CrossContractCallFailed = 14,
+    SnapshotRateLimited = 15,
+    PoolNotRegistered = 16,
 }
 
 #[contracttype]
@@ -63,9 +72,43 @@ pub enum DataKey {
     /// `scripts/check_storage_keys.sh` enforces that in CI.
     Snapshots(Address),
     RetentionPolicy,
+    Factory,
+    MinSnapshotInterval,
     /// Typed tracked-pool list (`Vec<TrackedPool>`), replacing the untyped
     /// `TrackedPoolsPersistent` (#964).
     TrackedPools,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AmmPoolInfo {
+    pub token_a: Address,
+    pub token_b: Address,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub total_shares: i128,
+    pub fee_bps: i128,
+    pub flash_loan_fee_bps: i128,
+    pub admin: Address,
+    pub fee_recipient: Address,
+    pub protocol_fee_bps: i128,
+    pub lp_rebate_bps: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwapResult {
+    pub twap: i128,
+    pub window_used: u64,
+    pub snapshot_timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClTwapResult {
+    pub average_tick: i64,
+    pub window_used: u64,
+    pub snapshot_timestamp: u64,
 }
 
 /// Which oracle interface a tracked pool exposes, and therefore which TWAP
@@ -200,6 +243,50 @@ impl TwapConsumer {
         Ok(())
     }
 
+    /// Configure the factory used to validate permissionless snapshot calls.
+    /// Existing keeper-authorized snapshot entrypoints are unchanged.
+    pub fn configure_public_snapshots(
+        env: Env,
+        factory: Address,
+        min_interval_seconds: u64,
+    ) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_keeper(&env)?;
+        if min_interval_seconds == 0 {
+            return Err(TwapError::InvalidRetentionPolicy);
+        }
+        env.storage().instance().set(&DataKey::Factory, &factory);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinSnapshotInterval, &min_interval_seconds);
+        Ok(())
+    }
+
+    fn require_registered_pool(env: &Env, pool: &Address) -> Result<(), TwapError> {
+        let factory: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(TwapError::PoolNotRegistered)?;
+        if FactoryRegistryClient::new(env, &factory)
+            .get_pool_tokens(pool)
+            .is_none()
+        {
+            return Err(TwapError::PoolNotRegistered);
+        }
+        let min_interval: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinSnapshotInterval)
+            .unwrap_or(300);
+        if let Some(last) = Self::load_snapshots(env, pool).last() {
+            if env.ledger().timestamp().saturating_sub(last.0) < min_interval {
+                return Err(TwapError::SnapshotRateLimited);
+            }
+        }
+        Ok(())
+    }
+
     /// Sets the snapshot retention policy. Caller must be the keeper/admin.
     /// Rejects policies with `0 < max_age_seconds < LONGEST_TWAP_WINDOW` or
     /// `max_snapshots_per_pool > MAX_SNAPSHOTS_PER_POOL`.
@@ -247,6 +334,15 @@ impl TwapConsumer {
         Self::load_snapshots(&env, &pool).len()
     }
 
+    /// Ledger timestamp of the newest retained snapshot, or zero when empty.
+    pub fn get_latest_snapshot_timestamp(env: Env, pool: Address) -> u64 {
+        Self::extend_instance_ttl(&env);
+        Self::load_snapshots(&env, &pool)
+            .last()
+            .map(|entry| entry.0)
+            .unwrap_or(0)
+    }
+
     /// Returns a paginated slice of snapshot timestamps for `pool`.
     pub fn list_snapshot_timestamps(env: Env, pool: Address, offset: u32, limit: u32) -> Vec<u64> {
         Self::extend_instance_ttl(&env);
@@ -289,6 +385,16 @@ impl TwapConsumer {
     pub fn save_snapshot(env: Env, pool: Address) -> Result<(), TwapError> {
         Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
+        let (cum_a, cum_b, pool_ts) = Self::amm_price_cumulative(&env, &pool)?;
+        Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts);
+        Ok(())
+    }
+
+    /// Save an AMM snapshot without keeper authorization for a factory pool.
+    /// Calls are rate-limited by `configure_public_snapshots`.
+    pub fn save_snapshot_public(env: Env, pool: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_registered_pool(&env, &pool)?;
         let (cum_a, cum_b, pool_ts) = Self::amm_price_cumulative(&env, &pool)?;
         Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts);
         Ok(())
@@ -543,7 +649,7 @@ impl TwapConsumer {
     /// Binary-search the pool's snapshots for the most recent one at or
     /// before `then_ts` (the "floor"). Returns `None` if no snapshot that old
     /// exists.
-    fn floor_snapshot(env: &Env, pool: &Address, then_ts: u64) -> Option<PriceSnapshot> {
+    fn floor_snapshot_entry(env: &Env, pool: &Address, then_ts: u64) -> Option<SnapshotEntry> {
         let snapshots = Self::load_snapshots(env, pool);
         let mut lo: u32 = 0;
         let mut hi: u32 = snapshots.len();
@@ -558,30 +664,73 @@ impl TwapConsumer {
         if lo == 0 {
             None
         } else {
-            Some(Self::to_price_snapshot(&snapshots.get(lo - 1).unwrap()))
+            snapshots.get(lo - 1)
         }
     }
 
-    pub fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError> {
+    fn extrapolated_amm_cumulative(
+        env: &Env,
+        pool: &Address,
+    ) -> Result<(i128, i128, u64), TwapError> {
+        let (mut cum_a, mut cum_b, pool_ts) = Self::amm_price_cumulative(env, pool)?;
+        let now = env.ledger().timestamp();
+        if now <= pool_ts {
+            return Ok((cum_a, cum_b, now));
+        }
+        let info = AmmPoolOracleClient::new(env, pool).get_info();
+        if info.reserve_a <= 0 || info.reserve_b <= 0 {
+            return Err(TwapError::InvalidSpotPrice);
+        }
+        let elapsed = i128::from(now - pool_ts);
+        let price_a = info
+            .reserve_b
+            .checked_mul(Self::PRICE_SCALE)
+            .ok_or(TwapError::InvalidSpotPrice)?
+            / info.reserve_a;
+        let price_b = info
+            .reserve_a
+            .checked_mul(Self::PRICE_SCALE)
+            .ok_or(TwapError::InvalidSpotPrice)?
+            / info.reserve_b;
+        cum_a = cum_a
+            .checked_add(price_a.checked_mul(elapsed).ok_or(TwapError::InvalidSpotPrice)?)
+            .ok_or(TwapError::InvalidSpotPrice)?;
+        cum_b = cum_b
+            .checked_add(price_b.checked_mul(elapsed).ok_or(TwapError::InvalidSpotPrice)?)
+            .ok_or(TwapError::InvalidSpotPrice)?;
+        Ok((cum_a, cum_b, now))
+    }
+
+    pub fn get_twap_price_detailed(
+        env: Env,
+        pool: Address,
+        window_seconds: u64,
+    ) -> Result<TwapResult, TwapError> {
         Self::extend_instance_ttl(&env);
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
-        let (cum_a_now, _cum_b_now, pool_ts_now) = Self::amm_price_cumulative(&env, &pool)?;
         let ledger_ts_now = env.ledger().timestamp();
         if ledger_ts_now < window_seconds {
             return Err(TwapError::InsufficientHistory);
         }
-        let then_ts = ledger_ts_now - window_seconds;
-        let snapshot =
-            Self::floor_snapshot(&env, &pool, then_ts).ok_or(TwapError::InsufficientHistory)?;
-
-        let delta_a = (cum_a_now as u128).wrapping_sub(snapshot.cum_a as u128) as i128;
-        let elapsed = (pool_ts_now - snapshot.pool_ts) as i128;
-        if elapsed <= 0 {
+        let snapshot = Self::floor_snapshot_entry(&env, &pool, ledger_ts_now - window_seconds)
+            .ok_or(TwapError::InsufficientHistory)?;
+        let (cum_a_now, _, _) = Self::extrapolated_amm_cumulative(&env, &pool)?;
+        let elapsed = ledger_ts_now.saturating_sub(snapshot.0);
+        if elapsed == 0 {
             return Err(TwapError::ElapsedZero);
         }
-        Ok(delta_a / elapsed)
+        let delta = (cum_a_now as u128).wrapping_sub(snapshot.1 as u128) as i128;
+        Ok(TwapResult {
+            twap: delta / i128::from(elapsed),
+            window_used: elapsed,
+            snapshot_timestamp: snapshot.0,
+        })
+    }
+
+    pub fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError> {
+        Ok(Self::get_twap_price_detailed(env, pool, window_seconds)?.twap)
     }
 
     pub fn validate_price(
@@ -659,18 +808,18 @@ impl TwapConsumer {
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
-        let (cum_a_now, cum_b_now, pool_ts_now) = Self::amm_price_cumulative(&env, &pool)?;
+        let (cum_a_now, cum_b_now, _) = Self::extrapolated_amm_cumulative(&env, &pool)?;
         let ledger_ts_now = env.ledger().timestamp();
         if ledger_ts_now < window_seconds {
             return Err(TwapError::InsufficientHistory);
         }
         let then_ts = ledger_ts_now - window_seconds;
-        let snapshot =
-            Self::floor_snapshot(&env, &pool, then_ts).ok_or(TwapError::InsufficientHistory)?;
+        let snapshot = Self::floor_snapshot_entry(&env, &pool, then_ts)
+            .ok_or(TwapError::InsufficientHistory)?;
 
-        let delta_a = (cum_a_now as u128).wrapping_sub(snapshot.cum_a as u128) as i128;
-        let delta_b = (cum_b_now as u128).wrapping_sub(snapshot.cum_b as u128) as i128;
-        let elapsed = (pool_ts_now - snapshot.pool_ts) as i128;
+        let delta_a = (cum_a_now as u128).wrapping_sub(snapshot.1 as u128) as i128;
+        let delta_b = (cum_b_now as u128).wrapping_sub(snapshot.2 as u128) as i128;
+        let elapsed = i128::from(ledger_ts_now - snapshot.0);
         if elapsed <= 0 {
             return Err(TwapError::ElapsedZero);
         }
@@ -728,30 +877,51 @@ impl TwapConsumer {
     }
 
     pub fn get_cl_twap(env: Env, pool: Address, window_seconds: u64) -> Result<i64, TwapError> {
+        Ok(Self::get_cl_twap_detailed(env, pool, window_seconds)?.average_tick)
+    }
+
+    pub fn get_cl_twap_detailed(
+        env: Env,
+        pool: Address,
+        window_seconds: u64,
+    ) -> Result<ClTwapResult, TwapError> {
         Self::extend_instance_ttl(&env);
         if window_seconds == 0 {
             return Err(TwapError::ZeroWindow);
         }
-        let (cum_now, last_ts_now) = Self::cl_tick_cumulative(&env, &pool)?;
+        let cum_now = ClPoolOracleClient::new(&env, &pool).observe(&0);
         let ledger_ts_now = env.ledger().timestamp();
         if ledger_ts_now < window_seconds {
             return Err(TwapError::InsufficientHistory);
         }
         let then_ts = ledger_ts_now - window_seconds;
-        let snapshot =
-            Self::floor_snapshot(&env, &pool, then_ts).ok_or(TwapError::InsufficientHistory)?;
+        let snapshot = Self::floor_snapshot_entry(&env, &pool, then_ts)
+            .ok_or(TwapError::InsufficientHistory)?;
 
-        let cum_then = snapshot.cum_a as i64;
-        let elapsed_pool = (last_ts_now - snapshot.pool_ts) as i64;
-        if elapsed_pool <= 0 {
+        let cum_then = snapshot.1 as i64;
+        let elapsed = ledger_ts_now.saturating_sub(snapshot.0);
+        if elapsed == 0 {
             return Err(TwapError::ElapsedZero);
         }
-        Ok((cum_now - cum_then) / elapsed_pool)
+        Ok(ClTwapResult {
+            average_tick: (cum_now - cum_then) / elapsed as i64,
+            window_used: elapsed,
+            snapshot_timestamp: snapshot.0,
+        })
     }
 
     pub fn save_cl_snapshot(env: Env, pool: Address) -> Result<(), TwapError> {
         Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
+        let (tick_cum, pool_ts) = Self::cl_tick_cumulative(&env, &pool)?;
+        Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts);
+        Ok(())
+    }
+
+    /// Save a CL snapshot without keeper authorization for a factory pool.
+    pub fn save_cl_snapshot_public(env: Env, pool: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_registered_pool(&env, &pool)?;
         let (tick_cum, pool_ts) = Self::cl_tick_cumulative(&env, &pool)?;
         Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts);
         Ok(())

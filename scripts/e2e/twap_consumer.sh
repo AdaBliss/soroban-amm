@@ -72,6 +72,13 @@ run_twap_consumer_flow() {
   local twap_price
   twap_price=$(invoke "$twap" get_twap_price --pool "$pool" --window_seconds "$window" | parse_i128)
   assert_gt "twap_consumer: TWAP over the snapshot window is positive" "$twap_price" 0
+  local adapter adapter_price
+  adapter=$(e2e_deploy oracle_adapters)
+  invoke "$adapter" initialize \
+    --admin "$keeper" --factory "$factory" --consumer "$twap" --mode Amm \
+    --window_seconds "$window" --max_age_seconds 120 --fee_tiers '[]' >/dev/null
+  adapter_price=$(invoke "$adapter" quote --token_a "$ta" --token_b "$tb" | nth_num 1)
+  assert_gt "oracle adapter: AMM TWAP source returns a positive quote" "$adapter_price" 0
   expect_fail "twap_consumer: zero-length window is rejected" \
     invoke "$twap" get_twap_price --pool "$pool" --window_seconds 0
 }

@@ -278,6 +278,7 @@ main() {
   # 5. Oracle stack
   deploy_oracle_aggregator
   deploy_twap_consumer
+  deploy_oracle_adapters
   deploy_twal_consumer
 
   # 6. Staking & incentives
