@@ -71,6 +71,14 @@ Defined in [contracts/amm/src/lib.rs](../contracts/amm/src/lib.rs) as `AmmError`
 | 22 | `PoolDrained` | The pool has entered the terminal `Drained` state after an `emergency_withdraw` or `exec_multisig_emergency_wd` (#1095). All liquidity, swap, flash-loan, fee-withdrawal, unpause, recovery, and repeat emergency-withdrawal entrypoints are permanently disabled so pre-existing LP tokens cannot drain subsequent deposits. | Deploy a new pool contract; a drained pool is permanently retired. |
 | 23 | `QuorumNotMet` | `exec_multisig_emergency_wd` was called while the number of collected signer approvals was below `MultisigQuorum` (#1095). | Collect additional signer approvals via `approve_emergency_withdraw` until `approvals.len() >= quorum`. |
 | 24 | `NoPendingProposal` | `exec_multisig_emergency_wd` was called when no multisig emergency withdrawal proposal has been created (#1095). | Have a multisig signer call `propose_emergency_withdraw` first. |
+| 25 | `QuorumNotReached` | `exec_multisig_emergency_wd` was called while the number of collected signer approvals was below `MultisigQuorum`. Distinct from `QuorumNotMet` so signers and tooling can tell a too-early execution apart from a governance quorum failure. | Collect additional signer approvals via `approve_emergency_withdraw` until `approvals.len() >= quorum`. |
+| 26 | `NoPendingProposal` | `exec_multisig_emergency_wd` was called when no multisig emergency withdrawal proposal has been created. Distinct from `NoPendingAdmin` so tooling can tell a missing proposal apart from a missing admin nomination. | Have a multisig signer call `propose_emergency_withdraw` first. |
+| 27 | `InvalidQuorum` | `set_multisig` was called with `quorum > signers.len()`, or with a quorum that cannot be satisfied by the supplied signer set. | Pass `quorum` in `1..=signers.len()`, or `0` only through the multisig flow to disable the guard. |
+| 28 | `EmergencyNotAnnounced` | `emergency_withdraw` was called without a prior `announce_emergency_withdraw`, or after `cancel_emergency_withdraw` cleared the announcement. | Call `announce_emergency_withdraw(to)` first and wait for `EMERGENCY_DELAY_SECS`. |
+| 29 | `EmergencyDelayNotElapsed` | `emergency_withdraw` or `exec_multisig_emergency_wd` was called before `EMERGENCY_DELAY_SECS` elapsed since the announcement (or since quorum was reached for the multisig path). | Wait for the configured delay after announcing (single-admin) or after collecting quorum (multisig). |
+| 30 | `EmergencyNotPaused` | `emergency_withdraw` was called while the pool is not paused. The emergency path requires the pool to be paused first. | Call `pause()` before `emergency_withdraw`. |
+| 31 | `InvalidEmergencyRecipient` | `to` was the pool contract itself or the LP token contract on `emergency_withdraw`, `announce_emergency_withdraw`, or `exec_multisig_emergency_wd`. | Pass a recipient address that is neither `env.current_contract_address()` nor the LP token. |
+| 32 | `MultisigGuardActive` | `set_multisig` attempted to change or disable the multisig guard while `MultisigQuorum > 0` without going through the multisig propose/approve/execute flow. | Propose the change through the multisig (same quorum) or wait out the timelock. |
 
 ---
 
@@ -104,6 +112,14 @@ Defined in [contracts/amm-sdk/src/types.rs](../contracts/amm-sdk/src/types.rs) a
 | 22 | `PoolDrained` | Pool entered terminal `Drained` state after emergency withdrawal (#1095). | Deploy a new pool; drained pools are permanently retired. |
 | 23 | `QuorumNotMet` | Multisig emergency withdrawal approvals are below `MultisigQuorum` (#1095). | Collect enough signer approvals before executing. |
 | 24 | `NoPendingProposal` | `exec_multisig_emergency_wd` called with no active multisig proposal (#1095). | Call `propose_emergency_withdraw` first. |
+| 25 | `QuorumNotReached` | Multisig emergency withdrawal approvals are below `MultisigQuorum`. | Collect enough signer approvals before executing. |
+| 26 | `NoPendingProposal` | `exec_multisig_emergency_wd` called with no active multisig proposal. | Call `propose_emergency_withdraw` first. |
+| 27 | `InvalidQuorum` | `set_multisig` quorum exceeds the signer count. | Pass `quorum` in `1..=signers.len()`. |
+| 28 | `EmergencyNotAnnounced` | `emergency_withdraw` called without a prior announcement. | Call `announce_emergency_withdraw(to)` first. |
+| 29 | `EmergencyDelayNotElapsed` | Emergency withdrawal called before `EMERGENCY_DELAY_SECS` elapsed. | Wait for the configured delay. |
+| 30 | `EmergencyNotPaused` | `emergency_withdraw` called while the pool is not paused. | Call `pause()` first. |
+| 31 | `InvalidEmergencyRecipient` | Recipient is the pool or the LP token. | Pass a different recipient. |
+| 32 | `MultisigGuardActive` | `set_multisig` tried to change the guard without the multisig flow. | Propose through the multisig. |
 
 ---
 

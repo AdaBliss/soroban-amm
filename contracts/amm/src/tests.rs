@@ -4461,3 +4461,605 @@ fn test_remove_liquidity_one_sided_zero_fee_exact_parity() {
     assert!((out1 - (wb + sw)).abs() <= 1);
     assert_reserves_match_balances(&amm2, &ts2.env);
 }
+
+// ── Emergency withdrawal: k-of-n guard + announced delay ─────────────────────
+//
+// These tests cover the tamper-resistant multisig guard, the announced
+// delayed single-admin emergency withdrawal, and the distinct error
+// variants introduced for the emergency path.
+
+fn setup_pool_with_emergency_delay(fee_bps: i128, delay_secs: u64) -> TestSetup {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(12345);
+    let admin = Address::generate(&env);
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "AMM LP Token"),
+        &soroban_sdk::String::from_str(&env, "ALP"),
+        &7u32,
+    );
+
+    let (ta, ta_sac) = create_sac(&env, &admin);
+    let (tb, tb_sac) = create_sac(&env, &admin);
+
+    AmmPoolClient::new(&env, &amm_addr).initialize_with_emergency_delay(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &fee_bps,
+        &admin,
+        &0_i128,
+        &delay_secs,
+    );
+
+    let ta_addr = ta.address.clone();
+    let tb_addr = tb.address.clone();
+    drop((ta, ta_sac, tb, tb_sac));
+
+    TestSetup {
+        env,
+        amm_addr,
+        lp_addr,
+        ta_addr,
+        tb_addr,
+        admin,
+    }
+}
+
+fn seed_pool(ts: &TestSetup) -> i128 {
+    let amm = AmmPoolClient::new(&ts.env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(&ts.env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(&ts.env, &ts.tb_addr);
+    let provider = Address::generate(&ts.env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute()
+}
+
+#[test]
+fn test_set_multisig_quorum_zero_rejected_when_multisig_active() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let s3 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    signers.push_back(s3.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let empty = soroban_sdk::Vec::<Address>::new(env);
+    let res = amm.try_set_multisig(&ts.admin, &empty, &0_u32);
+    assert!(
+        res.is_err(),
+        "admin alone must not be able to disable an active multisig guard"
+    );
+}
+
+#[test]
+fn test_set_multisig_quorum_zero_via_multisig_succeeds() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let s3 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    signers.push_back(s3.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let empty = soroban_sdk::Vec::<Address>::new(env);
+    let pid = amm.propose_set_multisig(&s1, &empty, &0_u32);
+    amm.approve_multisig_proposal(&s2, &pid);
+    amm.exec_multisig_set_multisig(&s1, &pid);
+
+    let (stored_signers, stored_quorum) = amm.get_multisig();
+    assert_eq!(stored_quorum, 0);
+    assert_eq!(stored_signers.len(), 0);
+}
+
+#[test]
+fn test_set_multisig_invalid_quorum_exceeds_signers() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let s3 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1);
+    signers.push_back(s2);
+    signers.push_back(s3);
+    let res = amm.try_set_multisig(&ts.admin, &signers, &4_u32);
+    assert_eq!(res, Err(Ok(AmmError::InvalidQuorum)));
+}
+
+#[test]
+fn test_emergency_withdraw_requires_pause() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::Paused)));
+}
+
+#[test]
+fn test_emergency_withdraw_requires_announcement() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
+}
+
+#[test]
+fn test_emergency_withdraw_before_delay_fails() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
+}
+
+#[test]
+fn test_emergency_withdraw_after_delay_succeeds_and_sweeps_fees() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    // Accrue protocol fees by swapping with a fee recipient configured.
+    amm.set_protocol_fee(&ts.admin, &ts.admin, &10_i128);
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &100_000_i128);
+    Swap::new(&amm, &trader, &ts.ta_addr, 100_000).execute();
+    let (accrued_a, accrued_b) = amm.get_accrued_fees();
+    assert!(accrued_a > 0 || accrued_b > 0);
+
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    amm.emergency_withdraw(&ts.admin, &to);
+
+    let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&to);
+    let bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&to);
+    let pool_bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&ts.amm_addr);
+    let pool_bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&ts.amm_addr);
+    assert!(bal_a > 0 && bal_b > 0);
+    assert_eq!(pool_bal_a, 0);
+    assert_eq!(pool_bal_b, 0);
+}
+
+#[test]
+fn test_emergency_withdraw_rejects_pool_as_recipient() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let res = amm.try_announce_emergency_withdraw(&ts.admin, &ts.amm_addr);
+    assert_eq!(res, Err(Ok(AmmError::InvalidRecipient)));
+}
+
+#[test]
+fn test_emergency_withdraw_rejects_lp_token_as_recipient() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let res = amm.try_announce_emergency_withdraw(&ts.admin, &ts.lp_addr);
+    assert_eq!(res, Err(Ok(AmmError::InvalidRecipient)));
+}
+
+#[test]
+fn test_cancel_emergency_withdraw_resets_announcement() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    amm.cancel_emergency_withdraw(&ts.admin);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
+}
+
+#[test]
+fn test_second_announce_restarts_delay() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 40_000);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 40_000);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
+}
+
+#[test]
+fn test_emergency_delay_capped_at_seven_days() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let amm_addr = env.register_contract(None, AmmPool);
+    let lp_addr = env.register_contract(None, LpToken);
+    token::LpTokenClient::new(&env, &lp_addr).initialize(
+        &amm_addr,
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &soroban_sdk::String::from_str(&env, "LP"),
+        &7u32,
+    );
+    let (ta, _) = create_sac(&env, &admin);
+    let (tb, _) = create_sac(&env, &admin);
+    let res = AmmPoolClient::new(&env, &amm_addr).try_initialize_with_emergency_delay(
+        &admin,
+        &ta.address,
+        &tb.address,
+        &lp_addr,
+        &30_i128,
+        &admin,
+        &0_i128,
+        &(7 * 86_400 + 1),
+    );
+    assert!(res.is_err(), "delay above 7 days must be rejected");
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_quorum_not_reached() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let to = Address::generate(env);
+    let pid = amm.propose_emergency_withdraw(&s1, &to);
+    let res = amm.try_exec_multisig_emergency_wd(&s1, &pid);
+    assert_eq!(res, Err(Ok(AmmError::QuorumNotReached)));
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_no_pending_proposal() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let res = amm.try_exec_multisig_emergency_wd(&s1, &999_u64);
+    assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_requires_delay_after_quorum() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let to = Address::generate(env);
+    let pid = amm.propose_emergency_withdraw(&s1, &to);
+    amm.approve_multisig_proposal(&s2, &pid);
+    let res = amm.try_exec_multisig_emergency_wd(&s1, &pid);
+    assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_after_delay_succeeds() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let to = Address::generate(env);
+    let pid = amm.propose_emergency_withdraw(&s1, &to);
+    amm.approve_multisig_proposal(&s2, &pid);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    amm.exec_multisig_emergency_wd(&s1, &pid);
+
+    let bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&to);
+    let bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&to);
+    assert!(bal_a > 0 && bal_b > 0);
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_rejects_pool_recipient() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let res = amm.try_propose_emergency_withdraw(&s1, &ts.amm_addr);
+    assert_eq!(res, Err(Ok(AmmError::InvalidRecipient)));
+}
+
+#[test]
+fn test_exec_multisig_emergency_wd_rejects_lp_token_recipient() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    let res = amm.try_propose_emergency_withdraw(&s1, &ts.lp_addr);
+    assert_eq!(res, Err(Ok(AmmError::InvalidRecipient)));
+}
+
+#[test]
+fn test_announce_emergency_withdraw_emits_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::IntoVal;
+
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        e.0 == amm.address
+            && e.1
+                == (Symbol::new(env, "emergency_announce"),).into_val(env)
+    });
+    assert!(found, "emergency_announce event must be emitted");
+}
+
+#[test]
+fn test_cancel_emergency_withdraw_emits_event() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::IntoVal;
+
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    amm.cancel_emergency_withdraw(&ts.admin);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        e.0 == amm.address
+            && e.1
+                == (Symbol::new(env, "emergency_cancel"),).into_val(env)
+    });
+    assert!(found, "emergency_cancel event must be emitted");
+}
+
+#[test]
+fn test_emergency_withdraw_emits_event_with_amounts() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::IntoVal;
+
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    amm.emergency_withdraw(&ts.admin, &to);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        e.0 == amm.address
+            && e.1
+                == (Symbol::new(env, "emergency_wd"),).into_val(env)
+    });
+    assert!(found, "emergency_wd event must be emitted");
+}
+
+#[test]
+fn test_emergency_withdraw_clears_announcement_after_execution() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    amm.emergency_withdraw(&ts.admin, &to);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::NoPendingProposal)));
+}
+
+#[test]
+fn test_emergency_withdraw_announcement_recipient_must_match() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    let other = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    let res = amm.try_emergency_withdraw(&ts.admin, &other);
+    assert!(res.is_err(), "recipient must match the announced address");
+}
+
+#[test]
+fn test_emergency_withdraw_non_admin_rejected() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    let attacker = Address::generate(env);
+    let res = amm.try_announce_emergency_withdraw(&attacker, &to);
+    assert!(res.is_err(), "only admin may announce");
+}
+
+#[test]
+fn test_default_emergency_delay_is_24h() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    // One second short of 24h must still fail.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 - 1);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
+    // Exactly at 24h must succeed.
+    env.ledger().set_timestamp(env.ledger().timestamp() + 1);
+    amm.emergency_withdraw(&ts.admin, &to);
+}
+
+#[test]
+fn test_custom_emergency_delay_respected() {
+    let ts = setup_pool_with_emergency_delay(30, 3_600);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    seed_pool(&ts);
+    amm.pause();
+    let to = Address::generate(env);
+    amm.announce_emergency_withdraw(&ts.admin, &to);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 3_599);
+    let res = amm.try_emergency_withdraw(&ts.admin, &to);
+    assert_eq!(res, Err(Ok(AmmError::EmergencyDelayNotElapsed)));
+    env.ledger().set_timestamp(env.ledger().timestamp() + 1);
+    amm.emergency_withdraw(&ts.admin, &to);
+}
+
+#[test]
+fn test_set_multisig_quorum_one_of_three_rejected_when_active() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let s3 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    signers.push_back(s3.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+
+    // Admin alone cannot weaken the guard to a single controlled signer.
+    let mut one = soroban_sdk::Vec::new(env);
+    one.push_back(s1.clone());
+    let res = amm.try_set_multisig(&ts.admin, &one, &1_u32);
+    assert!(
+        res.is_err(),
+        "admin alone must not weaken an active multisig guard"
+    );
+}
+
+#[test]
+fn test_multisig_emergency_withdraw_sweeps_accrued_fees() {
+    let ts = setup_pool(30);
+    let env = &ts.env;
+    let amm = AmmPoolClient::new(env, &ts.amm_addr);
+    let ta_sac = StellarAssetClient::new(env, &ts.ta_addr);
+    let tb_sac = StellarAssetClient::new(env, &ts.tb_addr);
+    let provider = Address::generate(env);
+    ta_sac.mint(&provider, &1_000_000_i128);
+    tb_sac.mint(&provider, &1_000_000_i128);
+    AddLiquidity::new(&amm, &provider, 1_000_000, 1_000_000).execute();
+
+    amm.set_protocol_fee(&ts.admin, &ts.admin, &10_i128);
+    let trader = Address::generate(env);
+    ta_sac.mint(&trader, &100_000_i128);
+    Swap::new(&amm, &trader, &ts.ta_addr, 100_000).execute();
+    let (accrued_a, accrued_b) = amm.get_accrued_fees();
+    assert!(accrued_a > 0 || accrued_b > 0);
+
+    let s1 = Address::generate(env);
+    let s2 = Address::generate(env);
+    let mut signers = soroban_sdk::Vec::new(env);
+    signers.push_back(s1.clone());
+    signers.push_back(s2.clone());
+    amm.set_multisig(&ts.admin, &signers, &2_u32);
+    amm.pause();
+
+    let to = Address::generate(env);
+    let pid = amm.propose_emergency_withdraw(&s1, &to);
+    amm.approve_multisig_proposal(&s2, &pid);
+    env.ledger().set_timestamp(env.ledger().timestamp() + 86_400 + 1);
+    amm.exec_multisig_emergency_wd(&s1, &pid);
+
+    let pool_bal_a = StellarTokenClient::new(env, &ts.ta_addr).balance(&ts.amm_addr);
+    let pool_bal_b = StellarTokenClient::new(env, &ts.tb_addr).balance(&ts.amm_addr);
+    assert_eq!(pool_bal_a, 0, "accrued token_a fees must be swept");
+    assert_eq!(pool_bal_b, 0, "accrued token_b fees must be swept");
+}

@@ -12,6 +12,7 @@
 
 | Date | Commit | Change |
 |------|--------|--------|
+| 2026-10-04 | — | Added M-04: the k-of-n emergency guard could be disabled by the admin it guards, and emergency withdrawals had no pause precondition or delay. Recorded the fix and the new announce/delay flow. |
 | 2026-09-27 | `74d227f` | Re-verified every finding against the current source. Moved the fixed findings to [§2.6 Resolved findings](#26-resolved-findings), with the fixing change and current location for each. Added M-03 (the residual gap from M-02 in `initialize`). Listed the unreviewed concentrated-liquidity surfaces in §3. |
 | — | `66a4643` | Original constant-product review. |
 
@@ -40,6 +41,7 @@
 
 | ID | Title | Severity | Status |
 |----|-------|----------|--------|
+| M-04 | Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay | Medium | **Fixed**. See §2.6 |
 | M-03 | `initialize` accepts `protocol_fee_bps == fee_bps` | Medium | **Open** |
 | L-02 | Imbalanced deposits accept excess tokens without refund | Low | Acknowledged (by design) |
 | I-02 | No distinct event for the first deposit | Informational | Open (informational) |
@@ -78,6 +80,44 @@ meant to prevent. The admin can only move away from that setting later through
 initializer: `protocol_fee_bps < fee_bps` when `fee_bps > 0`, and
 `protocol_fee_bps == 0` when `fee_bps == 0`.
 **Status:** Open.
+
+---
+
+#### M-04 — Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay
+
+**Location:** `contracts/amm/src/lib.rs` — `emergency_withdraw`, `set_multisig`,
+`propose_emergency_withdraw`, `exec_multisig_emergency_wd`, and the new
+`announce_emergency_withdraw` / `cancel_emergency_withdraw`.
+**Description:** The emergency path moves every reserve out of the pool. Two
+layers were supposed to constrain it: a k-of-n multisig guard and a timed
+governance proposal. Neither constrained the key it existed to constrain.
+`set_multisig(admin, [], 0)` required only the stored admin's authorization, and
+the single-admin `emergency_withdraw` refused only while `MultisigQuorum > 0`.
+A single admin could therefore disable the guard and drain the pool in the same
+ledger. The same admin could instead install signers it controlled with
+`quorum = 1`. `emergency_withdraw` had no pause precondition and no delay, and
+`exec_multisig_emergency_wd` executed as soon as quorum was reached. Accrued
+protocol fees were left behind by both paths, and several failures returned
+misleading error variants (`InsufficientShares`, `NoPendingAdmin`,
+`InvalidFeeBps`).
+**Fix:** The guard is now tamper-resistant. While `MultisigQuorum > 0`,
+`set_multisig` may only be changed through the multisig itself (propose,
+approve, execute at the same quorum) or after a timelock; lowering `quorum` to
+0 is never a single-key action. Single-admin emergency withdrawals are
+announced with `announce_emergency_withdraw(to)` and succeed only after
+`EMERGENCY_DELAY_SECS` (configurable at `initialize`, default 24 h, capped at
+7 days) and only while the pool is paused; `cancel_emergency_withdraw` clears
+the announcement and a second `announce` restarts the delay. The same delay
+applies to `exec_multisig_emergency_wd`, measured from quorum being reached.
+Both paths reject `to == env.current_contract_address()` and `to == lp_token`
+and sweep accrued fees to `to`. New `QuorumNotReached`, `NoPendingProposal` and
+`InvalidQuorum` error variants replace the misleading ones (appended, not
+renumbered). Versioned announce/cancel/execute events include the amounts
+moved. Governance's `EmergencyWithdraw` proposal kind still works: its
+execution calls `emergency_withdraw` after its own timelock, and that call must
+also satisfy the new announcement delay (governance-originated calls do not
+skip the announcement).
+**Status:** Fixed.
 
 ---
 
@@ -156,6 +196,24 @@ monitor it.
 **Current location:** `contracts/amm/src/lib.rs:850` — `set_protocol_fee` (the
 check follows the `// Fix M-02` comment).
 **Residual:** `initialize` still allows equality. This is tracked as M-03.
+
+#### M-04 — Emergency guard disableable by the admin it guards; withdrawals had no pause precondition or delay — **Fixed**
+
+**Original finding:** `set_multisig(admin, [], 0)` required only the stored
+admin's authorization, and `emergency_withdraw` refused only while
+`MultisigQuorum > 0`, so a single admin could disable the guard and drain the
+pool in the same ledger. `emergency_withdraw` had no pause precondition and no
+delay, and `exec_multisig_emergency_wd` executed as soon as quorum was reached.
+Accrued protocol fees were left behind, and several failures returned
+misleading error variants.
+**Fix:** The guard can only be changed through the multisig (or after a
+timelock) while `MultisigQuorum > 0`. Single-admin withdrawals require a prior
+`announce_emergency_withdraw` and a paused pool, and wait
+`EMERGENCY_DELAY_SECS` (default 24 h, capped at 7 days). The multisig path
+waits the same delay from quorum. Both paths sweep accrued fees and reject
+`to == pool` and `to == lp_token`. New `QuorumNotReached`,
+`NoPendingProposal` and `InvalidQuorum` variants were appended.
+**Status:** Fixed.
 
 #### L-01 — `withdraw_protocol_fees` missing closing brace causes dead code — **Fixed**
 
@@ -261,6 +319,10 @@ fee tiers exercised by the fuzz suite. As of `74d227f`, all of the original
 high, medium and low findings for that pool are fixed or acknowledged. One
 medium finding (M-03, the residual initializer gap from M-02) and one
 informational item (I-02) remain open.
+
+The emergency path was hardened after `74d227f` (M-04): the k-of-n guard can no
+longer be disabled by the admin it guards, and emergency withdrawals now
+require a pause and an announced delay. See §2.6.
 
 The concentrated-liquidity contract has not been reviewed. The surfaces in §3
 must be reviewed before that contract handles significant value. Read this
