@@ -60,10 +60,34 @@ deploy_pol_vesting() {
     fi
   fi
 
-  CURRENT_STEP="verify pol_vesting"
-  if invoke_read "$POL_VESTING_CONTRACT_ID" get_governance >/dev/null 2>/dev/null; then
-    log "verified pol_vesting liveness"
-  else
-    warn "pol_vesting verification warning"
-  fi
+  # Runs whether this run initialized the contract or found it initialized:
+  # initialize takes no auth, so whoever called it first chose governance and
+  # treasury. Abort rather than keep a contract configured by someone else (#1136).
+  CURRENT_STEP="verify pol_vesting configuration"
+  verify_pol_vesting "$POL_VESTING_CONTRACT_ID" "$GOVERNANCE_CONTRACT_ID" "$ADMIN_ADDRESS"
+}
+
+# verify_pol_vesting ID EXPECTED_GOVERNANCE EXPECTED_TREASURY
+# Reads the stored governance and treasury back with read_back and compares
+# each exact address. A contract that does not answer, or that stores a
+# different address, aborts the deploy.
+verify_pol_vesting() {
+  local id="$1"
+  local expected_governance="$2"
+  local expected_treasury="$3"
+  local getter out stored
+  for getter in get_governance get_treasury; do
+    out=$(read_back pol_vesting "$id" "$getter") \
+      || die "pol_vesting $id $getter returned nothing after retries — contract is not initialized"
+    stored=$(printf '%s\n' "$out" | grep -Eo '[GC][A-Z2-7]{55}' | tail -n 1 || true)
+    if [[ -z "$stored" ]]; then
+      die "pol_vesting $id $getter returned no address — possible front-run or uninitialized contract"
+    fi
+    local expected="$expected_governance"
+    if [[ "$getter" == "get_treasury" ]]; then expected="$expected_treasury"; fi
+    if [[ "$stored" != "$expected" ]]; then
+      die "pol_vesting $id $getter mismatch: expected $expected got $stored — possible front-run, aborting deploy"
+    fi
+  done
+  log "verified pol_vesting $id governance and treasury"
 }
