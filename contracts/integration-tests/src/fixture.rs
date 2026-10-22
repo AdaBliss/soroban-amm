@@ -125,8 +125,9 @@ impl Protocol {
 
         let staking = env.register_contract(None, staking::Staking);
         let staking_client = staking::StakingClient::new(&env, &staking);
-        // Reward and staked token are both the V2 LP token for this fixture.
-        staking_client.initialize(&v2_lp_token, &v2_lp_token, &admin);
+        // Staked token is the V2 LP token; rewards are paid in token A. The
+        // staking contract rejects lp_token == reward_token (IdenticalTokens).
+        staking_client.initialize(&v2_lp_token, &token_a, &admin);
 
         // ── Deploy CL pool ──────────────────────────────────────────────────
 

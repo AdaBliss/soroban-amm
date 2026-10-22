@@ -468,6 +468,61 @@ verify_governance_admin() {
   log "verified governance $contract_id admin=$admin"
 }
 
+# read_back LABEL CONTRACT_ID FUNCTION [ARGS...]
+# Calls a read-only contract function and prints its stdout. The CLI's stderr
+# is kept apart so a failed simulation (typically the RPC node not yet having
+# the initialize tx that just landed, or a contract that was never
+# initialized) is detected by exit code and not mistaken for a result. Retries
+# briefly to ride out that read-after-write lag, then returns non-zero.
+# VERIFY_RETRY_DELAY (seconds, default 2) sets the pause between attempts.
+read_back() {
+  local label="$1"
+  local contract_id="$2"
+  shift 2
+  local attempt out err delay="${VERIFY_RETRY_DELAY:-2}"
+  for attempt in 1 2 3 4 5; do
+    err=$(mktemp)
+    if out=$(stellar contract invoke \
+      --id "$contract_id" \
+      --network "$NETWORK" \
+      --source "$SOURCE_ACCOUNT" \
+      -- "$@" 2>"$err"); then
+      rm -f "$err"
+      printf '%s\n' "$out"
+      return 0
+    fi
+    log "$label $contract_id read of $1 attempt $attempt/5 failed, retrying: $(cat "$err")"
+    rm -f "$err"
+    sleep "$delay"
+  done
+  return 1
+}
+
+# verify_contract_admin LABEL CONTRACT_ID EXPECTED_ADMIN [GETTER]
+# Generic read-back-and-compare for contracts whose initialize cannot be
+# authenticated (the admin may be a contract that cannot sign for itself), so
+# anyone can initialize a freshly deployed instance first. Reads the admin
+# through GETTER (default get_admin) and aborts the deploy when it is missing
+# or differs from EXPECTED_ADMIN. Matches both G... (account) and C...
+# (contract) addresses: base-32 alphabet [A-Z2-7].
+verify_contract_admin() {
+  local label="$1"
+  local contract_id="$2"
+  local expected_admin="$3"
+  local getter="${4:-get_admin}"
+  local out admin
+  out=$(read_back "$label" "$contract_id" "$getter") \
+    || die "$label $contract_id $getter returned nothing after retries — possible front-run or uninitialized contract"
+  admin=$(printf '%s\n' "$out" | grep -Eo '[GC][A-Z2-7]{55}' | tail -n 1 || true)
+  if [[ -z "$admin" ]]; then
+    die "$label $contract_id $getter returned no address — possible front-run or uninitialized contract"
+  fi
+  if [[ "$admin" != "$expected_admin" ]]; then
+    die "$label $contract_id admin mismatch: expected $expected_admin got $admin — possible front-run, aborting deploy"
+  fi
+  log "verified $label $contract_id admin=$admin"
+}
+
 verify_governance() {
   local gov_id="$1"
   local expected_pool="$2"

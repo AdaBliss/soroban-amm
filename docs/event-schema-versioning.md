@@ -275,6 +275,10 @@ a representative call sequence and asserts every pool event carries the leading
 | `rate_updated` | — | `(campaign_id: u64, new_rate: i128)` |
 | `leftover_recovered` | — | `(campaign_id: u64, recipient: Address, leftover: i128)` |
 | `reward_distributed` | — | `(campaign_id: u64, provider: Address, amount: i128, dist_id: u64)` |
+| `staked` | — | `(campaign_id: u64, provider: Address, amount: i128, total_staked: i128)` |
+| `unstaked` | — | `(campaign_id: u64, provider: Address, amount: i128, total_staked: i128)` |
+
+`staked` and `unstaked` (issue #1115) are emitted by the stake-based reward model; `total_staked` is the campaign's total after the change. See [incentive-campaigns.md](incentive-campaigns.md).
 
 ### TWAL consumer — `contracts/twal_consumer/src/lib.rs`
 
@@ -393,6 +397,11 @@ on-wire data shape `(schema_version, payload)`.
 | `emergency_withdraw` | — | `(staker: Address, amount: i128)` |
 | `boost_exp` | — | `(staker: Address, previous_boost: i128, settled_boost: i128)` |
 | `rewards_reconciled` | — | `(admin: Address, old_undistributed: i128, old_owed: i128, new_undistributed: i128, new_owed: i128)` |
+| `initialized` | — | `(lp_token: Address, reward_token: Address, admin: Address, min_boost: i128, max_boost: i128, min_lock_duration: u64, max_lock_duration: u64)` |
+| `staker_index_migrated` | — | `(registered: u32)` |
+| `admin_nominated` | — | `(admin: Address, new_admin: Address)` |
+| `admin_changed` | — | `(new_admin: Address)` |
+| `upgraded` | — | `(new_wasm_hash: BytesN<32>)` |
 
 `boost_exp` (issue #699) is emitted by `settle_boost`/`settle_boost_batch`
 only when a lock's stored boost is actually reduced from a stale
@@ -402,6 +411,23 @@ post-expiry value down to `min_boost` -- it does not fire on a no-op call
 `rewards_reconciled` (issue #1045) is emitted once per completed
 `reconcile_reward_accounting` run, with the undistributed/owed counters
 before and after the repair.
+
+`initialized` (issue #1114) is emitted by both `initialize` and
+`initialize_with_boost_config` and carries the stored configuration, so a
+deployer can compare it with `get_config()` and with what was intended.
+`initialize` takes no `require_auth` (the admin may be a contract that cannot
+sign for itself), so this event and `get_config` are how a wrong or
+front-run initialization is detected.
+
+`staker_index_migrated` (issue #1113) is emitted once, by the last page of
+`migrate_staker_index`, with the number of stakers in the registry.
+
+`admin_nominated`, `admin_changed` and `upgraded` were the last staking events
+published without the leading `schema_version`; as of issue #1114 they go
+through `emit_versioned_event!` like the rest, so an indexer reads
+`(schema_version, payload)` for every staking event. This is a wire-format
+change for those three topics: a consumer that decoded them as a bare payload
+must now read the leading version first.
 
 ### Consumer rules
 
@@ -721,6 +747,8 @@ count. Events marked unversioned carry their payload without the
 | `rate_updated` | 1 | `campaign_id`, `new_rate` | v1 |
 | `leftover_recovered` | 1 | `campaign_id`, `recipient`, `leftover` | v1 |
 | `reward_distributed` | 1 | `campaign_id`, `provider`, `pending`, `dist_id` | v1 |
+| `staked` | 1 | `campaign_id`, `provider`, `amount`, `total_staked` | v1 |
+| `unstaked` | 1 | `campaign_id`, `provider`, `amount`, `total_staked` | v1 |
 
 ### `oracle_aggregator`
 
@@ -780,9 +808,9 @@ count. Events marked unversioned carry their payload without the
 | `rewards_added` | 1 | `admin`, `received` | v1 |
 | `paused` | 1 | `admin` | v1 |
 | `unpaused` | 1 | `admin` | v1 |
-| `admin_nominated` | 1 | `admin`, `new_admin` | unversioned |
-| `admin_changed` | 1 | `new_admin` | unversioned |
-| `upgraded` | 1 | `new_wasm_hash` | unversioned |
+| `admin_nominated` | 1 | `admin`, `new_admin` | v1 |
+| `admin_changed` | 1 | `new_admin` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 | `staked` | 1 | `staker`, `amount`, `new_boost`, `new_expiry` | v1 |
 | `unstaked` | 1 | `staker`, `amount`, `rewards` | v1 |
 | `emergency_mode` | 1 | `admin`, `enabled` | v1 |
@@ -793,6 +821,8 @@ count. Events marked unversioned carry their payload without the
 | `rewards_clamped` | 1 | `new_rewards`, `pool_balance` | v1 |
 | `rewards_updated` | 1 | `distributable` | v1 |
 | `claimed` | 1 | `staker`, `pending` | v1 |
+| `initialized` | 1 | `lp_token`, `reward_token`, `admin`, `min_boost`, `max_boost`, `min_lock_duration`, `max_lock_duration` | v1 |
+| `staker_index_migrated` | 1 | `registered` | v1 |
 
 ### `token`
 

@@ -67,11 +67,25 @@ deploy_staking() {
   fi
 
   CURRENT_STEP="verify staking"
-  local out
-  out=$(invoke_read "$STAKING_CONTRACT_ID" get_pool_info 2>/dev/null || true)
-  if echo "$out" | grep -q "$LP_TOKEN_CONTRACT_ID"; then
-    log "verified staking pool_info contains LP token"
-  else
-    warn "staking verification warning: $out"
-  fi
+  verify_staking "$STAKING_CONTRACT_ID" "$LP_TOKEN_CONTRACT_ID" "$REWARD_TOKEN_CONTRACT_ID" "$ADMIN_ADDRESS"
+}
+
+# verify_staking STAKING_ID EXPECTED_LP EXPECTED_REWARD EXPECTED_ADMIN
+# staking `initialize` takes no require_auth, so whoever calls it first picks
+# the admin and the tokens. Read the stored values back (#1114) and abort the
+# deploy on any difference instead of carrying on with a hijacked instance.
+verify_staking() {
+  local staking_id="$1"
+  local expected_lp="$2"
+  local expected_reward="$3"
+  local expected_admin="$4"
+  verify_contract_admin staking "$staking_id" "$expected_admin" get_admin
+  local cfg
+  cfg=$(read_back staking "$staking_id" get_config) \
+    || die "staking $staking_id get_config returned nothing after retries — contract is not initialized"
+  grep -q "$expected_lp" <<<"$cfg" \
+    || die "staking $staking_id lp_token mismatch: expected $expected_lp not found in get_config: $cfg"
+  grep -q "$expected_reward" <<<"$cfg" \
+    || die "staking $staking_id reward_token mismatch: expected $expected_reward not found in get_config: $cfg"
+  log "verified staking $staking_id config (lp_token, reward_token, admin)"
 }

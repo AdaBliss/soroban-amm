@@ -1317,6 +1317,32 @@
               "dist_id"
             ]
           }
+        ],
+        "staked": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "campaign_id",
+              "provider",
+              "amount",
+              "total_staked"
+            ]
+          }
+        ],
+        "unstaked": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "campaign_id",
+              "provider",
+              "amount",
+              "total_staked"
+            ]
+          }
         ]
       }
     },
@@ -1668,8 +1694,7 @@
             "fields": [
               "admin",
               "new_admin"
-            ],
-            "versioned": false
+            ]
           }
         ],
         "admin_changed": [
@@ -1679,8 +1704,7 @@
             "shape": "tuple",
             "fields": [
               "new_admin"
-            ],
-            "versioned": false
+            ]
           }
         ],
         "upgraded": [
@@ -1690,8 +1714,7 @@
             "shape": "tuple",
             "fields": [
               "new_wasm_hash"
-            ],
-            "versioned": false
+            ]
           }
         ],
         "staked": [
@@ -1807,6 +1830,32 @@
             "fields": [
               "staker",
               "pending"
+            ]
+          }
+        ],
+        "initialized": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "lp_token",
+              "reward_token",
+              "admin",
+              "min_boost",
+              "max_boost",
+              "min_lock_duration",
+              "max_lock_duration"
+            ]
+          }
+        ],
+        "staker_index_migrated": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "registered"
             ]
           }
         ]

@@ -360,6 +360,11 @@ Defined in [contracts/incentive_campaigns/src/lib.rs](../contracts/incentive_cam
 | 17 | `NoLpSupply` | The LP token's total supply is 0. | Seed the pool with liquidity. |
 | 18 | `NoPendingRewards` | The provider has no rewards accrued since their last claim. | Wait for rewards to accumulate over time. |
 | 19 | `RecordNotFound` | `get_distribution_record` was given an unknown id. | Use an id from `list_distribution_records` / `get_claim_history`. |
+| 20 | `NoStake` | `claim_rewards` was called on a stake-based campaign by an address with no stake and no accrued rewards, or `unstake` by an address with no stake. | Call `stake` first. |
+| 21 | `InvalidStakeAmount` | `stake` or `unstake` was given a zero or negative amount. | Pass an amount > 0. |
+| 22 | `InsufficientStake` | `unstake` asked for more than the caller has staked in the campaign. | Unstake at most `get_stake(campaign_id, provider)`. |
+| 23 | `CampaignEnded` | `stake` was called at or after the campaign's `end_time`. | Stake before the campaign ends; `unstake` and `claim_rewards` stay available. |
+| 24 | `LegacyCampaign` | `stake` was called on a campaign created before the stake-based model. | Legacy campaigns keep paying from the live LP balance; stake only into campaigns created after the upgrade. See [incentive-campaigns.md](incentive-campaigns.md). |
 
 
 
@@ -451,6 +456,8 @@ Defined in [contracts/staking/src/lib.rs](../contracts/staking/src/lib.rs) as `S
 | 19 | `BatchTooLarge` | `settle_boost_batch` or `register_existing_stakers` was given more than `MAX_BATCH_SIZE` (50) addresses. | Split the list into chunks of at most 50 addresses per call. |
 | 20 | `NoPendingAdmin` | `accept_admin` was called when no admin transfer is in progress. | Call `propose_admin` first to nominate a successor. |
 | 21 | `WrongAdmin` | `accept_admin` was called by an address that does not match the pending nominee. | Have the correct address (the one passed to `propose_admin`) call `accept_admin`. |
+| 22 | `IdenticalTokens` | `initialize` or `initialize_with_boost_config` was given the same address as LP token and reward token. The reward accounting treats the whole reward-token balance as reward funds, so stakers' principal would be counted as rewards. | Pass two different token contracts. |
+| 23 | `MigrationOutOfOrder` | `migrate_staker_index` was called with an `offset` other than the next unmigrated position. | Start at `offset = 0` and continue with the previous `offset + limit`. |
 
 ---
 

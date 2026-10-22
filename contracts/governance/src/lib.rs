@@ -372,6 +372,7 @@ pub trait LpTokenInterface {
     fn balance_at(env: Env, id: Address, ledger: u32) -> i128;
     fn total_supply(env: Env) -> i128;
     fn total_supply_at(env: Env, ledger: u32) -> Result<i128, TokenError>;
+    fn locked_balance(env: Env, id: Address) -> i128;
     fn lock(env: Env, holder: Address, amount: i128);
     /// `locker` is the contract that originally locked the tokens (issue #556 fix).
     fn unlock(env: Env, holder: Address, locker: Address, amount: i128);
@@ -962,6 +963,14 @@ impl Governance {
     ///
     /// Voting power uses LP balances snapshotted at proposal creation (`snapshot_ledger`).
     /// Delegators cannot vote directly; the terminal delegatee votes with aggregated power.
+    ///
+    /// Each account contributes at most what it still holds (#1104): the voter's
+    /// own balance must not have fallen below its snapshot (otherwise
+    /// `InsufficientSnapshotBal`), while a delegator that moved tokens away after
+    /// the snapshot contributes `min(snapshot, unlocked balance)` and can never
+    /// make the delegatee's vote revert. The amount counted for an account is
+    /// exactly the amount locked and recorded in `LockedVote` for it.
+    /// `get_voting_power` returns the total this call would count.
     pub fn vote(
         env: Env,
         voter: Address,
@@ -1527,6 +1536,37 @@ impl Governance {
         Ok(lp_client.balance_at(&holder, &proposal.snapshot_ledger))
     }
 
+    /// The voting power `vote(voter, proposal_id, ..)` would count right now,
+    /// including every delegator that has not voted yet (#1104).
+    ///
+    /// It runs the same computation as `vote`, so a delegatee can read their
+    /// power without sending a transaction. It does not check the voting window
+    /// or `AlreadyVoted`: a voter that has already voted simply reads 0 for
+    /// their own balance. Returns `HasDelegated` for an address that delegated
+    /// (such an address cannot vote) and `InsufficientSnapshotBal` when the
+    /// voter's own balance fell below its snapshot, like `vote`.
+    pub fn get_voting_power(
+        env: Env,
+        proposal_id: u32,
+        voter: Address,
+    ) -> Result<i128, GovernanceError> {
+        Self::extend_instance_ttl(&env);
+        if Self::get_delegate(env.clone(), voter.clone()).is_some() {
+            return Err(GovernanceError::HasDelegated);
+        }
+        let proposal_key = DataKey::Proposal(proposal_id);
+        let proposal: Proposal = env
+            .storage()
+            .persistent()
+            .get(&proposal_key)
+            .ok_or(GovernanceError::ProposalNotFound)?;
+        Self::bump_key_ttl(&env, &proposal_key);
+        let lp_token = Self::read_lp_token(&env)?;
+        let lp_client = LpTokenClient::new(&env, &lp_token);
+        let (power, _locks) = Self::aggregated_voting_power(&env, &lp_client, &voter, &proposal)?;
+        Ok(power)
+    }
+
     /// Read a proposal by id.
     ///
     /// Returns [`GovernanceError::ProposalNotFound`] for an unknown
@@ -1696,17 +1736,33 @@ impl Governance {
         Ok(total.min(MAX_BPS))
     }
 
+    /// Voting power `holder` contributes to `proposal`.
+    ///
+    /// * The voter themselves (`is_voter`) keeps the strict rule: a balance below
+    ///   the snapshot is rejected. The voter controls their own balance and sees
+    ///   the failure on their own transaction, so nobody else is affected;
+    ///   relaxing it is out of scope for #1104.
+    /// * Every delegator contributes `min(snapshot, current - locked)`, never
+    ///   below 0. A delegator's balance moves for reasons the delegatee does not
+    ///   control (a transfer, a sale, an earlier vote that locked it), and one
+    ///   such account must not abort the whole vote. Subtracting the locked part
+    ///   keeps the later `lock` call from failing for the same reason.
     fn snapshot_voting_power(
         lp_client: &LpTokenClient,
         holder: &Address,
         proposal: &Proposal,
+        is_voter: bool,
     ) -> Result<i128, GovernanceError> {
-        let power = lp_client.balance_at(holder, &proposal.snapshot_ledger);
+        let snapshot = lp_client.balance_at(holder, &proposal.snapshot_ledger);
         let current = lp_client.balance(holder);
-        if current < power {
-            return Err(GovernanceError::InsufficientSnapshotBal);
+        if is_voter {
+            if current < snapshot {
+                return Err(GovernanceError::InsufficientSnapshotBal);
+            }
+            return Ok(snapshot);
         }
-        Ok(power)
+        let available = current - lp_client.locked_balance(holder);
+        Ok(snapshot.min(available).max(0))
     }
 
     fn aggregated_voting_power(
@@ -1739,7 +1795,7 @@ impl Governance {
         }
         let voted_key = DataKey::HasVoted(proposal.id, holder.clone());
         if !env.storage().persistent().has(&voted_key) {
-            let power = Self::snapshot_voting_power(lp_client, holder, proposal)?;
+            let power = Self::snapshot_voting_power(lp_client, holder, proposal, depth == 0)?;
             if power > 0 {
                 *total += power;
                 locks.push_back((holder.clone(), power));
@@ -3920,6 +3976,333 @@ mod tests {
             gov.try_unlock_vote(&lp1, &999),
             Err(Ok(GovernanceError::ProposalNotFound))
         );
+    }
+
+    // ── #1104: a delegator whose balance fell cannot block its delegatee ──────
+
+    /// Create a proposal at a real ledger, then move to the next one, so that any
+    /// balance change the test makes afterwards falls outside the snapshot.
+    fn propose_at_ledger(s: &Suite, gov: &GovernanceClient, proposer: &Address) -> u32 {
+        s.env.ledger().with_mut(|l| l.sequence_number = 100);
+        let pid = gov.propose(proposer, &ProposalKind::UpdateFee(50));
+        s.env.ledger().with_mut(|l| l.sequence_number = 101);
+        pid
+    }
+
+    fn lp_of(s: &Suite) -> token::LpTokenClient<'_> {
+        token::LpTokenClient::new(&s.env, &s.lp_addr)
+    }
+
+    /// The reported scenario: the delegator moves a single LP unit after the
+    /// snapshot and the delegatee still votes, counting 100 + 599.
+    /// (Fails on main with `InsufficientSnapshotBal`.)
+    #[test]
+    fn test_delegator_moving_one_unit_does_not_block_delegatee() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let delegatee = Address::generate(&s.env);
+        let delegator = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let other = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &delegator, 600);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&delegator, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp.transfer(&delegator, &other, &1);
+
+        assert_eq!(gov.get_voting_power(&pid, &delegatee), 699);
+        gov.vote(&delegatee, &pid, &Vote::For);
+
+        assert_eq!(gov.get_proposal(&pid).votes_for, 100 + 599);
+        assert_eq!(lp.locked_balance(&delegatee), 100);
+        assert_eq!(lp.locked_balance(&delegator), 599);
+    }
+
+    /// A delegator that moved everything contributes 0 and does not block the
+    /// vote for the remaining accounts.
+    #[test]
+    fn test_delegator_that_moved_everything_contributes_zero() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let delegatee = Address::generate(&s.env);
+        let gone = Address::generate(&s.env);
+        let stays = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let sink = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &gone, 600);
+        mint_lp(&s, &stays, 200);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&gone, &delegatee);
+        gov.delegate(&stays, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp.transfer(&gone, &sink, &600);
+
+        gov.vote(&delegatee, &pid, &Vote::For);
+        assert_eq!(gov.get_proposal(&pid).votes_for, 100 + 200);
+        assert_eq!(lp.locked_balance(&gone), 0);
+        assert_eq!(lp.locked_balance(&stays), 200);
+        assert_eq!(lp.locked_balance(&delegatee), 100);
+    }
+
+    /// Locks equal the counted amounts and unlock_vote releases exactly them;
+    /// balances are consistent after the whole lifecycle.
+    #[test]
+    fn test_locks_are_exact_through_a_full_lifecycle() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let delegatee = Address::generate(&s.env);
+        let delegator = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let other = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &delegator, 600);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&delegator, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp.transfer(&delegator, &other, &1);
+        gov.vote(&delegatee, &pid, &Vote::For);
+        assert_eq!(lp.locked_balance(&delegator), 599);
+
+        let proposal = gov.get_proposal(&pid);
+        s.env.ledger().set_timestamp(proposal.execute_after + 1);
+        gov.execute(&pid);
+
+        gov.unlock_vote(&delegatee, &pid);
+        gov.unlock_vote(&delegator, &pid);
+        assert_eq!(lp.locked_balance(&delegatee), 0);
+        assert_eq!(lp.locked_balance(&delegator), 0);
+        assert_eq!(lp.balance(&delegatee), 100);
+        assert_eq!(lp.balance(&delegator), 599);
+        assert_eq!(lp.balance(&other), 1);
+        // The lock record is gone, so a second unlock finds nothing.
+        assert_eq!(
+            gov.try_unlock_vote(&delegator, &pid),
+            Err(Ok(GovernanceError::NoLockedVote))
+        );
+    }
+
+    /// A delegator whose balance rose after the snapshot contributes only the
+    /// snapshot amount.
+    #[test]
+    fn test_delegator_balance_increase_after_snapshot_is_ignored() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let delegatee = Address::generate(&s.env);
+        let delegator = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &delegator, 600);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&delegator, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        mint_lp(&s, &delegator, 400);
+
+        assert_eq!(gov.get_voting_power(&pid, &delegatee), 700);
+        gov.vote(&delegatee, &pid, &Vote::For);
+        assert_eq!(gov.get_proposal(&pid).votes_for, 700);
+        assert_eq!(lp.locked_balance(&delegator), 600);
+    }
+
+    /// Chain of depth 3 where the middle account moved tokens: only that
+    /// account's contribution shrinks.
+    #[test]
+    fn test_chain_of_depth_three_only_the_moved_account_shrinks() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let top = Address::generate(&s.env);
+        let mid = Address::generate(&s.env);
+        let leaf = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let sink = Address::generate(&s.env);
+        mint_lp(&s, &top, 100);
+        mint_lp(&s, &mid, 300);
+        mint_lp(&s, &leaf, 200);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&leaf, &mid);
+        gov.delegate(&mid, &top);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp.transfer(&mid, &sink, &100);
+
+        gov.vote(&top, &pid, &Vote::For);
+        // top 100 + mid min(300, 200) + leaf 200.
+        assert_eq!(gov.get_proposal(&pid).votes_for, 100 + 200 + 200);
+        assert_eq!(lp.locked_balance(&top), 100);
+        assert_eq!(lp.locked_balance(&mid), 200);
+        assert_eq!(lp.locked_balance(&leaf), 200);
+    }
+
+    /// One delegator moving tokens leaves every other delegator's contribution
+    /// intact.
+    #[test]
+    fn test_other_delegators_are_unaffected_by_one_that_moved() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let delegatee = Address::generate(&s.env);
+        let d1 = Address::generate(&s.env);
+        let d2 = Address::generate(&s.env);
+        let d3 = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let sink = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 50);
+        mint_lp(&s, &d1, 100);
+        mint_lp(&s, &d2, 200);
+        mint_lp(&s, &d3, 300);
+        mint_lp(&s, &proposer, 350);
+        gov.delegate(&d1, &delegatee);
+        gov.delegate(&d2, &delegatee);
+        gov.delegate(&d3, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp_of(&s).transfer(&d2, &sink, &50);
+
+        gov.vote(&delegatee, &pid, &Vote::Against);
+        assert_eq!(gov.get_proposal(&pid).votes_against, 50 + 100 + 150 + 300);
+    }
+
+    /// The voter's own balance keeps the strict check: they can see it and a
+    /// failure only affects themselves. The view reports the same error.
+    #[test]
+    fn test_voters_own_balance_check_stays_strict() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let voter = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let sink = Address::generate(&s.env);
+        mint_lp(&s, &voter, 100);
+        mint_lp(&s, &proposer, 300);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        lp_of(&s).transfer(&voter, &sink, &1);
+
+        assert_eq!(
+            gov.try_vote(&voter, &pid, &Vote::For),
+            Err(Ok(GovernanceError::InsufficientSnapshotBal))
+        );
+        assert_eq!(
+            gov.try_get_voting_power(&pid, &voter),
+            Err(Ok(GovernanceError::InsufficientSnapshotBal))
+        );
+    }
+
+    #[test]
+    fn test_get_voting_power_errors_and_plain_values() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let delegator = Address::generate(&s.env);
+        let delegatee = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        let stranger = Address::generate(&s.env);
+        mint_lp(&s, &delegator, 600);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &proposer, 300);
+        gov.delegate(&delegator, &delegatee);
+
+        let pid = propose_at_ledger(&s, &gov, &proposer);
+        assert_eq!(
+            gov.try_get_voting_power(&999, &delegatee),
+            Err(Ok(GovernanceError::ProposalNotFound))
+        );
+        assert_eq!(
+            gov.try_get_voting_power(&pid, &delegator),
+            Err(Ok(GovernanceError::HasDelegated))
+        );
+        assert_eq!(gov.get_voting_power(&pid, &stranger), 0);
+        assert_eq!(gov.get_voting_power(&pid, &proposer), 300);
+        assert_eq!(gov.get_voting_power(&pid, &delegatee), 700);
+    }
+
+    /// A delegator whose tokens are already locked by an earlier vote can only
+    /// contribute what is still unlocked, instead of making the delegatee's
+    /// `lock` call revert.
+    #[test]
+    fn test_delegator_locked_by_another_vote_contributes_only_available_balance() {
+        let s = setup_suite(30);
+        let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+        let lp = lp_of(&s);
+        let delegatee = Address::generate(&s.env);
+        let delegator = Address::generate(&s.env);
+        let proposer = Address::generate(&s.env);
+        mint_lp(&s, &delegatee, 100);
+        mint_lp(&s, &delegator, 600);
+        mint_lp(&s, &proposer, 300);
+
+        let first = propose_at_ledger(&s, &gov, &proposer);
+        // The delegator votes directly on the first proposal, locking 600.
+        gov.vote(&delegator, &first, &Vote::For);
+        assert_eq!(lp.locked_balance(&delegator), 600);
+
+        gov.delegate(&delegator, &delegatee);
+        s.env.ledger().with_mut(|l| l.sequence_number = 200);
+        let second = gov.propose(&proposer, &ProposalKind::UpdateFee(60));
+        s.env.ledger().with_mut(|l| l.sequence_number = 201);
+
+        gov.vote(&delegatee, &second, &Vote::For);
+        assert_eq!(gov.get_proposal(&second).votes_for, 100);
+        assert_eq!(lp.locked_balance(&delegator), 600);
+    }
+
+    /// `get_voting_power` equals what `vote` adds to the tally and what it
+    /// locks, over pseudo-random post-snapshot balance movements.
+    #[test]
+    fn test_get_voting_power_equals_vote_over_random_balance_movements() {
+        for seed in 1..=10_u64 {
+            let s = setup_suite(30);
+            let gov = GovernanceClient::new(&s.env, &s.gov_addr);
+            let lp = lp_of(&s);
+            let delegatee = Address::generate(&s.env);
+            let proposer = Address::generate(&s.env);
+            let sink = Address::generate(&s.env);
+            let mut delegators = soroban_sdk::Vec::<Address>::new(&s.env);
+            mint_lp(&s, &delegatee, 100);
+            mint_lp(&s, &proposer, 500);
+            let mut state = seed;
+            for _ in 0..5 {
+                let d = Address::generate(&s.env);
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                mint_lp(&s, &d, 50 + ((state >> 33) % 500) as i128);
+                gov.delegate(&d, &delegatee);
+                delegators.push_back(d);
+            }
+
+            let pid = propose_at_ledger(&s, &gov, &proposer);
+
+            for d in delegators.iter() {
+                state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                let held = lp.balance(&d);
+                match (state >> 33) % 3 {
+                    0 => {}
+                    1 => {
+                        let moved = 1 + ((state >> 20) as i128) % held;
+                        lp.transfer(&d, &sink, &moved);
+                    }
+                    _ => mint_lp(&s, &d, 1 + ((state >> 20) % 300) as i128),
+                }
+            }
+
+            let before = gov.get_proposal(&pid).votes_for;
+            let predicted = gov.get_voting_power(&pid, &delegatee);
+            gov.vote(&delegatee, &pid, &Vote::For);
+            let after = gov.get_proposal(&pid).votes_for;
+            assert_eq!(after - before, predicted, "seed {seed}");
+
+            let mut locked_total = lp.locked_balance(&delegatee);
+            for d in delegators.iter() {
+                locked_total += lp.locked_balance(&d);
+            }
+            assert_eq!(locked_total, predicted, "seed {seed}: locks must match");
+        }
     }
 
     // ── #931: typed NotInitialized instead of host traps ─────────────────────

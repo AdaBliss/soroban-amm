@@ -334,14 +334,15 @@ fn memory_leak_detect_orphaned_storage_after_incentive_campaign_recovery() {
         "a fresh campaign must have produced no distribution records"
     );
 
-    // The first claim only initialises the provider's snapshot; it pays nothing
-    // and so must not write a `DistributionRecord`.
+    // A claim without a stake pays nothing and so must not write a
+    // `DistributionRecord`. Staking itself writes none either.
     env.ledger().set_timestamp(2_000);
-    assert_eq!(incentives.claim_rewards(&provider, &id), 0);
+    assert!(incentives.try_claim_rewards(&provider, &id).is_err());
+    incentives.stake(&provider, &id, &500_000);
     assert_eq!(
         incentives.get_distribution_count(&id),
         0,
-        "a snapshot-initialising claim must not create a distribution record"
+        "staking must not create a distribution record"
     );
     assert_eq!(incentives.get_claim_history(&provider, &0, &100).len(), 0);
 

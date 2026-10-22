@@ -492,6 +492,8 @@ fn setup_incentive_campaigns(env: &Env) -> (IncentiveCampaignsClient<'_>, u64, A
 
     let provider = Address::generate(env);
     LpTokenClient::new(env, &lp).mint(&provider, &1_000);
+    // Campaigns are stake-based (#1115): rewards accrue to staked LP tokens.
+    campaigns.stake(&provider, &campaign_id, &1_000_i128);
 
     // Advance so rewards have accrued for the provider to claim.
     env.ledger().set_timestamp(2_000);

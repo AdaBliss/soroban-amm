@@ -84,6 +84,13 @@ pub enum StakingError {
     NoPendingAdmin = 20,
     /// `accept_admin` called by an address other than the nominee.
     WrongAdmin = 21,
+    /// `initialize` was given the same token as LP token and reward token. The
+    /// reward accounting derives "undistributed" from the contract's whole
+    /// reward-token balance, which would then include stakers' LP principal.
+    IdenticalTokens = 22,
+    /// `migrate_staker_index` was called with an `offset` that is not the next
+    /// unmigrated position of the legacy staker vector.
+    MigrationOutOfOrder = 23,
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Constants Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -188,7 +195,22 @@ pub enum DataKey {
     /// / `settle_boost_batch` (#699). An address is added on its first stake
     /// and removed once its balance returns to zero — see
     /// `_index_add`/`_index_remove`.
+    ///
+    /// Legacy layout (#1113): superseded by `StakerCount` / `StakerAt` /
+    /// `StakerSlot`. Only present on pools deployed before that change, until
+    /// `migrate_staker_index` has moved it over and deleted it.
     StakerIndex,
+    /// Number of registered stakers (persistent, #1113).
+    StakerCount,
+    /// The i-th registered staker, `i < StakerCount` (persistent, #1113).
+    StakerAt(u32),
+    /// Position of a staker in `StakerAt` (persistent, #1113).
+    StakerSlot(Address),
+    /// Next legacy position `migrate_staker_index` expects (instance, #1113).
+    MigrationCursor,
+    /// Id of the current `reconcile_reward_accounting` run (instance, #1113).
+    /// `ReconcileState` entries from an earlier run are ignored.
+    ReconcileEpoch,
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Data structures Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -210,6 +232,19 @@ pub struct StakerInfo {
     pub rewards_debt: i128,
     pub lock_expiry: u64,
     pub boost_multiplier: i128,
+}
+
+/// The configuration fixed at initialization, as stored on-chain (#1114).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StakingConfig {
+    pub lp_token: Address,
+    pub reward_token: Address,
+    pub admin: Address,
+    pub min_boost: i128,
+    pub max_boost: i128,
+    pub min_lock_duration: u64,
+    pub max_lock_duration: u64,
 }
 
 #[contracttype]
@@ -280,6 +315,9 @@ impl Staking {
         if env.storage().instance().has(&DataKey::LpToken) {
             return Err(StakingError::AlreadyInitialized);
         }
+        if lp_token == reward_token {
+            return Err(StakingError::IdenticalTokens);
+        }
         env.storage().instance().set(&DataKey::LpToken, &lp_token);
         env.storage()
             .instance()
@@ -303,6 +341,7 @@ impl Staking {
             MIN_LOCK_DURATION,
             MAX_LOCK_DURATION,
         );
+        Self::_emit_initialized(&env);
         Ok(())
     }
 
@@ -321,6 +360,9 @@ impl Staking {
         Self::extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::LpToken) {
             return Err(StakingError::AlreadyInitialized);
+        }
+        if lp_token == reward_token {
+            return Err(StakingError::IdenticalTokens);
         }
         if min_boost_scaled <= 0 || max_boost_scaled < min_boost_scaled {
             return Err(StakingError::InvalidBoostConfig);
@@ -353,7 +395,17 @@ impl Staking {
             min_lock_duration_secs,
             max_lock_duration_secs,
         );
+        Self::_emit_initialized(&env);
         Ok(())
+    }
+
+    /// The configuration as stored on-chain: tokens, admin and the boost and
+    /// lock bounds. A deployer reads this back after `initialize` and compares
+    /// it with what was intended, since `initialize` cannot be authenticated
+    /// (the admin may be a contract that cannot sign for itself) (#1114).
+    pub fn get_config(env: Env) -> Result<StakingConfig, StakingError> {
+        Self::extend_instance_ttl(&env);
+        Self::_read_config(&env).ok_or(StakingError::NotInitialized)
     }
 
     /// Escrow LP tokens for a fixed lock duration with a boosted reward rate (#317).
@@ -604,8 +656,11 @@ impl Staking {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &Some(new_admin.clone()));
-        env.events()
-            .publish((Symbol::new(&env, "admin_nominated"),), (admin, new_admin));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "admin_nominated"),),
+            (admin, new_admin)
+        );
         Ok(())
     }
 
@@ -626,8 +681,11 @@ impl Staking {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &Option::<Address>::None);
-        env.events()
-            .publish((Symbol::new(&env, "admin_changed"),), (new_admin,));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "admin_changed"),),
+            (new_admin,)
+        );
         Ok(())
     }
 
@@ -655,8 +713,11 @@ impl Staking {
         admin.require_auth();
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
-        env.events()
-            .publish((Symbol::new(&env, "upgraded"),), (new_wasm_hash,));
+        soroban_amm_sdk::emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "upgraded"),),
+            (new_wasm_hash,)
+        );
         Ok(())
     }
 
@@ -1302,17 +1363,13 @@ impl Staking {
     /// stored boost hasn't been settled down to `MIN_BOOST` yet.
     pub fn list_expired_boosts(env: Env, offset: u32, limit: u32) -> Vec<Address> {
         Self::extend_instance_ttl(&env);
-        let index = Self::_index_load(&env);
         let (min_boost, _) = Self::_boost_bounds(&env);
         let now = env.ledger().timestamp();
         let clamped_limit = limit.min(MAX_LIST_LIMIT);
+        let page = Self::_index_page(&env, offset, clamped_limit);
 
         let mut result = Vec::new(&env);
-        let len = index.len();
-        let mut i = offset;
-        let end = offset.saturating_add(clamped_limit).min(len);
-        while i < end {
-            let staker = index.get(i).unwrap();
+        for staker in page.iter() {
             let stored_boost: i128 = env
                 .storage()
                 .persistent()
@@ -1326,7 +1383,6 @@ impl Staking {
             if boost::is_expired_and_stale(stored_boost, lock_expiry, now, min_boost) {
                 result.push_back(staker);
             }
-            i += 1;
         }
         result
     }
@@ -1350,6 +1406,13 @@ impl Staking {
     /// rewards are harvested at the pre-settlement rate *first*, exactly as
     /// `stake_locked`/`extend_lock` already do before recomputing a
     /// position's effective amount, so no reward is silently reassigned.
+    ///
+    /// While the contract is paused the reward transfer is skipped (#1114):
+    /// the boost bookkeeping is still corrected, so `TotalEffectiveStaked`
+    /// stops counting the expired boost, but the staker's pending reward is
+    /// carried forward in their rewards debt, exactly as `unstake` does for a
+    /// paused pool, and stays claimable after `unpause`. Without this anyone
+    /// could force reward payouts out of a paused pool.
     pub fn settle_boost(env: Env, staker: Address) {
         Self::extend_instance_ttl(&env);
         let (min_boost, _) = Self::_boost_bounds(&env);
@@ -1393,7 +1456,12 @@ impl Staking {
         // so `_settle_pending`'s default (current-boost) effective amount
         // would already be the decayed `new_effective`, understating what's
         // owed for the period the staker was still at peak boost.
-        Self::_settle_pending_at(&env, &staker, Some(old_effective));
+        let carried = if Self::is_paused(env.clone()) {
+            Self::_pending_at(&env, &staker, old_effective)
+        } else {
+            Self::_settle_pending_at(&env, &staker, Some(old_effective));
+            0
+        };
 
         let total: i128 = env
             .storage()
@@ -1419,7 +1487,7 @@ impl Staking {
             .instance()
             .get(&DataKey::AccumulatedRewardsPerShare)
             .unwrap_or(0);
-        let new_debt = new_effective * acc_per_share / SCALE_FACTOR;
+        let new_debt = new_effective * acc_per_share / SCALE_FACTOR - carried;
         let key_debt = DataKey::StakerRewardsDebt(staker.clone());
         env.storage().persistent().set(&key_debt, &new_debt);
         env.storage()
@@ -1490,6 +1558,72 @@ impl Staking {
             }
         }
         Ok(())
+    }
+
+    /// Move the pre-#1113 staker vector into the indexed registry, one page at
+    /// a time (#1113). Permissionless.
+    ///
+    /// Pools deployed before the registry kept every staker in one `Vec` in
+    /// instance storage (`DataKey::StakerIndex`). Until it is migrated that
+    /// vector stays readable by the keeper functions, so nothing breaks
+    /// mid-way. Call this with `offset = 0`, `limit <= MAX_BATCH_SIZE`, then
+    /// with each previous `offset + limit` until it returns 0 ("entries left");
+    /// the last page deletes the legacy vector.
+    ///
+    /// Pages must be consecutive: an `offset` that is not the next unmigrated
+    /// position fails with `MigrationOutOfOrder`. Without that, anyone could
+    /// call the last page first and delete the vector before the earlier
+    /// entries were moved. Stakers who join or leave while the migration is
+    /// running go straight to or out of the new registry; an entry whose
+    /// balance is already zero is skipped. Returns the number of legacy entries
+    /// not yet processed (0 once finished or when there is nothing to migrate).
+    pub fn migrate_staker_index(env: Env, offset: u32, limit: u32) -> Result<u32, StakingError> {
+        Self::extend_instance_ttl(&env);
+        if limit == 0 || limit > MAX_BATCH_SIZE {
+            return Err(StakingError::BatchTooLarge);
+        }
+        let legacy: Option<Vec<Address>> = env.storage().instance().get(&DataKey::StakerIndex);
+        let legacy = match legacy {
+            Some(legacy) => legacy,
+            None => return Ok(0),
+        };
+        let cursor: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MigrationCursor)
+            .unwrap_or(0);
+        if offset != cursor {
+            return Err(StakingError::MigrationOutOfOrder);
+        }
+
+        let len = legacy.len();
+        let end = offset.saturating_add(limit).min(len);
+        let mut i = offset;
+        while i < end {
+            let staker = legacy.get(i).unwrap();
+            let raw: i128 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::StakerAmount(staker.clone()))
+                .unwrap_or(0);
+            if raw > 0 {
+                Self::_index_add(&env, &staker);
+            }
+            i += 1;
+        }
+
+        if end >= len {
+            env.storage().instance().remove(&DataKey::StakerIndex);
+            env.storage().instance().remove(&DataKey::MigrationCursor);
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
+                (Symbol::new(&env, "staker_index_migrated"),),
+                (Self::_staker_count(&env),)
+            );
+            return Ok(0);
+        }
+        env.storage().instance().set(&DataKey::MigrationCursor, &end);
+        Ok(len - end)
     }
 
     /// Repair legacy reward accounting on an already-deployed contract (admin
@@ -1565,14 +1699,10 @@ impl Staking {
         // computation: credited rewards stay where they are (still claimable
         // through the staker's own debt accounting) and are merely counted
         // into the global `OwedRewards` total on the final page.
-        let index = Self::_index_load(&env);
-        let len = index.len();
+        let page = Self::_index_page(&env, offset, limit);
+        let epoch = Self::_reconcile_epoch(&env);
         let mut owed_total: i128 = 0;
-        let start = offset.min(len);
-        let end = offset.saturating_add(limit).min(len);
-        let mut i = start;
-        while i < end {
-            let staker = index.get(i).unwrap();
+        for staker in page.iter() {
             let raw: i128 = env
                 .storage()
                 .persistent()
@@ -1589,25 +1719,29 @@ impl Staking {
             } else {
                 0
             };
-            let already = env
-                .storage()
-                .instance()
-                .get(&DataKey::ReconcileState(staker.clone()))
-                .unwrap_or(0);
+            let state_key = DataKey::ReconcileState(staker.clone());
+            let previous: Option<(u32, i128)> = env.storage().persistent().get(&state_key);
+            let already = match previous {
+                Some((state_epoch, credited_before)) if state_epoch == epoch => credited_before,
+                _ => 0,
+            };
             if credited > already {
                 owed_total += credited - already;
             }
+            env.storage().persistent().set(&state_key, &(epoch, credited));
             env.storage()
-                .instance()
-                .set(&DataKey::ReconcileState(staker.clone()), &credited);
-            i += 1;
+                .persistent()
+                .extend_ttl(&state_key, MIN_TTL, BUMP_TO);
         }
 
         // Carry any earlier pages' checkpointed totals.
         let key_state = DataKey::ReconcileTotal;
-        let carried: i128 = env.storage().instance().get(&key_state).unwrap_or(0);
+        let carried: i128 = env.storage().persistent().get(&key_state).unwrap_or(0);
         owed_total += carried;
-        env.storage().instance().set(&key_state, &owed_total);
+        env.storage().persistent().set(&key_state, &owed_total);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key_state, MIN_TTL, BUMP_TO);
 
         if !done {
             // Not finalizing yet: report the running totals.
@@ -1632,15 +1766,18 @@ impl Staking {
             .set(&DataKey::RewardPoolBalance, &undistributed);
         env.storage().instance().set(&DataKey::OwedRewards, &owed);
 
-        // Clear the per-staker checkpoints and the running total.
-        let mut j = start;
-        while j < end {
+        // Clear the run's state: this page's checkpoints and the running total
+        // go now, and bumping the epoch makes the entries written by earlier
+        // pages stale so a later run cannot mistake them for its own.
+        for staker in page.iter() {
             env.storage()
-                .instance()
-                .remove(&DataKey::ReconcileState(index.get(j).unwrap()));
-            j += 1;
+                .persistent()
+                .remove(&DataKey::ReconcileState(staker));
         }
-        env.storage().instance().remove(&key_state);
+        env.storage().persistent().remove(&key_state);
+        env.storage()
+            .instance()
+            .set(&DataKey::ReconcileEpoch, &(epoch + 1));
 
         soroban_amm_sdk::emit_versioned_event!(
             env,
@@ -1908,43 +2045,206 @@ impl Staking {
         Self::_effective_amount(raw, boost)
     }
 
-    /// Load the staker index (see `DataKey::StakerIndex`), defaulting to empty.
-    fn _index_load(env: &Env) -> Vec<Address> {
-        env.storage()
-            .instance()
-            .get(&DataKey::StakerIndex)
-            .unwrap_or_else(|| Vec::new(env))
-    }
+    // ── Staker registry (#1113) ───────────────────────────────────────────────
+    //
+    // Every address with a non-zero stake lives in a dense, O(1)-addressable
+    // registry in persistent storage:
+    //
+    //   StakerCount            -> n
+    //   StakerAt(i), i < n     -> the i-th staker
+    //   StakerSlot(addr)       -> i  (inverse of StakerAt)
+    //
+    // Joining appends at index n; leaving swaps the last entry into the freed
+    // slot, so both are a fixed number of storage operations whatever n is and
+    // nothing grows inside the instance entry. The pre-#1113 layout, a single
+    // `Vec` under `DataKey::StakerIndex` in instance storage, is read as a
+    // fallback until `migrate_staker_index` has moved it over.
 
-    /// Add `staker` to the index if not already present. Idempotent, so it's
-    /// safe to call unconditionally on every stake — including a top-up from
-    /// an address already indexed — and safe to call from the permissionless
-    /// migration helper for a pre-upgrade staker who may or may not already
-    /// be indexed.
-    fn _index_add(env: &Env, staker: &Address) {
-        let mut index = Self::_index_load(env);
-        let already_present = index.iter().any(|a| &a == staker);
-        if !already_present {
-            index.push_back(staker.clone());
-            env.storage().instance().set(&DataKey::StakerIndex, &index);
+    fn _staker_count(env: &Env) -> u32 {
+        let key = DataKey::StakerCount;
+        let count: Option<u32> = env.storage().persistent().get(&key);
+        match count {
+            Some(count) => {
+                env.storage().persistent().extend_ttl(&key, MIN_TTL, BUMP_TO);
+                count
+            }
+            None => 0,
         }
     }
 
-    /// Remove `staker` from the index. Called once their raw staked balance
-    /// returns to zero, so the index stays bounded by the number of
-    /// *currently* staked addresses rather than growing forever (#699).
+    /// Add `staker` to the registry if not already present. Idempotent, so it
+    /// is safe on every stake (including a top-up from an indexed address) and
+    /// from the permissionless migration helpers.
+    fn _index_add(env: &Env, staker: &Address) {
+        let slot_key = DataKey::StakerSlot(staker.clone());
+        if env.storage().persistent().has(&slot_key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&slot_key, MIN_TTL, BUMP_TO);
+            return;
+        }
+        let count = Self::_staker_count(env);
+        let at_key = DataKey::StakerAt(count);
+        env.storage().persistent().set(&at_key, staker);
+        env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+        env.storage().persistent().set(&slot_key, &count);
+        env.storage()
+            .persistent()
+            .extend_ttl(&slot_key, MIN_TTL, BUMP_TO);
+        let count_key = DataKey::StakerCount;
+        env.storage().persistent().set(&count_key, &(count + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, MIN_TTL, BUMP_TO);
+    }
+
+    /// Remove `staker` from the registry by swapping the last entry into its
+    /// slot. Called once their raw staked balance returns to zero, so the
+    /// registry stays bounded by the number of *currently* staked addresses.
+    /// A no-op for an address that is not registered.
     fn _index_remove(env: &Env, staker: &Address) {
-        let mut index = Self::_index_load(env);
-        let mut found_at: Option<u32> = None;
-        for (i, a) in index.iter().enumerate() {
-            if &a == staker {
-                found_at = Some(i as u32);
-                break;
+        let slot_key = DataKey::StakerSlot(staker.clone());
+        let slot: Option<u32> = env.storage().persistent().get(&slot_key);
+        let slot = match slot {
+            Some(slot) => slot,
+            None => return,
+        };
+        let count = Self::_staker_count(env);
+        if count == 0 {
+            // Inconsistent registry (slot without a count): just drop the slot.
+            env.storage().persistent().remove(&slot_key);
+            return;
+        }
+        let last = count - 1;
+        let last_key = DataKey::StakerAt(last);
+        if slot != last {
+            let moved: Address = env.storage().persistent().get(&last_key).unwrap();
+            let at_key = DataKey::StakerAt(slot);
+            env.storage().persistent().set(&at_key, &moved);
+            env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+            let moved_slot_key = DataKey::StakerSlot(moved);
+            env.storage().persistent().set(&moved_slot_key, &slot);
+            env.storage()
+                .persistent()
+                .extend_ttl(&moved_slot_key, MIN_TTL, BUMP_TO);
+        }
+        env.storage().persistent().remove(&last_key);
+        env.storage().persistent().remove(&slot_key);
+        let count_key = DataKey::StakerCount;
+        env.storage().persistent().set(&count_key, &last);
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, MIN_TTL, BUMP_TO);
+    }
+
+    /// One page of the staker scan used by the keeper functions.
+    ///
+    /// `offset`/`limit` index the registry. While a legacy `StakerIndex` vector
+    /// still exists (migration not finished) the scan continues past the end of
+    /// the registry into the legacy entries that have not been registered yet
+    /// and still hold a stake, so no keeper function misses a pre-upgrade staker
+    /// mid-migration. Once the legacy key is gone this is a plain registry page.
+    fn _index_page(env: &Env, offset: u32, limit: u32) -> Vec<Address> {
+        let mut page = Vec::new(env);
+        let count = Self::_staker_count(env);
+        let end = offset.saturating_add(limit);
+        let mut i = offset;
+        while i < end && i < count {
+            let at_key = DataKey::StakerAt(i);
+            let staker: Address = env.storage().persistent().get(&at_key).unwrap();
+            env.storage().persistent().extend_ttl(&at_key, MIN_TTL, BUMP_TO);
+            page.push_back(staker);
+            i += 1;
+        }
+
+        let legacy: Option<Vec<Address>> = env.storage().instance().get(&DataKey::StakerIndex);
+        if let Some(legacy) = legacy {
+            let mut v = i.max(count);
+            while v < end {
+                let li = v - count;
+                if li >= legacy.len() {
+                    break;
+                }
+                let staker = legacy.get(li).unwrap();
+                let registered = env
+                    .storage()
+                    .persistent()
+                    .has(&DataKey::StakerSlot(staker.clone()));
+                let raw: i128 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::StakerAmount(staker.clone()))
+                    .unwrap_or(0);
+                if !registered && raw > 0 {
+                    page.push_back(staker);
+                }
+                v += 1;
             }
         }
-        if let Some(pos) = found_at {
-            index.remove(pos);
-            env.storage().instance().set(&DataKey::StakerIndex, &index);
+        page
+    }
+
+    /// Current reconcile run id. Bumped when a run is finalized, which turns
+    /// every `ReconcileState` entry written by that run into a stale one.
+    fn _reconcile_epoch(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ReconcileEpoch)
+            .unwrap_or(0)
+    }
+
+    /// The pending reward `staker` has accrued at the given effective amount,
+    /// without paying it out.
+    fn _pending_at(env: &Env, staker: &Address, effective: i128) -> i128 {
+        let acc_per_share: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AccumulatedRewardsPerShare)
+            .unwrap_or(0);
+        let rewards_debt: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::StakerRewardsDebt(staker.clone()))
+            .unwrap_or(0);
+        (effective * acc_per_share / SCALE_FACTOR - rewards_debt).max(0)
+    }
+
+    /// Read the stored configuration, or `None` before `initialize`.
+    fn _read_config(env: &Env) -> Option<StakingConfig> {
+        let lp_token: Address = env.storage().instance().get(&DataKey::LpToken)?;
+        let reward_token: Address = env.storage().instance().get(&DataKey::RewardToken)?;
+        let admin: Address = env.storage().instance().get(&DataKey::Admin)?;
+        let (min_boost, max_boost) = Self::_boost_bounds(env);
+        let (min_lock_duration, max_lock_duration) = Self::_lock_duration_bounds(env);
+        Some(StakingConfig {
+            lp_token,
+            reward_token,
+            admin,
+            min_boost,
+            max_boost,
+            min_lock_duration,
+            max_lock_duration,
+        })
+    }
+
+    /// Emit `initialized` with the configuration exactly as stored, so an
+    /// indexer can reconstruct the pool's tokens, admin and bounds from events
+    /// and compare them with what the deployer intended (#1114).
+    fn _emit_initialized(env: &Env) {
+        if let Some(cfg) = Self::_read_config(env) {
+            soroban_amm_sdk::emit_versioned_event!(
+                env,
+                (Symbol::new(env, "initialized"),),
+                (
+                    cfg.lp_token,
+                    cfg.reward_token,
+                    cfg.admin,
+                    cfg.min_boost,
+                    cfg.max_boost,
+                    cfg.min_lock_duration,
+                    cfg.max_lock_duration
+                )
+            );
         }
     }
 
@@ -4151,5 +4451,1031 @@ mod tests {
         assert_eq!((undistributed, owed), (10_000, 0));
         assert_eq!(staking.get_pool_info().reward_pool_balance, 10_000);
         assert_eq!(staking.get_owed_rewards(), 0);
+    }
+
+    // ── #1114 / #1113 shared helpers ─────────────────────────────────────────
+
+    extern crate std;
+    use std::vec::Vec as StdVec;
+
+    fn find_event(env: &Env, name: &str) -> Option<soroban_sdk::Val> {
+        use soroban_sdk::{testutils::Events as _, IntoVal};
+        let topic: soroban_sdk::Val = Symbol::new(env, name).into_val(env);
+        env.events()
+            .all()
+            .iter()
+            .find(|event| {
+                event
+                    .1
+                    .get(0)
+                    .map(|t| t.get_payload() == topic.get_payload())
+                    .unwrap_or(false)
+            })
+            .map(|event| event.2)
+    }
+
+    fn fresh_staker(env: &Env, lp: &Address, amount: i128) -> Address {
+        let staker = Address::generate(env);
+        StellarAssetClient::new(env, lp).mint(&staker, &amount);
+        staker
+    }
+
+    fn join(env: &Env, staking: &StakingClient<'_>, lp: &Address, amount: i128) -> Address {
+        let staker = fresh_staker(env, lp, amount);
+        staking.stake(&staker, &amount);
+        staker
+    }
+
+    /// Read the whole registry back from storage and check it is internally
+    /// consistent: dense `StakerAt(0..count)`, `StakerSlot` inverting it, and
+    /// nothing left behind past the count.
+    fn registry(env: &Env, staking: &StakingClient<'_>) -> StdVec<Address> {
+        env.as_contract(&staking.address, || {
+            let count: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::StakerCount)
+                .unwrap_or(0);
+            let mut out = StdVec::new();
+            for i in 0..count {
+                let at: Address = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::StakerAt(i))
+                    .expect("hole in the registry");
+                let slot: u32 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::StakerSlot(at.clone()))
+                    .expect("registered staker without a slot");
+                assert_eq!(slot, i, "StakerSlot must invert StakerAt");
+                out.push(at);
+            }
+            assert!(
+                !env.storage().persistent().has(&DataKey::StakerAt(count)),
+                "entry left behind past StakerCount"
+            );
+            out
+        })
+    }
+
+    fn assert_registry_is(env: &Env, staking: &StakingClient<'_>, expected: &[Address]) {
+        let got = registry(env, staking);
+        assert_eq!(got.len(), expected.len(), "registry size");
+        for e in expected {
+            assert!(got.contains(e), "registry is missing an expected staker");
+        }
+    }
+
+    fn has_slot(env: &Env, staking: &StakingClient<'_>, who: &Address) -> bool {
+        env.as_contract(&staking.address, || {
+            env.storage()
+                .persistent()
+                .has(&DataKey::StakerSlot(who.clone()))
+        })
+    }
+
+    fn lcg(seed: &mut u64) -> u64 {
+        *seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *seed >> 33
+    }
+
+    fn advance_time(env: &Env, secs: u64) {
+        env.ledger().with_mut(|l| l.timestamp += secs);
+    }
+
+    // ── #1114: paused boost settlement ───────────────────────────────────────
+
+    #[test]
+    fn test_settle_boost_pays_nothing_while_paused_and_carries_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, staker, staking) = setup(&env);
+
+        staking.stake_locked(&staker, &1_000_i128, &MAX_LOCK_DURATION);
+        staking.update_rewards(&admin, &500_i128);
+        let owed = staking.pending_rewards(&staker);
+        assert!(owed > 0);
+        advance_time(&env, MAX_LOCK_DURATION + 1);
+
+        let reward_token = staking.get_pool_info().reward_token;
+        let rewards = StellarTokenClient::new(&env, &reward_token);
+        let staker_before = rewards.balance(&staker);
+        let contract_before = rewards.balance(&staking.address);
+        let owed_total_before = staking.get_owed_rewards();
+
+        staking.pause(&admin);
+        staking.settle_boost(&staker);
+
+        // No tokens left the pool and the owed counter did not move.
+        assert_eq!(rewards.balance(&staker), staker_before);
+        assert_eq!(rewards.balance(&staking.address), contract_before);
+        assert_eq!(staking.get_owed_rewards(), owed_total_before);
+        // The boost bookkeeping is still corrected.
+        assert_eq!(
+            staking.get_staker_info(&staker).boost_multiplier,
+            BOOST_SCALE
+        );
+        assert_eq!(staking.get_pool_info().total_effective_staked, 1_000);
+        // The reward earned at the peak rate is carried, not lost.
+        assert_eq!(staking.pending_rewards(&staker), owed);
+
+        staking.unpause(&admin);
+        assert_eq!(staking.claim(&staker), owed);
+        assert_eq!(rewards.balance(&staker), staker_before + owed);
+        assert_eq!(staking.get_owed_rewards(), owed_total_before - owed);
+    }
+
+    #[test]
+    fn test_settle_boost_while_paused_cannot_be_used_to_force_payouts() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, staker, staking) = setup(&env);
+        staking.stake_locked(&staker, &1_000_i128, &MAX_LOCK_DURATION);
+        staking.update_rewards(&admin, &500_i128);
+        advance_time(&env, MAX_LOCK_DURATION + 1);
+        staking.pause(&admin);
+
+        let rewards = StellarTokenClient::new(&env, &staking.get_pool_info().reward_token);
+        let before = rewards.balance(&staker);
+        // Repeated permissionless calls are harmless: the first settles, the
+        // rest are no-ops, and none of them pays.
+        staking.settle_boost(&staker);
+        staking.settle_boost(&staker);
+        let mut batch = Vec::new(&env);
+        batch.push_back(staker.clone());
+        staking.settle_boost_batch(&batch);
+        assert_eq!(rewards.balance(&staker), before);
+    }
+
+    #[test]
+    fn test_settle_boost_batch_while_paused_mixed_batch() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, a, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let b = fresh_staker(&env, &lp, 1_000);
+        let c = fresh_staker(&env, &lp, 1_000);
+        let stranger = Address::generate(&env);
+
+        staking.stake_locked(&a, &1_000_i128, &MAX_LOCK_DURATION);
+        staking.stake(&b, &1_000_i128);
+        staking.stake_locked(&c, &1_000_i128, &MAX_LOCK_DURATION);
+        staking.update_rewards(&admin, &1_000_i128);
+        let (pa, pb, pc) = (
+            staking.pending_rewards(&a),
+            staking.pending_rewards(&b),
+            staking.pending_rewards(&c),
+        );
+        advance_time(&env, MAX_LOCK_DURATION + 1);
+
+        let rewards = StellarTokenClient::new(&env, &staking.get_pool_info().reward_token);
+        let balances = (
+            rewards.balance(&a),
+            rewards.balance(&b),
+            rewards.balance(&c),
+            rewards.balance(&staking.address),
+        );
+
+        staking.pause(&admin);
+        let mut batch = Vec::new(&env);
+        batch.push_back(a.clone());
+        batch.push_back(b.clone());
+        batch.push_back(stranger);
+        batch.push_back(c.clone());
+        staking.settle_boost_batch(&batch);
+
+        assert_eq!(
+            balances,
+            (
+                rewards.balance(&a),
+                rewards.balance(&b),
+                rewards.balance(&c),
+                rewards.balance(&staking.address)
+            ),
+            "no balance may change while paused"
+        );
+        assert_eq!(staking.get_staker_info(&a).boost_multiplier, BOOST_SCALE);
+        assert_eq!(staking.get_staker_info(&c).boost_multiplier, BOOST_SCALE);
+        assert_eq!(staking.get_pool_info().total_effective_staked, 3_000);
+
+        staking.unpause(&admin);
+        assert_eq!(staking.claim(&a), pa);
+        assert_eq!(staking.claim(&b), pb);
+        assert_eq!(staking.claim(&c), pc);
+    }
+
+    // ── #1114: versioned admin events ────────────────────────────────────────
+
+    #[test]
+    fn test_propose_and_accept_admin_events_are_versioned() {
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _staker, staking) = setup(&env);
+        let next = Address::generate(&env);
+
+        staking.propose_admin(&admin, &next);
+        let data = find_event(&env, "admin_nominated").expect("admin_nominated event");
+        let (version, (from, to)) =
+            <(u32, (Address, Address))>::try_from_val(&env, &data).unwrap();
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!((from, to), (admin.clone(), next.clone()));
+
+        staking.accept_admin(&next);
+        let data = find_event(&env, "admin_changed").expect("admin_changed event");
+        let (version, (who,)) = <(u32, (Address,))>::try_from_val(&env, &data).unwrap();
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(who, next);
+        assert_eq!(staking.get_admin(), next);
+    }
+
+    // ── #1114: initialization is verifiable ──────────────────────────────────
+
+    #[test]
+    fn test_initialize_emits_initialized_event_matching_get_config() {
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (lp, _) = create_sac(&env, &admin);
+        let (reward, _) = create_sac(&env, &admin);
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+
+        staking.initialize(&lp.address, &reward.address, &admin);
+
+        let data = find_event(&env, "initialized").expect("initialized event");
+        let (version, (l, r, a, min_b, max_b, min_l, max_l)) =
+            <(u32, (Address, Address, Address, i128, i128, u64, u64))>::try_from_val(&env, &data)
+                .unwrap();
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        let cfg = staking.get_config();
+        assert_eq!(
+            cfg,
+            StakingConfig {
+                lp_token: l,
+                reward_token: r,
+                admin: a,
+                min_boost: min_b,
+                max_boost: max_b,
+                min_lock_duration: min_l,
+                max_lock_duration: max_l,
+            }
+        );
+        assert_eq!(cfg.lp_token, lp.address);
+        assert_eq!(cfg.reward_token, reward.address);
+        assert_eq!(cfg.admin, admin);
+        assert_eq!(cfg.min_boost, MIN_BOOST);
+        assert_eq!(cfg.max_boost, DEFAULT_MAX_BOOST);
+        assert_eq!(cfg.min_lock_duration, MIN_LOCK_DURATION);
+        assert_eq!(cfg.max_lock_duration, MAX_LOCK_DURATION);
+        assert_eq!(staking.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_initialize_with_boost_config_reports_custom_values() {
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (lp, _) = create_sac(&env, &admin);
+        let (reward, _) = create_sac(&env, &admin);
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+
+        staking.initialize_with_boost_config(
+            &lp.address,
+            &reward.address,
+            &admin,
+            &10_000_i128,
+            &30_000_i128,
+            &(MIN_LOCK_DURATION + 1),
+            &(MAX_LOCK_DURATION + 1),
+        );
+
+        let cfg = staking.get_config();
+        assert_eq!(cfg.max_boost, 30_000);
+        assert_eq!(cfg.min_lock_duration, MIN_LOCK_DURATION + 1);
+        assert_eq!(cfg.max_lock_duration, MAX_LOCK_DURATION + 1);
+        let data = find_event(&env, "initialized").expect("initialized event");
+        let (_, (_, _, _, _, max_b, min_l, _)) =
+            <(u32, (Address, Address, Address, i128, i128, u64, u64))>::try_from_val(&env, &data)
+                .unwrap();
+        assert_eq!((max_b, min_l), (30_000, MIN_LOCK_DURATION + 1));
+    }
+
+    #[test]
+    fn test_get_config_and_get_admin_before_initialize_fail() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+        assert_eq!(
+            staking.try_get_config(),
+            Err(Ok(StakingError::NotInitialized))
+        );
+        assert_eq!(
+            staking.try_get_admin(),
+            Err(Ok(StakingError::NotInitialized))
+        );
+    }
+
+    #[test]
+    fn test_initialize_requires_no_authorization() {
+        // `initialize` deliberately has no `require_auth`: the admin may be a
+        // contract that cannot sign for itself. No auth is mocked here, so any
+        // `require_auth` inside it would fail this call.
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let (lp, _) = create_sac(&env, &admin);
+        let (reward, _) = create_sac(&env, &admin);
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+        staking.initialize(&lp.address, &reward.address, &admin);
+        assert!(env.auths().is_empty(), "initialize must not require auth");
+        assert_eq!(staking.get_config().admin, admin);
+    }
+
+    #[test]
+    fn test_initialize_rejects_identical_tokens() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (token, _) = create_sac(&env, &admin);
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+
+        assert_eq!(
+            staking.try_initialize(&token.address, &token.address, &admin),
+            Err(Ok(StakingError::IdenticalTokens))
+        );
+        // A rejected call leaves the contract uninitialized.
+        assert_eq!(
+            staking.try_get_config(),
+            Err(Ok(StakingError::NotInitialized))
+        );
+        assert_eq!(StakingError::IdenticalTokens as u32, 22);
+    }
+
+    #[test]
+    fn test_initialize_with_boost_config_rejects_identical_tokens() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (token, _) = create_sac(&env, &admin);
+        let staking = StakingClient::new(&env, &env.register_contract(None, Staking));
+
+        assert_eq!(
+            staking.try_initialize_with_boost_config(
+                &token.address,
+                &token.address,
+                &admin,
+                &10_000_i128,
+                &30_000_i128,
+                &MIN_LOCK_DURATION,
+                &MAX_LOCK_DURATION,
+            ),
+            Err(Ok(StakingError::IdenticalTokens))
+        );
+    }
+
+    #[test]
+    fn test_initialize_twice_still_fails_with_already_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _staker, staking) = setup(&env);
+        let cfg = staking.get_config();
+        assert_eq!(
+            staking.try_initialize(&cfg.lp_token, &cfg.reward_token, &admin),
+            Err(Ok(StakingError::AlreadyInitialized))
+        );
+        assert_eq!(staking.get_config(), cfg);
+    }
+
+    // ── #1113: registry cost ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_stake_cost_does_not_grow_with_staker_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+
+        for _ in 0..4 {
+            join(&env, &staking, &lp, 100);
+        }
+        let fifth = fresh_staker(&env, &lp, 100);
+        env.budget().reset_default();
+        staking.stake(&fifth, &100_i128);
+        let cost_5th = env.budget().cpu_instruction_cost();
+
+        env.budget().reset_unlimited();
+        for _ in 0..494 {
+            join(&env, &staking, &lp, 100);
+        }
+        let last = fresh_staker(&env, &lp, 100);
+        env.budget().reset_default();
+        staking.stake(&last, &100_i128);
+        let cost_500th = env.budget().cpu_instruction_cost();
+
+        env.budget().reset_unlimited();
+        assert_eq!(registry(&env, &staking).len(), 500);
+        assert!(
+            cost_500th <= cost_5th + cost_5th / 10,
+            "stake cost grew from {cost_5th} to {cost_500th} instructions"
+        );
+    }
+
+    fn exit_cost(n: u32, idx: usize, emergency: bool) -> u64 {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let mut stakers = StdVec::new();
+        for _ in 0..n {
+            stakers.push(join(&env, &staking, &lp, 100));
+        }
+        if emergency {
+            staking.set_emergency_mode(&admin, &true);
+        }
+        let who = stakers[idx].clone();
+        env.budget().reset_default();
+        if emergency {
+            staking.emergency_withdraw(&who);
+        } else {
+            let _ = staking.unstake(&who, &100_i128);
+        }
+        let cost = env.budget().cpu_instruction_cost();
+        env.budget().reset_unlimited();
+        assert_eq!(registry(&env, &staking).len(), n as usize - 1);
+        assert!(!has_slot(&env, &staking, &who));
+        cost
+    }
+
+    #[test]
+    fn test_unstake_cost_does_not_grow_with_staker_count() {
+        // A middle staker leaves, so the swap-remove path runs in both pools.
+        let small = exit_cost(5, 2, false);
+        let large = exit_cost(500, 250, false);
+        assert!(
+            large <= small + small / 10,
+            "unstake cost grew from {small} to {large} instructions"
+        );
+    }
+
+    #[test]
+    fn test_emergency_withdraw_cost_does_not_grow_with_staker_count() {
+        let small = exit_cost(5, 2, true);
+        let large = exit_cost(500, 250, true);
+        assert!(
+            large <= small + small / 10,
+            "emergency_withdraw cost grew from {small} to {large} instructions"
+        );
+    }
+
+    #[test]
+    fn test_instance_storage_does_not_grow_with_staker_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let mut stakers = StdVec::new();
+        for _ in 0..5 {
+            stakers.push(join(&env, &staking, &lp, 100));
+        }
+        // Every call loads the whole instance entry, so a read that does
+        // nothing else measures how big it is.
+        env.budget().reset_default();
+        staking.get_pool_info();
+        let small = env.budget().cpu_instruction_cost();
+
+        env.budget().reset_unlimited();
+        for _ in 0..295 {
+            stakers.push(join(&env, &staking, &lp, 100));
+        }
+        env.budget().reset_default();
+        staking.get_pool_info();
+        let large = env.budget().cpu_instruction_cost();
+        env.budget().reset_unlimited();
+
+        assert!(
+            large <= small + small / 10,
+            "instance load grew from {small} to {large} instructions"
+        );
+        // And none of the registry lives in instance storage.
+        env.as_contract(&staking.address, || {
+            let instance = env.storage().instance();
+            assert!(!instance.has(&DataKey::StakerIndex));
+            assert!(!instance.has(&DataKey::StakerCount));
+            assert!(!instance.has(&DataKey::StakerAt(0)));
+            assert!(!instance.has(&DataKey::StakerSlot(stakers[0].clone())));
+        });
+    }
+
+    // ── #1113: registry consistency ──────────────────────────────────────────
+
+    #[test]
+    fn test_registry_swap_remove_moves_last_entry_into_the_freed_slot() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+        let b = join(&env, &staking, &lp, 100);
+        let c = join(&env, &staking, &lp, 100);
+        let d = join(&env, &staking, &lp, 100);
+        assert_eq!(
+            registry(&env, &staking),
+            std::vec![a.clone(), b.clone(), c.clone(), d.clone()]
+        );
+
+        let _ = staking.unstake(&b, &100_i128);
+        assert_eq!(
+            registry(&env, &staking),
+            std::vec![a.clone(), d.clone(), c.clone()]
+        );
+
+        // Removing the last entry just truncates.
+        let _ = staking.unstake(&c, &100_i128);
+        assert_eq!(registry(&env, &staking), std::vec![a.clone(), d.clone()]);
+        let _ = staking.unstake(&a, &100_i128);
+        let _ = staking.unstake(&d, &100_i128);
+        assert!(registry(&env, &staking).is_empty());
+    }
+
+    #[test]
+    fn test_top_up_and_partial_unstake_keep_a_single_registry_entry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+        let other = join(&env, &staking, &lp, 100);
+        StellarAssetClient::new(&env, &lp).mint(&a, &50);
+
+        staking.stake(&a, &50_i128);
+        assert_registry_is(&env, &staking, &[a.clone(), other.clone()]);
+        let _ = staking.unstake(&a, &60_i128);
+        assert_registry_is(&env, &staking, &[a.clone(), other.clone()]);
+        let _ = staking.unstake(&a, &90_i128);
+        assert_registry_is(&env, &staking, &[other]);
+        assert!(!has_slot(&env, &staking, &a));
+    }
+
+    #[test]
+    fn test_emergency_withdraw_removes_staker_from_registry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+        let b = join(&env, &staking, &lp, 100);
+        let c = join(&env, &staking, &lp, 100);
+        staking.set_emergency_mode(&admin, &true);
+
+        staking.emergency_withdraw(&a);
+        assert_eq!(registry(&env, &staking), std::vec![c.clone(), b.clone()]);
+        assert!(!has_slot(&env, &staking, &a));
+    }
+
+    #[test]
+    fn test_registry_stays_consistent_over_300_random_joins_and_leaves() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let mut seed = 0x5eed_u64;
+        let mut live: StdVec<Address> = StdVec::new();
+        let mut gone: StdVec<Address> = StdVec::new();
+
+        for _ in 0..300 {
+            let roll = lcg(&mut seed) % 100;
+            if live.is_empty() || roll < 50 {
+                live.push(join(&env, &staking, &lp, 100));
+            } else if roll < 60 && !gone.is_empty() {
+                // A staker who left comes back.
+                let idx = lcg(&mut seed) as usize % gone.len();
+                let back = gone.swap_remove(idx);
+                staking.stake(&back, &100_i128);
+                live.push(back);
+            } else {
+                let idx = lcg(&mut seed) as usize % live.len();
+                let leaver = live.swap_remove(idx);
+                let _ = staking.unstake(&leaver, &100_i128);
+                gone.push(leaver);
+            }
+            assert_registry_is(&env, &staking, &live);
+        }
+
+        for who in gone.iter() {
+            assert!(!has_slot(&env, &staking, who), "departed staker kept a slot");
+        }
+        assert_eq!(
+            staking.get_pool_info().total_effective_staked,
+            100 * live.len() as i128
+        );
+    }
+
+    #[test]
+    fn test_registry_entries_are_bumped_on_write_and_on_read() {
+        use soroban_sdk::testutils::storage::Persistent as _;
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+
+        let ttl = |key: DataKey| -> u32 {
+            env.as_contract(&staking.address, || env.storage().persistent().get_ttl(&key))
+        };
+        assert!(ttl(DataKey::StakerCount) >= BUMP_TO - 1);
+        assert!(ttl(DataKey::StakerAt(0)) >= BUMP_TO - 1);
+        assert!(ttl(DataKey::StakerSlot(a.clone())) >= BUMP_TO - 1);
+
+        env.ledger()
+            .with_mut(|l| l.sequence_number += BUMP_TO - MIN_TTL + 1);
+        assert!(ttl(DataKey::StakerAt(0)) < MIN_TTL);
+        staking.list_expired_boosts(&0, &10);
+        assert!(ttl(DataKey::StakerAt(0)) >= BUMP_TO - 1, "page read must bump");
+        assert!(ttl(DataKey::StakerCount) >= BUMP_TO - 1);
+    }
+
+    // ── #1113: keeper functions over a large registry ────────────────────────
+
+    #[test]
+    fn test_list_expired_boosts_pagination_is_equivalent_for_200_stakers() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let mut expected: StdVec<Address> = StdVec::new();
+        for i in 0..200u32 {
+            let staker = fresh_staker(&env, &lp, 100);
+            if i % 3 == 0 {
+                staking.stake_locked(&staker, &100_i128, &MAX_LOCK_DURATION);
+                expected.push(staker);
+            } else {
+                staking.stake(&staker, &100_i128);
+            }
+        }
+        advance_time(&env, MAX_LOCK_DURATION + 1);
+        let count = registry(&env, &staking).len() as u32;
+        assert_eq!(count, 200);
+
+        let collect = |page: u32| -> StdVec<Address> {
+            let mut out = StdVec::new();
+            let mut offset = 0u32;
+            while offset < count {
+                for a in staking.list_expired_boosts(&offset, &page).iter() {
+                    out.push(a);
+                }
+                offset += page.min(MAX_LIST_LIMIT);
+            }
+            out
+        };
+        let mut by_100 = collect(100);
+        let mut by_37 = collect(37);
+        let mut by_1000 = collect(1_000); // clamped to MAX_LIST_LIMIT
+        expected.sort();
+        by_100.sort();
+        by_37.sort();
+        by_1000.sort();
+        assert_eq!(by_100, expected);
+        assert_eq!(by_37, expected);
+        assert_eq!(by_1000, expected);
+        by_100.dedup();
+        assert_eq!(by_100.len(), expected.len(), "no staker listed twice");
+
+        // A keeper settles everything it found in MAX_BATCH_SIZE chunks.
+        for chunk in expected.chunks(MAX_BATCH_SIZE as usize) {
+            let mut batch = Vec::new(&env);
+            for a in chunk {
+                batch.push_back(a.clone());
+            }
+            staking.settle_boost_batch(&batch);
+        }
+        assert!(collect(100).is_empty());
+        assert_eq!(registry(&env, &staking).len(), 200);
+    }
+
+    #[test]
+    fn test_reconcile_over_200_stakers_is_independent_of_page_size() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let mut stakers = StdVec::new();
+        for _ in 0..200 {
+            stakers.push(join(&env, &staking, &lp, 100));
+        }
+        staking.update_rewards(&admin, &10_000_i128);
+        let pending_sum: i128 = stakers.iter().map(|s| staking.pending_rewards(s)).sum();
+        assert_eq!(pending_sum, 10_000);
+
+        // Run 1: four pages of 50, finalized on the last.
+        assert_eq!(
+            staking.reconcile_reward_accounting(&admin, &0, &50, &false),
+            (0, 2_500)
+        );
+        assert_eq!(
+            staking.reconcile_reward_accounting(&admin, &50, &50, &false),
+            (0, 5_000)
+        );
+        assert_eq!(
+            staking.reconcile_reward_accounting(&admin, &100, &50, &false),
+            (0, 7_500)
+        );
+        assert_eq!(
+            staking.reconcile_reward_accounting(&admin, &150, &50, &true),
+            (0, 10_000)
+        );
+        env.as_contract(&staking.address, || {
+            assert!(
+                !env.storage().persistent().has(&DataKey::ReconcileTotal),
+                "the running total is cleared on finalize"
+            );
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&DataKey::ReconcileState(stakers[199].clone())));
+        });
+
+        // Run 2: seven pages of 30 straight after. Leftovers from run 1 must
+        // not make it undercount.
+        let mut offset = 0u32;
+        let mut last = (0, 0);
+        while offset < 200 {
+            let done = offset + 30 >= 200;
+            last = staking.reconcile_reward_accounting(&admin, &offset, &30, &done);
+            offset += 30;
+        }
+        assert_eq!(last, (0, 10_000));
+        assert_eq!(staking.get_owed_rewards(), 10_000);
+        for s in stakers.iter().take(5) {
+            assert_eq!(staking.claim(s), 50);
+        }
+    }
+
+    #[test]
+    fn test_reconcile_page_overlap_does_not_double_count_on_registry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        for _ in 0..4 {
+            join(&env, &staking, &lp, 100);
+        }
+        staking.update_rewards(&admin, &4_000_i128);
+
+        let first = staking.reconcile_reward_accounting(&admin, &0, &3, &false);
+        assert_eq!(first, (0, 3_000));
+        // Overlapping page: staker 2 is seen again and must not count twice.
+        let fin = staking.reconcile_reward_accounting(&admin, &2, &3, &true);
+        // 10_000 funded, 4_000 distributed and owed, 6_000 still undistributed.
+        assert_eq!(fin, (6_000, 4_000));
+    }
+
+    // ── #1113: migration from the legacy Vec layout ──────────────────────────
+
+    fn seed_legacy(
+        env: &Env,
+        staking: &StakingClient<'_>,
+        lp: &Address,
+        n: u32,
+        amount: i128,
+    ) -> StdVec<Address> {
+        let mut stakers = StdVec::new();
+        let mut legacy = Vec::new(env);
+        for _ in 0..n {
+            let s = Address::generate(env);
+            legacy.push_back(s.clone());
+            stakers.push(s);
+        }
+        StellarAssetClient::new(env, lp).mint(&staking.address, &(amount * n as i128));
+        env.as_contract(&staking.address, || {
+            for s in stakers.iter() {
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::StakerAmount(s.clone()), &amount);
+            }
+            env.storage().instance().set(&DataKey::StakerIndex, &legacy);
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalEffectiveStaked, &(amount * n as i128));
+        });
+        stakers
+    }
+
+    fn legacy_present(env: &Env, staking: &StakingClient<'_>) -> bool {
+        env.as_contract(&staking.address, || {
+            env.storage().instance().has(&DataKey::StakerIndex)
+        })
+    }
+
+    #[test]
+    fn test_migrate_staker_index_moves_legacy_vec_in_pages() {
+        use soroban_sdk::TryFromVal;
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let stakers = seed_legacy(&env, &staking, &lp, 120, 100);
+        // Two of them already left before the upgrade.
+        env.as_contract(&staking.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::StakerAmount(stakers[7].clone()), &0i128);
+            env.storage()
+                .persistent()
+                .set(&DataKey::StakerAmount(stakers[100].clone()), &0i128);
+        });
+
+        assert_eq!(staking.migrate_staker_index(&0, &50), 70);
+        assert!(legacy_present(&env, &staking));
+        assert_eq!(staking.migrate_staker_index(&50, &50), 20);
+        assert!(legacy_present(&env, &staking));
+        assert_eq!(staking.migrate_staker_index(&100, &50), 0);
+        assert!(!legacy_present(&env, &staking), "legacy vector is removed");
+
+        let mut expected: StdVec<Address> = stakers.clone();
+        expected.retain(|s| s != &stakers[7] && s != &stakers[100]);
+        assert_registry_is(&env, &staking, &expected);
+        assert_eq!(registry(&env, &staking).len(), 118);
+
+        let data = find_event(&env, "staker_index_migrated").expect("completion event");
+        let (version, (registered,)) = <(u32, (u32,))>::try_from_val(&env, &data).unwrap();
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(registered, 118);
+    }
+
+    #[test]
+    fn test_migrate_staker_index_is_a_noop_without_a_legacy_vector() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+
+        assert_eq!(staking.migrate_staker_index(&0, &50), 0);
+        assert_eq!(staking.migrate_staker_index(&40, &50), 0);
+        assert_registry_is(&env, &staking, &[a]);
+    }
+
+    #[test]
+    fn test_migrate_staker_index_rejects_out_of_order_pages() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        seed_legacy(&env, &staking, &lp, 120, 100);
+
+        // Calling the last page first must not delete the vector.
+        assert_eq!(
+            staking.try_migrate_staker_index(&100, &50),
+            Err(Ok(StakingError::MigrationOutOfOrder))
+        );
+        assert_eq!(
+            staking.try_migrate_staker_index(&50, &50),
+            Err(Ok(StakingError::MigrationOutOfOrder))
+        );
+        assert!(legacy_present(&env, &staking));
+        assert!(registry(&env, &staking).is_empty());
+
+        assert_eq!(staking.migrate_staker_index(&0, &50), 70);
+        // Replaying an earlier page, or skipping ahead, is rejected too.
+        assert_eq!(
+            staking.try_migrate_staker_index(&0, &50),
+            Err(Ok(StakingError::MigrationOutOfOrder))
+        );
+        assert_eq!(
+            staking.try_migrate_staker_index(&100, &50),
+            Err(Ok(StakingError::MigrationOutOfOrder))
+        );
+        assert_eq!(staking.migrate_staker_index(&50, &50), 20);
+        assert_eq!(staking.migrate_staker_index(&100, &50), 0);
+        assert_eq!(registry(&env, &staking).len(), 120);
+    }
+
+    #[test]
+    fn test_migrate_staker_index_rejects_bad_page_limits() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        seed_legacy(&env, &staking, &lp, 10, 100);
+        assert_eq!(
+            staking.try_migrate_staker_index(&0, &0),
+            Err(Ok(StakingError::BatchTooLarge))
+        );
+        assert_eq!(
+            staking.try_migrate_staker_index(&0, &(MAX_BATCH_SIZE + 1)),
+            Err(Ok(StakingError::BatchTooLarge))
+        );
+        assert!(legacy_present(&env, &staking));
+    }
+
+    #[test]
+    fn test_migration_with_interleaved_stakes_and_unstakes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let legacy = seed_legacy(&env, &staking, &lp, 120, 100);
+
+        assert_eq!(staking.migrate_staker_index(&0, &50), 70);
+
+        // Activity while the migration is half done.
+        let newcomer = join(&env, &staking, &lp, 100);
+        let _ = staking.unstake(&legacy[0], &100_i128); // already migrated
+        let _ = staking.unstake(&legacy[60], &100_i128); // not yet migrated
+        StellarAssetClient::new(&env, &lp).mint(&legacy[70], &50);
+        staking.stake(&legacy[70], &50_i128); // not yet migrated, tops up
+
+        assert_eq!(staking.migrate_staker_index(&50, &50), 20);
+        assert_eq!(staking.migrate_staker_index(&100, &50), 0);
+        assert!(!legacy_present(&env, &staking));
+
+        let mut expected: StdVec<Address> = legacy.clone();
+        expected.retain(|s| s != &legacy[0] && s != &legacy[60]);
+        expected.push(newcomer);
+        assert_registry_is(&env, &staking, &expected);
+        assert_eq!(registry(&env, &staking).len(), 119);
+        assert_eq!(
+            staking.get_pool_info().total_effective_staked,
+            12_000 - 200 + 100 + 50
+        );
+        // Everyone can still leave.
+        for s in expected.iter() {
+            let info = staking.get_staker_info(s);
+            let _ = staking.unstake(s, &info.staked_amount);
+        }
+        assert!(registry(&env, &staking).is_empty());
+    }
+
+    #[test]
+    fn test_keepers_see_unmigrated_legacy_stakers_until_migration_finishes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let legacy = seed_legacy(&env, &staking, &lp, 4, 100);
+        let expiry = env.ledger().timestamp() + MIN_LOCK_DURATION;
+        env.as_contract(&staking.address, || {
+            // Three of them hold a boost; the fourth left before the upgrade.
+            for s in legacy.iter().take(3) {
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::BoostMultiplier(s.clone()), &DEFAULT_MAX_BOOST);
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::LockExpiry(s.clone()), &expiry);
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::StakerAmount(legacy[3].clone()), &0i128);
+        });
+        advance_time(&env, MIN_LOCK_DURATION + 1);
+
+        assert_eq!(staking.list_expired_boosts(&0, &10).len(), 3);
+        // Part way through the migration the combined view is still complete.
+        assert_eq!(staking.migrate_staker_index(&0, &2), 2);
+        let mid = staking.list_expired_boosts(&0, &10);
+        assert_eq!(mid.len(), 3);
+        assert_eq!(staking.migrate_staker_index(&2, &2), 0);
+        let done = staking.list_expired_boosts(&0, &10);
+        assert_eq!(done.len(), 3);
+        assert_registry_is(&env, &staking, &legacy[..3]);
+    }
+
+    #[test]
+    fn test_register_existing_stakers_uses_the_registry_and_stays_idempotent() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_admin, _s, staking) = setup(&env);
+        let lp = staking.get_pool_info().lp_token;
+        let a = join(&env, &staking, &lp, 100);
+        let pre_upgrade = Address::generate(&env);
+        StellarAssetClient::new(&env, &lp).mint(&staking.address, &100);
+        env.as_contract(&staking.address, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::StakerAmount(pre_upgrade.clone()), &100i128);
+        });
+
+        let mut batch = Vec::new(&env);
+        batch.push_back(a.clone());
+        batch.push_back(pre_upgrade.clone());
+        batch.push_back(pre_upgrade.clone());
+        batch.push_back(Address::generate(&env));
+        staking.register_existing_stakers(&batch);
+        staking.register_existing_stakers(&batch);
+
+        assert_registry_is(&env, &staking, &[a, pre_upgrade]);
     }
 }
