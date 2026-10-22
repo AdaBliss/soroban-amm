@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- `pol_vesting::create_vesting` rejects an LP token that the given `pool` does not administer, with the new `VestingError::LpTokenMismatch = 13`. A mistyped pair used to create a schedule for a token the pool never issued (#1136).
+- `pol_vesting` schedules outlive the default 180-day bump. A schedule is stored with a TTL covering its `end_ledger` plus a claim window, clamped to the network maximum. Reads of a schedule refresh it and its token's committed total, and the instance is refreshed to the network maximum (#1136).
+- `pol_vesting` gains a governance-gated `upgrade(governance, new_wasm_hash)` that emits `upgraded`, and `initialize` emits an `initialized` event with the stored governance and treasury addresses. The deploy module reads both back and aborts on a mismatch (#1136).
+
 ### Removed
 - `packages/android-sdk` is removed (#962). It was one Kotlin file whose two methods, transaction building and submission, were empty TODOs, under the placeholder `com.example.amm` namespace. No workflow built or tested it, no manifest referenced it and no document mentioned it, so the directory only implied mobile support that did not exist. Removing it is deliberate: a real Android SDK would need transaction construction, signing and RPC transport, XDR fixtures shared with the Go SDK and a Gradle CI job, and should arrive as a complete package rather than a placeholder. The README now lists the client SDKs that do exist (TypeScript, Go, Rust).
 
