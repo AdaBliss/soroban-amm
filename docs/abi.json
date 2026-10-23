@@ -20713,6 +20713,35 @@
     "incentive_campaigns": [
       {
         "function_v0": {
+          "doc": "Halt contract activity (campaign creation, rate updates, reward claims). Governance only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "caller",
+              "type_": "address"
+            }
+          ],
+          "name": "pause",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Stake LP tokens into a stake-based campaign (#1115).\\n\\nThe LP tokens move from `provider` into this contract and count towards\\nthe campaign's `total_staked` from this ledger on. Staking before\\n`start_time` is allowed (rewards only start flowing at `start_time`);\\nstaking at or after `end_time` is rejected because nothing could accrue.\\n\\nEverything accrued so far is settled against the *old* stake first, so\\nadding stake neither re-prices earlier seconds nor shares them with the\\nnew stake.",
           "inputs": [
             {
@@ -20732,6 +20761,35 @@
             }
           ],
           "name": "stake",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Resume contract activity. Governance only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "caller",
+              "type_": "address"
+            }
+          ],
+          "name": "unpause",
           "outputs": [
             {
               "result": {
@@ -20791,6 +20849,54 @@
       },
       {
         "function_v0": {
+          "doc": "Replace this contract's WASM with a new version. Governance only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "caller",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type_": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "IncentiveError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return the build version of this contract (`CONTRACT_VERSION`).",
+          "inputs": [],
+          "name": "version",
+          "outputs": [
+            "u32"
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "LP tokens `provider` currently has staked in `campaign_id` (0 if none).",
           "inputs": [
             {
@@ -20811,6 +20917,16 @@
         }
       },
       {
+        "function_v0": {
+          "doc": "Return whether the contract is currently paused.",
+          "inputs": [],
+          "name": "is_paused",
+          "outputs": [
+            "bool"
+          ]
+        }
+      },
+      {
         "udt_union_v0": {
           "cases": [
             {
@@ -20823,6 +20939,12 @@
               "void_v0": {
                 "doc": "Nominated governance address awaiting `accept_governance`.",
                 "name": "PendingGovernance"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "`true` while governance has paused the contract (instance storage).",
+                "name": "Paused"
               }
             },
             {
@@ -21566,6 +21688,11 @@
               "doc": "`migrate_indexes` was given a `kind` other than 0, 1 or 2.",
               "name": "InvalidIndexKind",
               "value": 27
+            },
+            {
+              "doc": "Governance has paused the contract: `create_campaign`, `set_campaign_rate`\\nand `claim_rewards` are blocked until `unpause`.",
+              "name": "Paused",
+              "value": 28
             }
           ],
           "doc": "Typed failures for every caller-triggerable precondition in this contract.\\n\\nDiscriminants follow the workspace convention (`AlreadyInitialized = 1`,\\n`NotInitialized = 2`) and are part of the ABI: never renumber, only append.",

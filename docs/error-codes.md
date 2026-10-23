@@ -405,6 +405,7 @@ Defined in [contracts/incentive_campaigns/src/lib.rs](../contracts/incentive_cam
 | 25 | `InvalidClaimGrace` | `create_campaign_with_grace` was given a `claim_grace_secs` outside `[3_600, 7_776_000]` (1 hour to 90 days). | Pass a grace period inside the bounds; `create_campaign` uses the 7-day default. |
 | 26 | `ClaimGraceActive` | `recover_leftover_funds` was called at or before `end_time + claim_grace_secs`, while providers may still claim. | Wait until the ledger time is strictly past `end_time + get_claim_grace(id)`. |
 | 27 | `InvalidIndexKind` | `migrate_indexes` was given a `kind` other than 0 (by campaign), 1 (by provider) or 2 (by creator). | Pass 0, 1 or 2. |
+| 28 | `Paused` | Governance has paused the contract, and `create_campaign`, `set_campaign_rate` or `claim_rewards` was called. Views, `stake`, `unstake` and `recover_leftover_funds` keep working. | Wait for governance to call `unpause`; check `is_paused`. |
 
 
 

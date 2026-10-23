@@ -61,8 +61,9 @@
 //! # Pause policy
 //!
 //! Governance can pause contract activity with `pause` (and resume with `unpause`).
-//! While paused, `create_campaign`, `set_campaign_rate` and `claim_rewards` are
-//! blocked with `IncentiveError::Paused`. All views, `stake`, `unstake`, and
+//! While paused, `create_campaign`, `create_campaign_with_grace`,
+//! `set_campaign_rate` and `claim_rewards` are blocked with
+//! `IncentiveError::Paused`. All views, `stake`, `unstake`, and
 //! `recover_leftover_funds` (after campaign ends) remain functional.
 //! Accrual is unaffected by a pause: rewards accrue strictly by ledger time, so
 //! claims after unpause pay exactly what they would have paid without the pause.
@@ -75,6 +76,9 @@
 //! | `get_governance` | allowed | View. |
 //! | `get_pending_governance` | allowed | View. |
 //! | `create_campaign` | blocked (`Paused`) | Creates a new campaign and takes funding. |
+//! | `create_campaign_with_grace` | blocked (`Paused`) | Same as `create_campaign`, with an explicit claim grace period. |
+//! | `get_claim_grace` | allowed | View. |
+//! | `migrate_indexes` | allowed | Permissionless storage migration; moves no funds. |
 //! | `set_campaign_rate` | blocked (`Paused`) | Modifies campaign reward rate. |
 //! | `recover_leftover_funds` | allowed | Post-campaign leftover recovery. |
 //! | `stake` | allowed | LP position management. |
@@ -186,6 +190,9 @@ pub enum IncentiveError {
     ClaimGraceActive = 26,
     /// `migrate_indexes` was given a `kind` other than 0, 1 or 2.
     InvalidIndexKind = 27,
+    /// Governance has paused the contract: `create_campaign`, `set_campaign_rate`
+    /// and `claim_rewards` are blocked until `unpause`.
+    Paused = 28,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +215,8 @@ pub enum DataKey {
     Governance,
     /// Nominated governance address awaiting `accept_governance`.
     PendingGovernance,
+    /// `true` while governance has paused the contract (instance storage).
+    Paused,
     NextCampaignId,
     Campaign(u64),
     CampaignIdByIndex(u64),
@@ -749,6 +758,7 @@ impl IncentiveCampaigns {
         funding_amount: i128,
         claim_grace_secs: u64,
     ) -> Result<u64, IncentiveError> {
+        Self::ensure_not_paused(&env)?;
         extend_instance_ttl(&env);
         caller.require_auth();
         Self::require_governance(&env, &caller)?;
@@ -4958,8 +4968,7 @@ mod tests {
                     break;
                 }
                 let trimmed = line.trim();
-                if trimmed.starts_with("//! | `") {
-                    let rest = &trimmed["//! | `".len()..];
+                if let Some(rest) = trimmed.strip_prefix("//! | `") {
                     if let Some(end_idx) = rest.find('`') {
                         let fn_name = &rest[..end_idx];
                         table_functions.insert(String::from(fn_name));
@@ -4981,8 +4990,7 @@ mod tests {
                     break;
                 }
                 let trimmed = line.trim();
-                if trimmed.starts_with("pub fn ") {
-                    let rest = &trimmed["pub fn ".len()..];
+                if let Some(rest) = trimmed.strip_prefix("pub fn ") {
                     if let Some(paren_idx) = rest.find('(') {
                         let fn_name = rest[..paren_idx].trim();
                         contract_functions.insert(String::from(fn_name));
@@ -5072,6 +5080,60 @@ mod tests {
     }
 
     #[test]
+    fn test_create_campaign_with_grace_blocked_while_paused() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        client.pause(&gov);
+
+        // The explicit-grace entrypoint is the one that holds the guard, so it must
+        // be blocked directly and not only through `create_campaign`.
+        let res = client.try_create_campaign_with_grace(
+            &gov,
+            &pool,
+            &lp,
+            &reward,
+            &1_000,
+            &5_000,
+            &100,
+            &1_000_000,
+            &DEFAULT_CLAIM_GRACE_SECS,
+        );
+        assert_eq!(res, Err(Ok(IncentiveError::Paused)));
+        // Nothing was created, and no funding was taken.
+        assert!(client.try_get_campaign(&1).is_err());
+
+        client.unpause(&gov);
+        let id = client.create_campaign_with_grace(
+            &gov,
+            &pool,
+            &lp,
+            &reward,
+            &1_000,
+            &5_000,
+            &100,
+            &1_000_000,
+            &DEFAULT_CLAIM_GRACE_SECS,
+        );
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn test_migrate_indexes_and_views_work_while_paused() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+
+        client.pause(&gov);
+
+        // `migrate_indexes` is permissionless maintenance that moves no funds, and
+        // `get_claim_grace` is a view; neither may be held up by a pause.
+        assert_eq!(client.get_claim_grace(&id), DEFAULT_CLAIM_GRACE_SECS);
+        assert!(client.try_migrate_indexes(&0, &0, &10).is_ok());
+    }
+
+    #[test]
     fn test_set_campaign_rate_blocked_while_paused() {
         let (env, incentives, pool, lp, reward, _provider, gov) = setup();
         let client = IncentiveCampaignsClient::new(&env, &incentives);
@@ -5117,8 +5179,9 @@ mod tests {
         let id1 =
             client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
 
-        // Provider stakes in Campaign 1
-        client.stake(&provider, &id1, &500_000);
+        // Provider stakes in Campaign 1. Staking locks the LP tokens, and the provider holds
+        // ~999_000 of them, so each campaign gets 400_000 to leave room for the twin below.
+        client.stake(&provider, &id1, &400_000);
 
         // Advance to 2_000 and pause
         set_time(&env, 2_000);
@@ -5146,7 +5209,7 @@ mod tests {
             &gov, &pool, &lp, &reward, &10_000, &15_000, &100, &1_000_000,
         );
         set_time(&env, 10_000);
-        client.stake(&provider, &id2, &500_000);
+        client.stake(&provider, &id2, &400_000);
         set_time(&env, 13_000); // 3_000s elapsed, exactly matching t=1_000 to t=4_000 in id1
         let payout2 = client.claim_rewards(&provider, &id2);
 
@@ -5165,7 +5228,8 @@ mod tests {
 
         let id = client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &2_000, &100, &500_000);
 
-        set_time(&env, 3_000); // Campaign ended
+        // Campaign ended and its claim grace period has run out.
+        set_time(&env, 2_000 + DEFAULT_CLAIM_GRACE_SECS + 1);
         client.pause(&gov);
 
         let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
@@ -5283,7 +5347,8 @@ mod tests {
         client.stake(&provider, &id, &300_000);
         set_time(&env, 2_000);
         let claimed = client.claim_rewards(&provider, &id);
-        assert_eq!(claimed, 100_000);
+        // 100 reward/s for 1_000 s, less at most 1 unit of accumulator rounding dust.
+        assert!((99_999..=100_000).contains(&claimed), "claimed {claimed}");
         assert_eq!(client.get_distribution_count(&id), 1);
 
         client.pause(&gov);
@@ -5291,6 +5356,10 @@ mod tests {
         // Upload same WASM and upgrade
         let wasm_hash = env.deployer().upload_contract_wasm(WASM);
         client.upgrade(&gov, &wasm_hash);
+        // From here every call runs the uploaded WASM in the VM, and instantiating a module
+        // this size on each call would exhaust the default test budget. This test is about
+        // state surviving the upgrade, not about cost.
+        env.budget().reset_unlimited();
 
         // Verify upgraded event emitted
         let (version, (event_hash,)): (u32, (BytesN<32>,)) =
@@ -5302,19 +5371,22 @@ mod tests {
         assert!(client.is_paused());
         assert_eq!(client.version(), CONTRACT_VERSION);
         let camp = client.get_campaign(&id);
-        assert_eq!(camp.total_distributed, 100_000);
+        assert_eq!(camp.total_distributed, claimed);
         assert_eq!(client.get_stake(&id, &provider), 300_000);
         assert_eq!(client.get_total_staked(&id), 300_000);
         assert_eq!(client.get_distribution_count(&id), 1);
         let rec = client.get_distribution_record(&1);
-        assert_eq!(rec.amount, 100_000);
+        assert_eq!(rec.amount, claimed);
         assert_eq!(rec.provider, provider);
 
         // Unpause and further operations work seamlessly
         client.unpause(&gov);
         set_time(&env, 3_000);
         let claimed_next = client.claim_rewards(&provider, &id);
-        assert_eq!(claimed_next, 100_000);
+        assert!(
+            (99_999..=100_001).contains(&claimed_next),
+            "claimed {claimed_next}"
+        );
         assert_eq!(client.get_distribution_count(&id), 2);
     }
 
