@@ -4,7 +4,7 @@
 //! `#[contractimpl]` so the test runs through Soroban's real event
 //! pipeline (not just a macro-only expansion check).
 
-#![cfg(all(test, feature = "testutils"))]
+#![cfg(test)]
 
 extern crate std;
 

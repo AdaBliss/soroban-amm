@@ -534,7 +534,11 @@ impl DexAggregator {
 
             for t in 0..tokens.len() {
                 let next_token = tokens.get(t).unwrap();
-                if next_token == current_token {
+                // A route that comes back through a token it already passed
+                // through only pays another round of pool fees, and the quote
+                // for it is a call into a pool contract. Skip it before
+                // quoting; this also covers `current_token` itself.
+                if Self::path_visits(token_in, &current_hops, &next_token) {
                     continue;
                 }
 
@@ -859,6 +863,20 @@ impl DexAggregator {
     }
 
     /// Has `(token, depth)` already been enqueued with a better or equal amount? (#363)
+    /// Whether `token` is the route's entry token or the output of a hop
+    /// already on it.
+    fn path_visits(token_in: &Address, hops: &Vec<RouteHop>, token: &Address) -> bool {
+        if token == token_in {
+            return true;
+        }
+        for h in 0..hops.len() {
+            if hops.get(h).unwrap().token_out == *token {
+                return true;
+            }
+        }
+        false
+    }
+
     fn is_visited_and_worse(
         visited: &mut Vec<(Address, u32, i128)>,
         token: &Address,
@@ -1203,6 +1221,61 @@ mod tests {
             .iter()
             .filter(|e| e.0 == *contract && e.1 == (topic.clone(),).into_val(env))
             .count()
+    }
+
+    /// A route must never pass through a token it already visited. The search
+    /// used to keep walking back through the entry token up to `max_hops`,
+    /// quoting pool after pool for routes that cannot beat the one it already
+    /// had. On `a -> b -> c` the answer is the same at any `max_hops >= 2`, so
+    /// the work should be too.
+    #[test]
+    fn test_search_does_not_requote_tokens_already_on_the_path() {
+        let v = setup_venues();
+        let env = &v.env;
+        let factory = FactoryClient::new(env, &v.factory);
+
+        let token_c = env
+            .register_stellar_asset_contract_v2(v.admin.clone())
+            .address();
+        factory.create_pool(&v.admin, &v.token_b, &token_c, &2_i128, &None);
+        let pool_bc = factory.get_pool(&v.token_b, &token_c).unwrap();
+        let lp = Address::generate(env);
+        for t in [&v.token_b, &token_c] {
+            StellarAssetClient::new(env, t).mint(&lp, &10_000_000_i128);
+        }
+        amm::AmmPoolClient::new(env, &pool_bc).add_liquidity(
+            &lp,
+            &1_000_000,
+            &1_000_000,
+            &0,
+            &u64::MAX,
+        );
+
+        let agg = DexAggregatorClient::new(env, &v.agg);
+        agg.set_routing_tokens(&vec![env, v.token_b.clone()]);
+
+        let quote_with = |max_hops: u32| {
+            env.budget().reset_unlimited();
+            let quote = agg.find_best_route(&v.token_a, &token_c, &10_000_i128, &max_hops);
+            (env.budget().cpu_instruction_cost(), quote)
+        };
+        let (cost_2, quote_2) = quote_with(2);
+        let (cost_4, quote_4) = quote_with(4);
+
+        assert_eq!(quote_2.hops.len(), 2);
+        assert_eq!(quote_2.hops.get(0).unwrap().token_in, v.token_a);
+        assert_eq!(quote_2.hops.get(0).unwrap().token_out, v.token_b);
+        assert_eq!(quote_2.hops.get(1).unwrap().token_out, token_c);
+        assert_eq!(quote_4.hops, quote_2.hops);
+        assert_eq!(quote_4.amount_out, quote_2.amount_out);
+
+        // Allow 1% for the differing `max_hops` argument itself. Re-quoting
+        // `b -> a` and `a -> b` at the higher cap roughly doubled the cost.
+        assert!(
+            cost_4 * 100 <= cost_2 * 101,
+            "searching with max_hops=4 cost {cost_4} CPU instructions against {cost_2} at \
+             max_hops=2: the search is re-quoting hops through tokens already on the path"
+        );
     }
 
     #[test]

@@ -145,7 +145,9 @@ fn parity_fee_zero() {
 }
 #[test]
 fn parity_fee_one_with_rebate() {
-    run_case(1, 1, 10_000, 2, 1_000_000_000_000, 900_000, false);
+    // protocol_fee_bps must stay strictly below fee_bps (#1107), so a 1 bps
+    // swap fee carries no protocol cut.
+    run_case(1, 0, 10_000, 2, 1_000_000_000_000, 900_000, false);
 }
 #[test]
 fn parity_fee_thirty_with_rebate() {

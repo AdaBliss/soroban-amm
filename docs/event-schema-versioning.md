@@ -281,6 +281,9 @@ a representative call sequence and asserts every pool event carries the leading
 | `reward_distributed` | — | `(campaign_id: u64, provider: Address, amount: i128, dist_id: u64)` |
 | `staked` | — | `(campaign_id: u64, provider: Address, amount: i128, total_staked: i128)` |
 | `unstaked` | — | `(campaign_id: u64, provider: Address, amount: i128, total_staked: i128)` |
+| `paused` | — | `(caller: Address)` |
+| `unpaused` | — | `(caller: Address)` |
+| `upgraded` | — | `(new_wasm_hash: BytesN<32>)` |
 
 `staked` and `unstaked` (issue #1115) are emitted by the stake-based reward model; `total_staked` is the campaign's total after the change. See [incentive-campaigns.md](incentive-campaigns.md).
 
@@ -326,6 +329,9 @@ a representative call sequence and asserts every pool event carries the leading
 | `venue_removed` | `pool` | `()` |
 | `admin_nominated` | — | `(current_admin: Address, new_admin: Address)` |
 | `admin_changed` | — | `(new_admin: Address)` |
+| `paused` | — | `(admin: Address)` |
+| `unpaused` | — | `(admin: Address)` |
+| `upgraded` | — | `(new_wasm_hash: BytesN<32>)` |
 
 ### V2→V3 Migration — `contracts/v2_to_v3_migration/src/lib.rs`
 
@@ -657,6 +663,7 @@ count. Events marked unversioned carry their payload without the
 | `venue_removed` | 2 | _none_ | v1 |
 | `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
 | `admin_changed` | 1 | `new_admin` | v1 |
+| `window_bounds_updated` | 1 | `min_secs`, `max_secs` | v1 |
 
 ### `batch_router`
 
@@ -762,6 +769,7 @@ count. Events marked unversioned carry their payload without the
 
 | Event | Topics | Payload fields | Envelope |
 |---|---|---|---|
+| `initialized` | 1 | `governance`, `next_campaign_id`, `next_distribution_id` | v1 |
 | `governance_proposed` | 1 | `caller`, `new_governance` | v1 |
 | `governance_transferred` | 1 | `old_governance`, `new_governance` | v1 |
 | `campaign_created` | 1 | `id`, `pool`, `reward_token`, `start_time`, `end_time`, `reward_rate` | v1 |
@@ -770,6 +778,9 @@ count. Events marked unversioned carry their payload without the
 | `reward_distributed` | 1 | `campaign_id`, `provider`, `pending`, `dist_id` | v1 |
 | `staked` | 1 | `campaign_id`, `provider`, `amount`, `total_staked` | v1 |
 | `unstaked` | 1 | `campaign_id`, `provider`, `amount`, `total_staked` | v1 |
+| `paused` | 1 | `caller` | v1 |
+| `unpaused` | 1 | `caller` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 
 ### `oracle_aggregator`
 

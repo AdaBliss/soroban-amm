@@ -157,6 +157,9 @@ Defined in [contracts/batch_auction/src/lib.rs](../contracts/batch_auction/src/l
 | 17 | `OrderNotExpired` | `expire_order` called on an order whose deadline has not passed yet. | Wait until the order's deadline, or use `cancel_order` instead. |
 | 18 | `NothingToClaim` | `claim_refund` called for an order with no claimable balance on record. | No action — nothing was stranded for this order. |
 | 19 | `TooManyVenues` | `add_venue` would push the persistent venue registry past `MAX_VENUES`. | Remove a stale venue with `remove_venue` before adding another. |
+| 20 | `NotInitialized` | An admin function, `get_admin` or `accept_admin` was called before `initialize`. | Call `initialize` first. |
+| 21 | `InvalidBatchWindow` | `initialize` or `set_batch_window` was given a window outside the configured bounds (default 5 s to 1 day), for example `0` or `u64::MAX`. | Pass a window within `get_window_bounds()`. |
+| 22 | `InvalidWindowBounds` | `set_window_bounds` was given `min == 0`, `min > max`, a `max` above 30 days, or bounds that exclude the current window. | Pass `0 < min <= max <= 30 days` with the current window inside them. |
 
 ---
 
@@ -399,6 +402,10 @@ Defined in [contracts/incentive_campaigns/src/lib.rs](../contracts/incentive_cam
 | 22 | `InsufficientStake` | `unstake` asked for more than the caller has staked in the campaign. | Unstake at most `get_stake(campaign_id, provider)`. |
 | 23 | `CampaignEnded` | `stake` was called at or after the campaign's `end_time`. | Stake before the campaign ends; `unstake` and `claim_rewards` stay available. |
 | 24 | `LegacyCampaign` | `stake` was called on a campaign created before the stake-based model. | Legacy campaigns keep paying from the live LP balance; stake only into campaigns created after the upgrade. See [incentive-campaigns.md](incentive-campaigns.md). |
+| 25 | `InvalidClaimGrace` | `create_campaign_with_grace` was given a `claim_grace_secs` outside `[3_600, 7_776_000]` (1 hour to 90 days). | Pass a grace period inside the bounds; `create_campaign` uses the 7-day default. |
+| 26 | `ClaimGraceActive` | `recover_leftover_funds` was called at or before `end_time + claim_grace_secs`, while providers may still claim. | Wait until the ledger time is strictly past `end_time + get_claim_grace(id)`. |
+| 27 | `InvalidIndexKind` | `migrate_indexes` was given a `kind` other than 0 (by campaign), 1 (by provider) or 2 (by creator). | Pass 0, 1 or 2. |
+| 28 | `Paused` | Governance has paused the contract, and `create_campaign`, `set_campaign_rate` or `claim_rewards` was called. Views, `stake`, `unstake` and `recover_leftover_funds` keep working. | Wait for governance to call `unpause`; check `is_paused`. |
 
 
 

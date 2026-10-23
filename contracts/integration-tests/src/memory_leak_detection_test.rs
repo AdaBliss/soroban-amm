@@ -362,7 +362,7 @@ fn memory_leak_detect_orphaned_storage_after_incentive_campaign_recovery() {
     // Recovering the leftover winds the campaign down without emitting further
     // distribution records — recovery is not a payout to a provider.
     let treasury = Address::generate(&env);
-    env.ledger().set_timestamp(9_000);
+    env.ledger().set_timestamp(700_000); // past end_time + the 7-day default claim grace
     assert!(incentives.recover_leftover_funds(&gov, &id, &treasury) > 0);
 
     assert!(!incentives.get_campaign(&id).active);

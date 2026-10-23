@@ -4,10 +4,11 @@
 //!
 //! Run with:
 //! ```
-//! cargo test --package soroban-amm-sdk --features testutils -- examples::error_propagation
+//! cargo test -p soroban_amm_sdk -- examples::error_propagation
 //! ```
 
-#[cfg(all(test, feature = "testutils"))]
+#[cfg(test)]
+#[allow(clippy::module_inception)]
 mod error_propagation {
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
