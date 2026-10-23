@@ -180,6 +180,10 @@ Defined in [contracts/batch_router/src/lib.rs](../contracts/batch_router/src/lib
 | 9 | `UnsimulatableChain` | `simulate_batch` reached a second concentrated-liquidity op on a pool an earlier op already touched, so its local snapshot is stale. | Split the batch, or place the CL op first and re-quote afterwards. |
 | 10 | `InsufficientLiquidity` | The AMM swap's output would meet or exceed the output reserve (mirrors `amm::swap`'s guard). Not reachable through valid constant-product math, but simulated for parity. | Reduce the swap size. |
 | 11 | `InsufficientShares` | A first deposit would mint no more than `MINIMUM_LIQUIDITY` (1 000) shares, all of which are permanently locked, leaving the provider with none (mirrors `amm::add_liquidity`). | Deposit enough that `isqrt(amount_a * amount_b) > 1 000`. |
+| 12 | `NotInitialized` | `get_admin`, `get_factory`, or an admin/batch entrypoint ran before `initialize`. | Call `initialize(admin, factory)` first. |
+| 13 | `Unauthorized` | The address supplied as admin to `pause`/`unpause`/`propose_admin`/`upgrade` is not the stored admin, or `accept_admin` was called with an address other than the pending nominee. | Pass the current admin (or the nominee) and sign as that address. |
+| 14 | `NoPendingAdmin` | `accept_admin` called while no `propose_admin` nomination is pending. | Have the admin call `propose_admin` first. |
+| 15 | `Paused` | The router is paused by its admin; returned by `execute_batch`, `simulate_batch` and `validate_batch` alike. | Wait for the admin to call `unpause`. |
 
 ---
 

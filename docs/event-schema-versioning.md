@@ -308,6 +308,12 @@ a representative call sequence and asserts every pool event carries the leading
 |---|---|
 | `batch_op` | `(op_index: u32, kind: Symbol, result: BatchOpResult)` — emitted once per operation, in order, before the batch-level event. |
 | `batch_executed` | `(ops_len: u32)` |
+| `initialized` | `(admin: Address, factory: Address)` |
+| `pause` | `(admin: Address)` |
+| `unpause` | `(admin: Address)` |
+| `admin_nominated` | `(current_admin: Address, new_admin: Address)` |
+| `admin_changed` | `(new_admin: Address)` |
+| `upgraded` | `(new_wasm_hash: BytesN<32>)` |
 
 ### Batch Auction — `contracts/batch_auction/src/lib.rs`
 
@@ -352,6 +358,12 @@ a representative call sequence and asserts every pool event carries the leading
 |---|---|
 | `batch_op` | `(op_index: u32, kind: Symbol, result: BatchOpResult)` — emitted once per operation, in order, before the batch-level event. |
 | `batch_executed` | `(ops_len: u32)` |
+| `initialized` | `(admin: Address, factory: Address)` |
+| `pause` | `(admin: Address)` |
+| `unpause` | `(admin: Address)` |
+| `admin_nominated` | `(current_admin: Address, new_admin: Address)` |
+| `admin_changed` | `(new_admin: Address)` |
+| `upgraded` | `(new_wasm_hash: BytesN<32>)` |
 
 ### DEX aggregator — `contracts/dex_aggregator/src/lib.rs`
 
@@ -671,6 +683,12 @@ count. Events marked unversioned carry their payload without the
 |---|---|---|---|
 | `batch_op` | 2 | `index`, `op_kind`, `result` | v1 |
 | `batch_executed` | 2 | `op_count` | v1 |
+| `initialized` | 1 | `admin`, `factory` | v1 |
+| `pause` | 1 | `admin` | v1 |
+| `unpause` | 1 | `admin` | v1 |
+| `admin_nominated` | 1 | `current_admin`, `new_admin` | v1 |
+| `admin_changed` | 1 | `new_admin` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 
 ### `cl_position_nft`
 

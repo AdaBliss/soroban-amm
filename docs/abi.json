@@ -5883,6 +5883,102 @@
     ],
     "batch_router": [
       {
+        "function_v0": {
+          "doc": "Halt `execute_batch`, and make `simulate_batch` / `validate_batch`\\nreport [`BatchRouterError::Paused`] for the same batches. Admin-only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type_": "address"
+            }
+          ],
+          "name": "pause",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Resume after `pause`. Admin-only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type_": "address"
+            }
+          ],
+          "name": "unpause",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Replace the contract WASM. Admin-only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type_": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
         "udt_struct_v0": {
           "doc": "",
           "fields": [
@@ -5928,6 +6024,35 @@
           ],
           "lib": "",
           "name": "SwapOp"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "The current admin.",
+          "inputs": [],
+          "name": "get_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Whether the router is currently halted.",
+          "inputs": [],
+          "name": "is_paused",
+          "outputs": [
+            "bool"
+          ]
         }
       },
       {
@@ -5986,6 +6111,24 @@
                 "doc": "",
                 "name": "Factory"
               }
+            },
+            {
+              "void_v0": {
+                "doc": "",
+                "name": "Admin"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "Nominee of a two-step admin rotation; absent when none is pending.",
+                "name": "PendingAdmin"
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "`true` while the router is halted by the admin; absent means unpaused.",
+                "name": "Paused"
+              }
             }
           ],
           "doc": "",
@@ -5995,8 +6138,13 @@
       },
       {
         "function_v0": {
-          "doc": "Initialize the router with the factory that tracks all deployed pools.",
+          "doc": "Initialize the router with its admin and the factory that tracks all\\ndeployed pools.\\n\\n# Deployment window\\n\\n`initialize` is one-shot but deliberately does not call\\n`admin.require_auth()`: an attacker could authorize their own address,\\nso it would not stop a front-run, and it would break deployments whose\\nadmin is a contract that cannot sign for itself. Deployers must read\\nback `get_admin` and `get_factory` right after deployment (the deploy\\nscript does) and redeploy if either differs from the intended value.",
           "inputs": [
+            {
+              "doc": "",
+              "name": "admin",
+              "type_": "address"
+            },
             {
               "doc": "",
               "name": "factory",
@@ -6041,6 +6189,54 @@
           "doc": "Pool type for distinguishing between AMM and concentrated liquidity pools.",
           "lib": "",
           "name": "PoolType"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "The factory every op's pool is resolved against.",
+          "inputs": [],
+          "name": "get_factory",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Complete a rotation started by `propose_admin`. The nominee must sign.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_admin",
+              "type_": "address"
+            }
+          ],
+          "name": "accept_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       {
@@ -6101,6 +6297,40 @@
           "name": "max_batch_ops",
           "outputs": [
             "u32"
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Nominate `new_admin`; the nominee must call `accept_admin`. Admin-only.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "current_admin",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_admin",
+              "type_": "address"
+            }
+          ],
+          "name": "propose_admin",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "BatchRouterError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
           ]
         }
       },
@@ -6254,6 +6484,20 @@
         }
       },
       {
+        "function_v0": {
+          "doc": "The nominee awaiting `accept_admin`, if any.",
+          "inputs": [],
+          "name": "get_pending_admin",
+          "outputs": [
+            {
+              "option": {
+                "value_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
         "udt_error_enum_v0": {
           "cases": [
             {
@@ -6310,6 +6554,26 @@
               "doc": "The first deposit would mint no more than `MINIMUM_LIQUIDITY` shares, all\\nof which are permanently locked, leaving the provider with none. Mirrors\\n`amm::add_liquidity`'s `AmmError::InsufficientShares`\\n(`contracts/amm/src/lib.rs:1633`).",
               "name": "InsufficientShares",
               "value": 11
+            },
+            {
+              "doc": "A function that needs the stored admin or factory ran before\\n`initialize`.",
+              "name": "NotInitialized",
+              "value": 12
+            },
+            {
+              "doc": "The address supplied as admin (or as the nominee in `accept_admin`) is\\nnot the one stored.",
+              "name": "Unauthorized",
+              "value": 13
+            },
+            {
+              "doc": "`accept_admin` was called without a pending nomination.",
+              "name": "NoPendingAdmin",
+              "value": 14
+            },
+            {
+              "doc": "The router is paused by its admin. Returned by `execute_batch`,\\n`simulate_batch` and `validate_batch` alike so the pre-flight never\\ndisagrees with execution.",
+              "name": "Paused",
+              "value": 15
             }
           ],
           "doc": "Errors returned by [`BatchRouter`] entry points.\\n\\nSee `docs/error-codes.md` for the full description of each variant.",

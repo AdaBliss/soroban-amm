@@ -18,6 +18,7 @@ jobs:
                   bash scripts/check_repo_hygiene.sh tracked
                   bash scripts/check_repo_hygiene.test.sh
                   bash scripts/check_staking_deploy.test.sh
+                  bash scripts/check_batch_router_deploy.test.sh
             # Channel, components and targets all come from
             # rust-toolchain.toml, so CI cannot drift onto a newer stable than
             # contributors are running; `rustup show` installs what it asks

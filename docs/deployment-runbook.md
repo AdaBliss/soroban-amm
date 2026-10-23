@@ -1100,7 +1100,7 @@ are also untouched.
 | twal_consumer | `initialize(keeper)` | `contracts/twal_consumer/src/lib.rs` |
 | oracle_aggregator | `initialize(admin, max_staleness_seconds)` | `contracts/oracle_aggregator/src/lib.rs` |
 | router | `initialize(factory)` | `contracts/router/src/lib.rs` |
-| batch_router | `initialize(factory)` | `contracts/batch_router/src/lib.rs` |
+| batch_router | `initialize(admin, factory)` | `contracts/batch_router/src/lib.rs` |
 | dex_aggregator | `initialize(admin, factory)` | `contracts/dex_aggregator/src/lib.rs` |
 | batch_auction | `initialize(admin, batch_window_secs)` | `contracts/batch_auction/src/lib.rs` |
 | cl_position_nft | `initialize(admin, cl_pool)` | `contracts/cl_position_nft/src/lib.rs` |

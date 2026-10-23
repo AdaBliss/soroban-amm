@@ -512,6 +512,68 @@
               "op_count"
             ]
           }
+        ],
+        "initialized": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin",
+              "factory"
+            ]
+          }
+        ],
+        "pause": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin"
+            ]
+          }
+        ],
+        "unpause": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "admin"
+            ]
+          }
+        ],
+        "admin_nominated": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "current_admin",
+              "new_admin"
+            ]
+          }
+        ],
+        "admin_changed": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_admin"
+            ]
+          }
+        ],
+        "upgraded": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_wasm_hash"
+            ]
+          }
         ]
       }
     },
