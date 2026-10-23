@@ -3005,3 +3005,6 @@ mod tests {
 
 #[cfg(test)]
 mod tests_issue_1112;
+
+#[cfg(test)]
+mod auth_tests;
