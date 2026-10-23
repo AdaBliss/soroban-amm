@@ -26,10 +26,12 @@ The index price is the time-weighted average price over a configurable window. I
 - Insurance fund triggers
 
 ```rust
+// `TwapError` is the consumer's error enum (docs/error-codes.md); import it from the
+// `twap_consumer` crate or redeclare it with the same discriminants.
 #[contractclient(name = "TwapConsumerClient")]
 pub trait TwapConsumer {
-    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> i128;
-    fn get_twap_both(env: Env, pool: Address, window_seconds: u64) -> (i128, i128);
+    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError>;
+    fn get_twap_both(env: Env, pool: Address, window_seconds: u64) -> Result<(i128, i128), TwapError>;
 }
 
 fn get_index_price(env: &Env, twap_consumer: &Address, pool: &Address) -> i128 {
@@ -65,6 +67,7 @@ fn get_mark_price(env: &Env, pool: &Address, twap_consumer: &Address) -> i128 {
 The TWAP oracle requires periodic snapshots. For a 1-hour index price, save a snapshot every hour:
 
 ```sh
+# contract: twap_consumer
 stellar contract invoke \
   --id <TWAP_CONSUMER> \
   --source <KEEPER_KEY> \
@@ -169,12 +172,12 @@ pub struct PerpPosition {
 
 #[contractclient(name = "AmmPoolClient")]
 pub trait AmmPool {
-    fn price_ratio(env: Env) -> (i128, i128);
+    fn price_ratio(env: Env) -> Result<(i128, i128), AmmError>;
 }
 
 #[contractclient(name = "TwapConsumerClient")]
 pub trait TwapConsumer {
-    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> i128;
+    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError>;
 }
 
 #[contractclient(name = "SepTokenClient")]

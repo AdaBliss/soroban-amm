@@ -10,7 +10,7 @@ A flash loan is a loan that is borrowed and repaid within a single atomic transa
 
 1. Caller invokes `pool.flash_loan(receiver, amount_a, amount_b, data)`
 2. Pool transfers tokens to the receiver contract
-3. Pool calls `receiver.on_flash_loan(amount_a, amount_b, fee_a, fee_b, data)`
+3. Pool calls `receiver.on_flash_loan(token_a_amount, token_b_amount, fee_a, fee_b, data)`
 4. Receiver must transfer back `amount_a + fee_a` and `amount_b + fee_b` to the pool
 5. Pool verifies repayment
 6. Transaction commits (or reverts if repayment incomplete)
@@ -18,6 +18,21 @@ A flash loan is a loan that is borrowed and repaid within a single atomic transa
 Flash loans are powerful for arbitrage, liquidations, and collateral swaps — but require careful implementation. Getting the repayment or reentrancy guard wrong costs all borrowed funds.
 
 ## Callback contract guarantees
+
+The callback signature matches the AMM pool interface:
+
+```rust
+pub trait FlashLoanReceiver {
+    fn on_flash_loan(
+        env: Env,
+        token_a_amount: i128,
+        token_b_amount: i128,
+        fee_a: i128,
+        fee_b: i128,
+        data: Bytes,
+    ) -> bool;
+}
+```
 
 ### What the pool guarantees
 
@@ -270,8 +285,8 @@ around this, pass all required data in the `data` parameter:
 ```rust
 fn on_flash_loan(
     env: Env,
-    amount_a: i128,
-    amount_b: i128,
+    token_a_amount: i128,
+    token_b_amount: i128,
     fee_a: i128,
     fee_b: i128,
     data: Bytes,
@@ -280,7 +295,7 @@ fn on_flash_loan(
     let (token_a, token_b) = decode_tokens(&data);
 
     // Now you can repay without calling the pool
-    TokenClient::new(&env, &token_a).transfer(&receiver, &pool, &(amount_a + fee_a));
+    TokenClient::new(&env, &token_a).transfer(&receiver, &pool, &(token_a_amount + fee_a));
 
     true
 }

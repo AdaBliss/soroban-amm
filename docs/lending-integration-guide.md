@@ -45,6 +45,7 @@ A snapshot must be saved at `now - window_seconds` before calling `get_twap_pric
 
 ```sh
 # Save a snapshot every 60 seconds
+# contract: twap_consumer
 stellar contract invoke \
   --id <TWAP_CONSUMER_CONTRACT_ID> \
   --source <KEEPER_KEY> \
@@ -72,7 +73,7 @@ use soroban_sdk::{contract, contractimpl, Address, Env};
 
 #[contractclient(name = "TwapConsumerClient")]
 pub trait TwapConsumerInterface {
-    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> i128;
+    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError>;
     fn assert_lending_price_safe(
         env: Env,
         pool: Address,
@@ -80,7 +81,7 @@ pub trait TwapConsumerInterface {
         spot_price: i128,
         max_deviation_bps: i128,
         collateral_amount: i128,
-    ) -> i128;
+    ) -> Result<i128, TwapError>;
 }
 
 fn get_collateral_value(
@@ -242,15 +243,23 @@ pub struct Position {
 
 #[contractclient(name = "AmmPoolClient")]
 pub trait AmmPool {
-    fn get_info(env: Env) -> PoolInfo;
-    fn shares_of(env: Env, provider: Address) -> i128;
+    fn get_info(env: Env) -> Result<PoolInfo, AmmError>;
+    fn shares_of(env: Env, provider: Address) -> Result<i128, AmmError>;
 }
 
 #[contracttype]
 pub struct PoolInfo {
+    pub token_a: Address,
+    pub token_b: Address,
     pub reserve_a: i128,
     pub reserve_b: i128,
     pub total_shares: i128,
+    pub fee_bps: i128,
+    pub flash_loan_fee_bps: i128,
+    pub admin: Address,
+    pub fee_recipient: Address,
+    pub protocol_fee_bps: i128,
+    pub lp_rebate_bps: i128,
 }
 
 #[contractclient(name = "TwapConsumerClient")]
@@ -262,8 +271,8 @@ pub trait TwapConsumer {
         spot_price: i128,
         max_deviation_bps: i128,
         collateral_amount: i128,
-    ) -> i128;
-    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> i128;
+    ) -> Result<i128, TwapError>;
+    fn get_twap_price(env: Env, pool: Address, window_seconds: u64) -> Result<i128, TwapError>;
 }
 
 #[contractclient(name = "SepTokenClient")]
