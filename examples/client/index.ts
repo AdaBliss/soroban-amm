@@ -41,7 +41,7 @@ async function main(): Promise<void> {
 
   // 1. Read pool info to confirm the pair and current reserves.
   const info = await pool.getInfo();
-  console.log("Pool", info.name ?? poolId, "tokens", info.tokenA, info.tokenB);
+  console.log("Pool", poolId, "tokens", info.tokenA, info.tokenB);
 
   // 2. Quote before submitting; bigint preserves token precision and price impact.
   const quote = await pool.simulateSwap(tokenInId, amountIn);

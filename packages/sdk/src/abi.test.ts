@@ -24,6 +24,8 @@ import { ConcentratedLiquidityClient } from "./cl.js";
 import { FactoryClient } from "./factory.js";
 import { RouterClient } from "./router.js";
 import { TokenClient } from "./token.js";
+import { GovernanceClient } from "./governance.js";
+import { ContractDecodeError } from "./internal/decode.js";
 
 
 /** The `invokeContract` payload of the first operation of a built transaction. */
@@ -46,8 +48,16 @@ interface AbiEntrypoint {
   inputs: Array<{ name: string; type: string }>;
 }
 
+interface AbiStruct {
+  fields: Array<{ name: string; type: string }>;
+}
+
 interface AbiFixture {
-  contracts: Record<string, { source: string; entrypoints: AbiEntrypoint[] }>;
+  contracts: Record<string, {
+    source: string;
+    entrypoints: AbiEntrypoint[];
+    structs: Record<string, AbiStruct["fields"]>;
+  }>;
 }
 
 const FIXTURE_URL = new URL("./__fixtures__/contract-abi.json", import.meta.url);
@@ -58,6 +68,60 @@ function entrypoint(contract: string, name: string): AbiEntrypoint {
   if (!found) throw new Error(`entrypoint ${contract}::${name} is missing from the fixture`);
   return found;
 }
+
+function decoderMethodBody(source: string, methodName: string): string {
+  const signature = new RegExp(`\\b${methodName}\\s*\\(`).exec(source);
+  if (!signature) throw new Error(`decoder method ${methodName} not found`);
+  const openParen = source.indexOf("(", signature.index);
+  let parens = 0;
+  let closeParen = -1;
+  for (let index = openParen; index < source.length; index += 1) {
+    if (source[index] === "(") parens += 1;
+    else if (source[index] === ")" && --parens === 0) {
+      closeParen = index;
+      break;
+    }
+  }
+  const openBrace = source.indexOf("{", closeParen);
+  let braces = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    if (source[index] === "{") braces += 1;
+    else if (source[index] === "}" && --braces === 0) return source.slice(openBrace + 1, index);
+  }
+  throw new Error(`decoder method ${methodName} is unterminated`);
+}
+
+const STRUCT_DECODERS = [
+  { file: "./AmmPool.ts", method: "decodeInfo", contract: "amm", struct: "PoolInfo" },
+  { file: "./AmmPool.ts", method: "simulateSwap", contract: "amm", struct: "SwapSimulation" },
+  { file: "./cl.ts", method: "getPoolState", contract: "concentrated_liquidity", struct: "PoolState" },
+  { file: "./cl.ts", method: "getPosition", contract: "concentrated_liquidity", struct: "Position" },
+  { file: "./cl.ts", method: "estimatePriceImpact", contract: "concentrated_liquidity", struct: "PriceImpactEstimate" },
+  { file: "./governance.ts", method: "proposalFromNative", contract: "governance", struct: "Proposal" },
+  { file: "./governance.ts", method: "paramsFromNative", contract: "governance", struct: "GovernanceParams" },
+];
+
+describe("struct decoders match the generated contract ABI fixture", () => {
+  it.each(STRUCT_DECODERS)("$struct fields exist in $contract", ({ file, method, contract, struct }) => {
+    const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
+    const body = decoderMethodBody(source, method);
+    const directFields = [...body.matchAll(/\bnative\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1]);
+    const helperFields = [...body.matchAll(/\b(?:requireBigInt|requireText|requireBoolean|requireValue)\(native,\s*"([A-Za-z_][A-Za-z0-9_]*)"/g)].map((match) => match[1]);
+    const decodedFields = [...directFields, ...helperFields];
+    const contractFields = new Set(FIXTURE.contracts[contract]?.structs[struct]?.map((field) => field.name));
+    expect(contractFields.size, `fixture struct ${contract}::${struct} is missing`).toBeGreaterThan(0);
+    for (const field of decodedFields) {
+      expect(contractFields.has(field), `${contract}::${struct}.${field} is absent from the contract fixture`).toBe(true);
+    }
+  });
+
+  it("does not decode named struct fields with toBigInt", () => {
+    for (const file of ["./AmmPool.ts", "./cl.ts", "./governance.ts"]) {
+      const source = readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8");
+      expect(source).not.toMatch(/toBigInt\(native\.[A-Za-z_][A-Za-z0-9_]*\)/);
+    }
+  });
+});
 
 /** Expected ScVal type discriminants for a contract parameter type. */
 const SCV_FOR_TYPE: Record<string, string[]> = {
@@ -139,7 +203,7 @@ function mockServer<T>(client: T, responder: (call: Call) => xdr.ScVal | Error):
 }
 
 /** An `get_info` return value as the contract emits it. */
-function poolInfoScVal(overrides: Record<string, xdr.ScVal> = {}): xdr.ScVal {
+function poolInfoScVal(overrides: Record<string, xdr.ScVal> = {}, omit?: string): xdr.ScVal {
   const fields: Record<string, xdr.ScVal> = {
     token_a: addrv(TOKEN_A),
     token_b: addrv(TOKEN_B),
@@ -154,6 +218,7 @@ function poolInfoScVal(overrides: Record<string, xdr.ScVal> = {}): xdr.ScVal {
     lp_rebate_bps: i128v(0n),
     ...overrides,
   };
+  if (omit) delete fields[omit];
   return xdr.ScVal.scvMap(
     Object.entries(fields).map(
       ([key, val]) => new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(key), val })
@@ -447,6 +512,84 @@ describe("AmmPool.getFlashLoanFeeBps", () => {
     expect(await client.getFlashLoanFeeBps()).toBe(9n);
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("get_info");
+  });
+});
+
+describe("AmmPool.getInfo", () => {
+  it("reports a paused pool and decodes the LP rebate", async () => {
+    const client = new AmmPool(config);
+    const calls = mockServer(client, (call) =>
+      call.method === "is_paused"
+        ? nativeToScVal(true)
+        : poolInfoScVal({ lp_rebate_bps: i128v(275n) })
+    );
+
+    const info = await client.getInfo();
+
+    expect(info.isPaused).toBe(true);
+    expect(info.lpRebateBps).toBe(275n);
+    expect(calls.map((call) => call.method).sort()).toEqual(["get_info", "is_paused"]);
+  });
+
+  it("offers a one-call getInfoLight read", async () => {
+    const client = new AmmPool(config);
+    const calls = mockServer(client, () => poolInfoScVal());
+
+    const info = await client.getInfoLight();
+
+    expect(info.lpRebateBps).toBe(0n);
+    expect("isPaused" in info).toBe(false);
+    expect(calls.map((call) => call.method)).toEqual(["get_info"]);
+  });
+
+  it("throws a contextual decode error when a required PoolInfo field is absent", async () => {
+    const client = new AmmPool(config);
+    mockServer(client, (call) =>
+      call.method === "is_paused"
+        ? nativeToScVal(false)
+        : poolInfoScVal({}, "reserve_a")
+    );
+
+    await expect(client.getInfo()).rejects.toBeInstanceOf(ContractDecodeError);
+    await expect(client.getInfo()).rejects.toThrow(/PoolInfo\.reserve_a/);
+  });
+});
+
+describe("struct decoders reject missing required fields", () => {
+  it("rejects a missing SwapSimulation field", async () => {
+    const client = new AmmPool(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.simulateSwap(TOKEN_A, 1n)).rejects.toThrow(/SwapSimulation.amount_out/);
+  });
+
+  it("rejects a missing CL PoolState field", async () => {
+    const client = new ConcentratedLiquidityClient(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.getPoolState()).rejects.toThrow(/PoolState.sqrt_price/);
+  });
+
+  it("rejects a missing CL Position field", async () => {
+    const client = new ConcentratedLiquidityClient(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.getPosition(ALICE, -10, 10)).rejects.toThrow(/Position.lower_tick/);
+  });
+
+  it("rejects a missing CL PriceImpactEstimate field", async () => {
+    const client = new ConcentratedLiquidityClient(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.estimatePriceImpact(true, 1n, 2n)).rejects.toThrow(/PriceImpactEstimate.amount_in/);
+  });
+
+  it("rejects a missing Governance Proposal field", async () => {
+    const client = new GovernanceClient(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.getProposal(1)).rejects.toThrow(/Proposal.id/);
+  });
+
+  it("rejects a missing GovernanceParams field", async () => {
+    const client = new GovernanceClient(config);
+    mockServer(client, () => xdr.ScVal.scvMap([]));
+    await expect(client.getParams()).rejects.toThrow(/GovernanceParams.voting_period_secs/);
   });
 });
 

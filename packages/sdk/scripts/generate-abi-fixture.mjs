@@ -43,6 +43,7 @@ const CONTRACTS = {
     source: "contracts/concentrated_liquidity/src/lib.rs",
     impl: "#[contractimpl]\nimpl ConcentratedLiquidity",
   },
+  governance: { source: "contracts/governance/src/lib.rs", impl: "#[contractimpl]\nimpl Governance" },
   staking: { source: "contracts/staking/src/lib.rs", impl: "#[contractimpl]\nimpl Staking" },
   incentive_campaigns: { source: "contracts/incentive_campaigns/src/lib.rs", impl: "#[contractimpl]\nimpl IncentiveCampaigns" },
   pol_vesting: { source: "contracts/pol_vesting/src/lib.rs", impl: "#[contractimpl]\nimpl PolVestingContract" },
@@ -124,13 +125,56 @@ function extractEntrypoints(block) {
   return entrypoints;
 }
 
+/** Extract fields from every `#[contracttype]` struct in a contract source. */
+function extractContractStructs(source) {
+  const structs = {};
+  const annotation = /#\[contracttype\]/g;
+  while (annotation.exec(source) !== null) {
+    const nextAnnotation = source.indexOf("#[contracttype]", annotation.lastIndex);
+    const structMatch = /\bpub struct\s+([A-Za-z0-9_]+)\s*\{/.exec(
+      source.slice(annotation.lastIndex, nextAnnotation === -1 ? undefined : nextAnnotation)
+    );
+    if (!structMatch) continue;
+
+    const name = structMatch[1];
+    const open = annotation.lastIndex + structMatch.index + structMatch[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let index = open; index < source.length; index += 1) {
+      if (source[index] === "{") depth += 1;
+      else if (source[index] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          close = index;
+          break;
+        }
+      }
+    }
+    if (close === -1) throw new Error(`unterminated contracttype struct ${name}`);
+
+    const fields = splitTopLevel(source.slice(open + 1, close).replace(/\/\/.*$/gm, ""))
+      .map((part) => {
+        const field = /\bpub\s+([A-Za-z0-9_]+)\s*:\s*([\s\S]*)/.exec(part);
+        if (!field) return null;
+        return {
+          name: field[1],
+          type: field[2].replace(/\/\/.*$/gm, "").trim().replace(/\s+/g, " "),
+        };
+      })
+      .filter(Boolean);
+    structs[name] = fields;
+    annotation.lastIndex = close + 1;
+  }
+  return Object.fromEntries(Object.entries(structs).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 function buildFixture() {
   const contracts = {};
   for (const [name, cfg] of Object.entries(CONTRACTS)) {
     const raw = readFileSync(resolve(REPO_ROOT, cfg.source), "utf8").replace(/\r\n/g, "\n");
-    const entrypoints = extractEntrypoints(contractBlock(raw, cfg.impl));
+    const entrypoints = cfg.impl ? extractEntrypoints(contractBlock(raw, cfg.impl)) : [];
     entrypoints.sort((a, b) => a.name.localeCompare(b.name));
-    contracts[name] = { source: cfg.source, entrypoints };
+    contracts[name] = { source: cfg.source, entrypoints, structs: extractContractStructs(raw) };
   }
   return {
     $comment:

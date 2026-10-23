@@ -19,6 +19,7 @@ export { AmmPool, AmmContractError, decodeError } from "./AmmPool.js";
 export { RouterClient } from "./router.js";
 export type { SwapExactInInput, SwapExactOutInput } from "./router.js";
 export { SIMULATION_SOURCE_ACCOUNT } from "./internal/simulate.js";
+export { ContractDecodeError } from "./internal/decode.js";
 export {
   invoke,
   keypairSigner,

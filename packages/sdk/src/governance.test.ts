@@ -254,19 +254,22 @@ describe("GovernanceClient entrypoint conformance", () => {
 
   it("reads every field of the contract's Proposal struct", () => {
     for (const field of contractStructFields("Proposal")) {
-      expect(CLIENT_TS).toContain(`native.${field}`);
+      // The client reads each field through the strict decoders, by contract key.
+      expect(CLIENT_TS).toMatch(new RegExp(`native\\.${field}\\b|"${field}"`));
     }
   });
 
   it("reads every field of the contract's GovernanceParams struct", () => {
     for (const field of contractStructFields("GovernanceParams")) {
-      expect(CLIENT_TS).toContain(`native.${field}`);
+      // The client reads each field through the strict decoders, by contract key.
+      expect(CLIENT_TS).toMatch(new RegExp(`native\\.${field}\\b|"${field}"`));
     }
   });
 
   it("reads every field of the contract's VetoAudit struct", () => {
     for (const field of contractStructFields("VetoAudit")) {
-      expect(CLIENT_TS).toContain(`native.${field}`);
+      // The client reads each field through the strict decoders, by contract key.
+      expect(CLIENT_TS).toMatch(new RegExp(`native\\.${field}\\b|"${field}"`));
     }
   });
 });
@@ -637,7 +640,16 @@ describe("undelegateParams", () => {
 
 describe("read wrappers target real entrypoints", () => {
   it("getParams sends get_params with no arguments", async () => {
-    const { client, calls } = mockClient(() => mapv([]));
+    const { client, calls } = mockClient(() =>
+      mapv([
+        ["voting_period_secs", u64v(86_400n)],
+        ["timelock_secs", u64v(3_600n)],
+        ["quorum_bps", i128v(2_000n)],
+        ["min_proposer_stake_bps", i128v(100n)],
+        ["veto_multisig", xdr.ScVal.scvVoid()],
+        ["quorum_decay_rate_bps_per_day", i128v(0n)],
+      ])
+    );
     await client.getParams();
     expect(calls).toHaveLength(1);
     expect(calls[0].method).toBe("get_params");

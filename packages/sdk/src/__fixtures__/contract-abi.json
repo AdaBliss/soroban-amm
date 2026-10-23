@@ -729,7 +729,151 @@
           "name": "withdraw_protocol_fees",
           "inputs": []
         }
-      ]
+      ],
+      "structs": {
+        "AggregatedPrice": [
+          {
+            "name": "price",
+            "type": "i128"
+          },
+          {
+            "name": "confidence",
+            "type": "u32"
+          }
+        ],
+        "CircuitBreakerConfig": [
+          {
+            "name": "threshold_bps",
+            "type": "i128"
+          },
+          {
+            "name": "cooldown_secs",
+            "type": "u64"
+          },
+          {
+            "name": "triggered_at",
+            "type": "u64"
+          },
+          {
+            "name": "tripped",
+            "type": "bool"
+          }
+        ],
+        "EmergencyAnnouncement": [
+          {
+            "name": "to",
+            "type": "Address"
+          },
+          {
+            "name": "announced_at",
+            "type": "u64"
+          }
+        ],
+        "MultisigConfig": [
+          {
+            "name": "signers",
+            "type": "soroban_sdk::Vec<Address>"
+          },
+          {
+            "name": "quorum",
+            "type": "u32"
+          }
+        ],
+        "MultisigProposal": [
+          {
+            "name": "action",
+            "type": "MultisigAction"
+          },
+          {
+            "name": "approvals",
+            "type": "soroban_sdk::Vec<Address>"
+          },
+          {
+            "name": "expires_at",
+            "type": "u64"
+          },
+          {
+            "name": "quorum_reached_at",
+            "type": "u64"
+          },
+          {
+            "name": "epoch",
+            "type": "u32"
+          },
+          {
+            "name": "executed",
+            "type": "bool"
+          }
+        ],
+        "PoolInfo": [
+          {
+            "name": "token_a",
+            "type": "Address"
+          },
+          {
+            "name": "token_b",
+            "type": "Address"
+          },
+          {
+            "name": "reserve_a",
+            "type": "i128"
+          },
+          {
+            "name": "reserve_b",
+            "type": "i128"
+          },
+          {
+            "name": "total_shares",
+            "type": "i128"
+          },
+          {
+            "name": "fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "flash_loan_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "admin",
+            "type": "Address"
+          },
+          {
+            "name": "fee_recipient",
+            "type": "Address"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "lp_rebate_bps",
+            "type": "i128"
+          }
+        ],
+        "SwapSimulation": [
+          {
+            "name": "amount_out",
+            "type": "i128"
+          },
+          {
+            "name": "fee_amount",
+            "type": "i128"
+          },
+          {
+            "name": "price_impact_bps",
+            "type": "i128"
+          },
+          {
+            "name": "effective_price",
+            "type": "i128"
+          },
+          {
+            "name": "spot_price",
+            "type": "i128"
+          }
+        ]
+      }
     },
     "token": {
       "source": "contracts/token/src/lib.rs",
@@ -1013,7 +1157,39 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "AllowanceValue": [
+          {
+            "name": "amount",
+            "type": "i128"
+          },
+          {
+            "name": "live_until_ledger",
+            "type": "u32"
+          }
+        ],
+        "Checkpoint": [
+          {
+            "name": "ledger",
+            "type": "u32"
+          },
+          {
+            "name": "balance",
+            "type": "i128"
+          }
+        ],
+        "CheckpointTracker": [
+          {
+            "name": "start_page",
+            "type": "u32"
+          },
+          {
+            "name": "total_count",
+            "type": "u32"
+          }
+        ]
+      }
     },
     "factory": {
       "source": "contracts/factory/src/lib.rs",
@@ -1544,7 +1720,8 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {}
     },
     "router": {
       "source": "contracts/router/src/lib.rs",
@@ -1751,7 +1928,8 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {}
     },
     "concentrated_liquidity": {
       "source": "contracts/concentrated_liquidity/src/lib.rs",
@@ -2470,7 +2648,764 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "AggregatedPrice": [
+          {
+            "name": "price",
+            "type": "i128"
+          },
+          {
+            "name": "confidence",
+            "type": "u32"
+          }
+        ],
+        "OracleHeader": [
+          {
+            "name": "index",
+            "type": "u32"
+          },
+          {
+            "name": "cardinality",
+            "type": "u32"
+          },
+          {
+            "name": "count",
+            "type": "u32"
+          }
+        ],
+        "OracleObservation": [
+          {
+            "name": "timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "cumulative",
+            "type": "i64"
+          }
+        ],
+        "PoolState": [
+          {
+            "name": "sqrt_price",
+            "type": "u128"
+          },
+          {
+            "name": "current_tick",
+            "type": "i32"
+          },
+          {
+            "name": "active_liquidity",
+            "type": "i128"
+          },
+          {
+            "name": "tick_spacing",
+            "type": "i32"
+          }
+        ],
+        "Position": [
+          {
+            "name": "lower_tick",
+            "type": "i32"
+          },
+          {
+            "name": "upper_tick",
+            "type": "i32"
+          },
+          {
+            "name": "liquidity",
+            "type": "i128"
+          },
+          {
+            "name": "fee_growth_inside_a",
+            "type": "i128"
+          },
+          {
+            "name": "fee_growth_inside_b",
+            "type": "i128"
+          },
+          {
+            "name": "tokens_owed",
+            "type": "(i128, i128)"
+          }
+        ],
+        "PriceImpactEstimate": [
+          {
+            "name": "amount_in",
+            "type": "i128"
+          },
+          {
+            "name": "amount_in_after_fee",
+            "type": "i128"
+          },
+          {
+            "name": "amount_out",
+            "type": "i128"
+          },
+          {
+            "name": "fee_amount",
+            "type": "i128"
+          },
+          {
+            "name": "spot_price_before",
+            "type": "i128"
+          },
+          {
+            "name": "effective_price",
+            "type": "i128"
+          },
+          {
+            "name": "price_impact_bps",
+            "type": "i128"
+          },
+          {
+            "name": "sqrt_price_before",
+            "type": "u128"
+          },
+          {
+            "name": "sqrt_price_after",
+            "type": "u128"
+          },
+          {
+            "name": "tick_before",
+            "type": "i32"
+          },
+          {
+            "name": "tick_after",
+            "type": "i32"
+          },
+          {
+            "name": "active_liquidity_before",
+            "type": "i128"
+          },
+          {
+            "name": "active_liquidity_after",
+            "type": "i128"
+          }
+        ],
+        "SingleTokenDepositResult": [
+          {
+            "name": "amount_used",
+            "type": "i128"
+          },
+          {
+            "name": "dust",
+            "type": "i128"
+          },
+          {
+            "name": "liquidity",
+            "type": "i128"
+          }
+        ],
+        "TickInfo": [
+          {
+            "name": "liquidity_gross",
+            "type": "i128"
+          },
+          {
+            "name": "liquidity_net",
+            "type": "i128"
+          },
+          {
+            "name": "fee_growth_outside_a",
+            "type": "i128"
+          },
+          {
+            "name": "fee_growth_outside_b",
+            "type": "i128"
+          },
+          {
+            "name": "initialized",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    "governance": {
+      "source": "contracts/governance/src/lib.rs",
+      "entrypoints": [
+        {
+          "name": "accept_admin",
+          "inputs": [
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "cancel_proposal",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "name": "proposer",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "claim_lp_locker",
+          "inputs": []
+        },
+        {
+          "name": "delegate",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "Address"
+            },
+            {
+              "name": "to",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "execute",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_admin",
+          "inputs": []
+        },
+        {
+          "name": "get_delegate",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_effective_quorum",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_params",
+          "inputs": []
+        },
+        {
+          "name": "get_proposal",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_proposal_count",
+          "inputs": []
+        },
+        {
+          "name": "get_proposal_params",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_proposals_paginated",
+          "inputs": [
+            {
+              "name": "offset",
+              "type": "u32"
+            },
+            {
+              "name": "limit",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_snapshot_balance",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "name": "holder",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_veto_audit",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "get_vote_info",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "name": "voter",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "get_voting_power",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "name": "voter",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "initialize",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "amm_pool",
+              "type": "Address"
+            },
+            {
+              "name": "lp_token",
+              "type": "Address"
+            },
+            {
+              "name": "voting_period_secs",
+              "type": "u64"
+            },
+            {
+              "name": "timelock_secs",
+              "type": "u64"
+            },
+            {
+              "name": "quorum_bps",
+              "type": "i128"
+            },
+            {
+              "name": "min_proposer_stake_bps",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "proposal_status",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "propose",
+          "inputs": [
+            {
+              "name": "proposer",
+              "type": "Address"
+            },
+            {
+              "name": "kind",
+              "type": "ProposalKind"
+            }
+          ]
+        },
+        {
+          "name": "propose_admin",
+          "inputs": [
+            {
+              "name": "current_admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_admin",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "set_min_proposer_stake_bps",
+          "inputs": [
+            {
+              "name": "new_bps",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "set_quorum_decay_bps_per_day",
+          "inputs": [
+            {
+              "name": "new_rate",
+              "type": "i128"
+            }
+          ]
+        },
+        {
+          "name": "set_timelock_delay",
+          "inputs": [
+            {
+              "name": "new_delay",
+              "type": "u64"
+            }
+          ]
+        },
+        {
+          "name": "set_veto_multisig",
+          "inputs": [
+            {
+              "name": "multisig",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "undelegate",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "Address"
+            }
+          ]
+        },
+        {
+          "name": "unlock_vote",
+          "inputs": [
+            {
+              "name": "voter",
+              "type": "Address"
+            },
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "inputs": [
+            {
+              "name": "admin",
+              "type": "Address"
+            },
+            {
+              "name": "new_wasm_hash",
+              "type": "BytesN<32>"
+            }
+          ]
+        },
+        {
+          "name": "veto",
+          "inputs": [
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            }
+          ]
+        },
+        {
+          "name": "vote",
+          "inputs": [
+            {
+              "name": "voter",
+              "type": "Address"
+            },
+            {
+              "name": "proposal_id",
+              "type": "u32"
+            },
+            {
+              "name": "choice",
+              "type": "Vote"
+            }
+          ]
+        }
+      ],
+      "structs": {
+        "CreatePolVestingParams": [
+          {
+            "name": "pol_vesting",
+            "type": "Address"
+          },
+          {
+            "name": "beneficiary",
+            "type": "Address"
+          },
+          {
+            "name": "lp_token",
+            "type": "Address"
+          },
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "total",
+            "type": "i128"
+          },
+          {
+            "name": "start_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "cliff_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "end_ledger",
+            "type": "u32"
+          }
+        ],
+        "GovernanceParams": [
+          {
+            "name": "voting_period_secs",
+            "type": "u64"
+          },
+          {
+            "name": "timelock_secs",
+            "type": "u64"
+          },
+          {
+            "name": "quorum_bps",
+            "type": "i128"
+          },
+          {
+            "name": "min_proposer_stake_bps",
+            "type": "i128"
+          },
+          {
+            "name": "veto_multisig",
+            "type": "Option<Address>"
+          },
+          {
+            "name": "quorum_decay_rate_bps_per_day",
+            "type": "i128"
+          }
+        ],
+        "Proposal": [
+          {
+            "name": "id",
+            "type": "u32"
+          },
+          {
+            "name": "proposer",
+            "type": "Address"
+          },
+          {
+            "name": "kind",
+            "type": "ProposalKind"
+          },
+          {
+            "name": "snapshot_total_supply",
+            "type": "i128"
+          },
+          {
+            "name": "snapshot_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "vote_start",
+            "type": "u64"
+          },
+          {
+            "name": "vote_end",
+            "type": "u64"
+          },
+          {
+            "name": "execute_after",
+            "type": "u64"
+          },
+          {
+            "name": "expires_at",
+            "type": "u64"
+          },
+          {
+            "name": "votes_for",
+            "type": "i128"
+          },
+          {
+            "name": "votes_against",
+            "type": "i128"
+          },
+          {
+            "name": "votes_abstain",
+            "type": "i128"
+          },
+          {
+            "name": "executed",
+            "type": "bool"
+          },
+          {
+            "name": "cancelled",
+            "type": "bool"
+          },
+          {
+            "name": "vetoed",
+            "type": "bool"
+          },
+          {
+            "name": "vetoed_by",
+            "type": "Option<Address>"
+          },
+          {
+            "name": "vetoed_at",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "discussion_end",
+            "type": "Option<u64>"
+          }
+        ],
+        "ProposalParams": [
+          {
+            "name": "quorum_bps",
+            "type": "i128"
+          },
+          {
+            "name": "quorum_decay_rate_bps_per_day",
+            "type": "i128"
+          },
+          {
+            "name": "timelock_secs",
+            "type": "u64"
+          }
+        ],
+        "SetClPositionNftParams": [
+          {
+            "name": "cl_pool",
+            "type": "Address"
+          },
+          {
+            "name": "nft",
+            "type": "Option<Address>"
+          }
+        ],
+        "TransferClPoolAdminParams": [
+          {
+            "name": "cl_pool",
+            "type": "Address"
+          },
+          {
+            "name": "new_admin",
+            "type": "Address"
+          }
+        ],
+        "UpdateClMaxOracleDeviationParams": [
+          {
+            "name": "cl_pool",
+            "type": "Address"
+          },
+          {
+            "name": "max_deviation_bps",
+            "type": "i128"
+          }
+        ],
+        "UpdateClOracleParams": [
+          {
+            "name": "cl_pool",
+            "type": "Address"
+          },
+          {
+            "name": "oracle",
+            "type": "Option<Address>"
+          }
+        ],
+        "UpdateClProtocolFeeParams": [
+          {
+            "name": "cl_pool",
+            "type": "Address"
+          },
+          {
+            "name": "recipient",
+            "type": "Address"
+          },
+          {
+            "name": "bps",
+            "type": "i128"
+          }
+        ],
+        "UpdateFactoryGlobalFeeParams": [
+          {
+            "name": "factory",
+            "type": "Address"
+          },
+          {
+            "name": "offset",
+            "type": "u32"
+          },
+          {
+            "name": "limit",
+            "type": "u32"
+          }
+        ],
+        "UpdateFactoryTreasuryParams": [
+          {
+            "name": "factory",
+            "type": "Address"
+          },
+          {
+            "name": "treasury",
+            "type": "Address"
+          },
+          {
+            "name": "global_protocol_fee_bps",
+            "type": "i128"
+          }
+        ],
+        "UpdateProtocolFeeParams": [
+          {
+            "name": "new_bps",
+            "type": "i128"
+          },
+          {
+            "name": "new_recipient",
+            "type": "Address"
+          }
+        ],
+        "VetoAudit": [
+          {
+            "name": "proposal_id",
+            "type": "u32"
+          },
+          {
+            "name": "vetoed_by",
+            "type": "Address"
+          },
+          {
+            "name": "vetoed_at",
+            "type": "u64"
+          },
+          {
+            "name": "discussion_end",
+            "type": "u64"
+          }
+        ]
+      }
     },
     "staking": {
       "source": "contracts/staking/src/lib.rs",
@@ -2890,7 +3825,101 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "LockedPosition": [
+          {
+            "name": "amount",
+            "type": "i128"
+          },
+          {
+            "name": "lock_expiry",
+            "type": "u64"
+          },
+          {
+            "name": "boost_multiplier",
+            "type": "i128"
+          }
+        ],
+        "PoolInfo": [
+          {
+            "name": "lp_token",
+            "type": "Address"
+          },
+          {
+            "name": "reward_token",
+            "type": "Address"
+          },
+          {
+            "name": "admin",
+            "type": "Address"
+          },
+          {
+            "name": "total_effective_staked",
+            "type": "i128"
+          },
+          {
+            "name": "reward_pool_balance",
+            "type": "i128"
+          },
+          {
+            "name": "accumulated_rewards_per_share",
+            "type": "i128"
+          }
+        ],
+        "StakerInfo": [
+          {
+            "name": "staked_amount",
+            "type": "i128"
+          },
+          {
+            "name": "effective_amount",
+            "type": "i128"
+          },
+          {
+            "name": "rewards_debt",
+            "type": "i128"
+          },
+          {
+            "name": "lock_expiry",
+            "type": "u64"
+          },
+          {
+            "name": "boost_multiplier",
+            "type": "i128"
+          }
+        ],
+        "StakingConfig": [
+          {
+            "name": "lp_token",
+            "type": "Address"
+          },
+          {
+            "name": "reward_token",
+            "type": "Address"
+          },
+          {
+            "name": "admin",
+            "type": "Address"
+          },
+          {
+            "name": "min_boost",
+            "type": "i128"
+          },
+          {
+            "name": "max_boost",
+            "type": "i128"
+          },
+          {
+            "name": "min_lock_duration",
+            "type": "u64"
+          },
+          {
+            "name": "max_lock_duration",
+            "type": "u64"
+          }
+        ]
+      }
     },
     "incentive_campaigns": {
       "source": "contracts/incentive_campaigns/src/lib.rs",
@@ -3269,7 +4298,105 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "Campaign": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "lp_token",
+            "type": "Address"
+          },
+          {
+            "name": "reward_token",
+            "type": "Address"
+          },
+          {
+            "name": "start_time",
+            "type": "u64"
+          },
+          {
+            "name": "end_time",
+            "type": "u64"
+          },
+          {
+            "name": "reward_rate",
+            "type": "i128"
+          },
+          {
+            "name": "active",
+            "type": "bool"
+          },
+          {
+            "name": "total_distributed",
+            "type": "i128"
+          },
+          {
+            "name": "funding_amount",
+            "type": "i128"
+          },
+          {
+            "name": "acc_reward_per_share",
+            "type": "i128"
+          },
+          {
+            "name": "last_update_time",
+            "type": "u64"
+          }
+        ],
+        "DistributionRecord": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "campaign_id",
+            "type": "u64"
+          },
+          {
+            "name": "provider",
+            "type": "Address"
+          },
+          {
+            "name": "reward_token",
+            "type": "Address"
+          },
+          {
+            "name": "amount",
+            "type": "i128"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
+          }
+        ],
+        "ProviderSnapshot": [
+          {
+            "name": "acc_at_snapshot",
+            "type": "i128"
+          }
+        ],
+        "StakePosition": [
+          {
+            "name": "amount",
+            "type": "i128"
+          },
+          {
+            "name": "acc_at_snapshot",
+            "type": "i128"
+          },
+          {
+            "name": "pending",
+            "type": "i128"
+          }
+        ]
+      }
     },
     "pol_vesting": {
       "source": "contracts/pol_vesting/src/lib.rs",
@@ -3509,7 +4636,51 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "PolVesting": [
+          {
+            "name": "schedule_id",
+            "type": "u32"
+          },
+          {
+            "name": "lp_token",
+            "type": "Address"
+          },
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "total",
+            "type": "i128"
+          },
+          {
+            "name": "released",
+            "type": "i128"
+          },
+          {
+            "name": "start_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "cliff_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "end_ledger",
+            "type": "u32"
+          },
+          {
+            "name": "beneficiary",
+            "type": "Address"
+          },
+          {
+            "name": "revoked",
+            "type": "bool"
+          }
+        ]
+      }
     },
     "oracle_aggregator": {
       "source": "contracts/oracle_aggregator/src/lib.rs",
@@ -3844,7 +5015,97 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "AggregatedPrice": [
+          {
+            "name": "price",
+            "type": "i128"
+          },
+          {
+            "name": "confidence",
+            "type": "u32"
+          }
+        ],
+        "OracleSource": [
+          {
+            "name": "source_contract",
+            "type": "Address"
+          },
+          {
+            "name": "source_type",
+            "type": "OracleSourceType"
+          },
+          {
+            "name": "last_updated_at",
+            "type": "u64"
+          },
+          {
+            "name": "weight",
+            "type": "u32"
+          }
+        ],
+        "PairConfig": [
+          {
+            "name": "max_staleness_seconds",
+            "type": "Option<u64>"
+          },
+          {
+            "name": "max_deviation_bps",
+            "type": "Option<u32>"
+          },
+          {
+            "name": "min_valid_sources",
+            "type": "Option<u32>"
+          }
+        ],
+        "PairKey": [
+          {
+            "name": "token_a",
+            "type": "Address"
+          },
+          {
+            "name": "token_b",
+            "type": "Address"
+          }
+        ],
+        "PriceBreakdown": [
+          {
+            "name": "price",
+            "type": "i128"
+          },
+          {
+            "name": "confidence",
+            "type": "u32"
+          },
+          {
+            "name": "source_quotes",
+            "type": "Vec<SourceQuote>"
+          }
+        ],
+        "SourceQuote": [
+          {
+            "name": "source",
+            "type": "Address"
+          },
+          {
+            "name": "price",
+            "type": "i128"
+          },
+          {
+            "name": "timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "weight",
+            "type": "u32"
+          },
+          {
+            "name": "status",
+            "type": "QuoteStatus"
+          }
+        ]
+      }
     },
     "twap_consumer": {
       "source": "contracts/twap_consumer/src/lib.rs",
@@ -4164,7 +5425,153 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "AmmPoolInfo": [
+          {
+            "name": "token_a",
+            "type": "Address"
+          },
+          {
+            "name": "token_b",
+            "type": "Address"
+          },
+          {
+            "name": "reserve_a",
+            "type": "i128"
+          },
+          {
+            "name": "reserve_b",
+            "type": "i128"
+          },
+          {
+            "name": "total_shares",
+            "type": "i128"
+          },
+          {
+            "name": "fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "flash_loan_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "admin",
+            "type": "Address"
+          },
+          {
+            "name": "fee_recipient",
+            "type": "Address"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "lp_rebate_bps",
+            "type": "i128"
+          }
+        ],
+        "ClTwapResult": [
+          {
+            "name": "average_tick",
+            "type": "i64"
+          },
+          {
+            "name": "window_used",
+            "type": "u64"
+          },
+          {
+            "name": "snapshot_timestamp",
+            "type": "u64"
+          }
+        ],
+        "PriceSnapshot": [
+          {
+            "name": "cum_a",
+            "type": "i128"
+          },
+          {
+            "name": "cum_b",
+            "type": "i128"
+          },
+          {
+            "name": "pool_ts",
+            "type": "u64"
+          }
+        ],
+        "PriceValidation": [
+          {
+            "name": "spot_price",
+            "type": "i128"
+          },
+          {
+            "name": "twap_price",
+            "type": "i128"
+          },
+          {
+            "name": "deviation_bps",
+            "type": "i128"
+          },
+          {
+            "name": "max_deviation_bps",
+            "type": "i128"
+          },
+          {
+            "name": "is_deviation",
+            "type": "bool"
+          }
+        ],
+        "RetentionPolicy": [
+          {
+            "name": "max_age_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "max_snapshots_per_pool",
+            "type": "u32"
+          }
+        ],
+        "TrackedPool": [
+          {
+            "name": "address",
+            "type": "Address"
+          },
+          {
+            "name": "pool_type",
+            "type": "PoolType"
+          }
+        ],
+        "TwapEntry": [
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "pool_type",
+            "type": "PoolType"
+          },
+          {
+            "name": "twap",
+            "type": "i128"
+          }
+        ],
+        "TwapResult": [
+          {
+            "name": "twap",
+            "type": "i128"
+          },
+          {
+            "name": "window_used",
+            "type": "u64"
+          },
+          {
+            "name": "snapshot_timestamp",
+            "type": "u64"
+          }
+        ]
+      }
     },
     "twal_consumer": {
       "source": "contracts/twal_consumer/src/lib.rs",
@@ -4344,7 +5751,117 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "AmmPoolInfo": [
+          {
+            "name": "token_a",
+            "type": "Address"
+          },
+          {
+            "name": "token_b",
+            "type": "Address"
+          },
+          {
+            "name": "reserve_a",
+            "type": "i128"
+          },
+          {
+            "name": "reserve_b",
+            "type": "i128"
+          },
+          {
+            "name": "total_shares",
+            "type": "i128"
+          },
+          {
+            "name": "fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "flash_loan_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "admin",
+            "type": "Address"
+          },
+          {
+            "name": "fee_recipient",
+            "type": "Address"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "type": "i128"
+          },
+          {
+            "name": "lp_rebate_bps",
+            "type": "i128"
+          }
+        ],
+        "ClLiquidityAccumulator": [
+          {
+            "name": "cum_liquidity",
+            "type": "i128"
+          },
+          {
+            "name": "last_ts",
+            "type": "u64"
+          },
+          {
+            "name": "last_active",
+            "type": "i128"
+          }
+        ],
+        "LiquiditySnapshot": [
+          {
+            "name": "cum_liquidity",
+            "type": "i128"
+          },
+          {
+            "name": "pool_ts",
+            "type": "u64"
+          }
+        ],
+        "TrackedPool": [
+          {
+            "name": "address",
+            "type": "Address"
+          },
+          {
+            "name": "pool_type",
+            "type": "PoolType"
+          }
+        ],
+        "TwalEntry": [
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "twal",
+            "type": "i128"
+          },
+          {
+            "name": "ok",
+            "type": "bool"
+          },
+          {
+            "name": "error_code",
+            "type": "u32"
+          }
+        ],
+        "TwalResult": [
+          {
+            "name": "twal",
+            "type": "i128"
+          },
+          {
+            "name": "window_used",
+            "type": "u64"
+          }
+        ]
+      }
     },
     "dex_aggregator": {
       "source": "contracts/dex_aggregator/src/lib.rs",
@@ -4549,7 +6066,113 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "ClPoolInfo": [
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "token_a",
+            "type": "Address"
+          },
+          {
+            "name": "token_b",
+            "type": "Address"
+          },
+          {
+            "name": "fee_bps",
+            "type": "i128"
+          }
+        ],
+        "PriceImpactEstimate": [
+          {
+            "name": "amount_in",
+            "type": "i128"
+          },
+          {
+            "name": "amount_in_after_fee",
+            "type": "i128"
+          },
+          {
+            "name": "amount_out",
+            "type": "i128"
+          },
+          {
+            "name": "fee_amount",
+            "type": "i128"
+          },
+          {
+            "name": "spot_price_before",
+            "type": "i128"
+          },
+          {
+            "name": "effective_price",
+            "type": "i128"
+          },
+          {
+            "name": "price_impact_bps",
+            "type": "i128"
+          },
+          {
+            "name": "sqrt_price_before",
+            "type": "u128"
+          },
+          {
+            "name": "sqrt_price_after",
+            "type": "u128"
+          },
+          {
+            "name": "tick_before",
+            "type": "i32"
+          },
+          {
+            "name": "tick_after",
+            "type": "i32"
+          },
+          {
+            "name": "active_liquidity_before",
+            "type": "i128"
+          },
+          {
+            "name": "active_liquidity_after",
+            "type": "i128"
+          }
+        ],
+        "RouteHop": [
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "pool_kind",
+            "type": "PoolKind"
+          },
+          {
+            "name": "token_in",
+            "type": "Address"
+          },
+          {
+            "name": "token_out",
+            "type": "Address"
+          },
+          {
+            "name": "zero_for_one",
+            "type": "bool"
+          }
+        ],
+        "RouteQuote": [
+          {
+            "name": "amount_out",
+            "type": "i128"
+          },
+          {
+            "name": "hops",
+            "type": "Vec<RouteHop>"
+          }
+        ]
+      }
     },
     "batch_auction": {
       "source": "contracts/batch_auction/src/lib.rs",
@@ -4831,7 +6454,63 @@
             }
           ]
         }
-      ]
+      ],
+      "structs": {
+        "Order": [
+          {
+            "name": "id",
+            "type": "u64"
+          },
+          {
+            "name": "trader",
+            "type": "Address"
+          },
+          {
+            "name": "pool",
+            "type": "Address"
+          },
+          {
+            "name": "token_in",
+            "type": "Address"
+          },
+          {
+            "name": "token_out",
+            "type": "Address"
+          },
+          {
+            "name": "amount_in",
+            "type": "i128"
+          },
+          {
+            "name": "min_out",
+            "type": "i128"
+          },
+          {
+            "name": "submitted_at",
+            "type": "u64"
+          },
+          {
+            "name": "deadline",
+            "type": "u64"
+          },
+          {
+            "name": "pool_type",
+            "type": "PoolType"
+          },
+          {
+            "name": "zero_for_one",
+            "type": "bool"
+          },
+          {
+            "name": "sqrt_price_limit",
+            "type": "u128"
+          },
+          {
+            "name": "alt_pool",
+            "type": "Option<Address>"
+          }
+        ]
+      }
     }
   }
 }

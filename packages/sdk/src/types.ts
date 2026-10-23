@@ -18,11 +18,11 @@ export interface PoolInfo {
   totalShares: bigint;
   feeBps: bigint;
   protocolFeeBps: bigint;
-  feeRecipient: string | null;
+  feeRecipient: string;
   flashLoanFeeBps: bigint;
-  admin: string | null;
+  admin: string;
+  lpRebateBps: bigint;
   isPaused: boolean;
-  name: string | null;
 }
 
 /** Input for a swap call. */

@@ -27,7 +27,7 @@ import type { AmmErrorCode, AmmErrorKey } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
-import { toBigInt, toText } from "./internal/decode.js";
+import { requireBigInt, requireText, toBigInt } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -132,23 +132,44 @@ export class AmmPool {
 
   // ── Pool info ──────────────────────────────────────────────────────────────
 
-  /** Fetch full pool state. */
-  async getInfo(): Promise<PoolInfo> {
-    const raw = await this.simulate("get_info");
-    const native = scValToNative(raw) as Record<string, unknown>;
+  private decodeInfo(native: Record<string, unknown>): Omit<PoolInfo, "isPaused"> {
     return {
-      tokenA: toText(native.token_a),
-      tokenB: toText(native.token_b),
-      reserveA: toBigInt(native.reserve_a),
-      reserveB: toBigInt(native.reserve_b),
-      totalShares: toBigInt(native.total_shares),
-      feeBps: toBigInt(native.fee_bps),
-      protocolFeeBps: toBigInt(native.protocol_fee_bps),
-      feeRecipient: native.fee_recipient ? toText(native.fee_recipient) : null,
-      flashLoanFeeBps: toBigInt(native.flash_loan_fee_bps),
-      admin: native.admin ? toText(native.admin) : null,
-      isPaused: Boolean(native.is_paused),
-      name: native.name ? toText(native.name) : null,
+      tokenA: requireText(native, "token_a", "PoolInfo"),
+      tokenB: requireText(native, "token_b", "PoolInfo"),
+      reserveA: requireBigInt(native, "reserve_a", "PoolInfo"),
+      reserveB: requireBigInt(native, "reserve_b", "PoolInfo"),
+      totalShares: requireBigInt(native, "total_shares", "PoolInfo"),
+      feeBps: requireBigInt(native, "fee_bps", "PoolInfo"),
+      protocolFeeBps: requireBigInt(native, "protocol_fee_bps", "PoolInfo"),
+      lpRebateBps: requireBigInt(native, "lp_rebate_bps", "PoolInfo"),
+      feeRecipient: requireText(native, "fee_recipient", "PoolInfo"),
+      flashLoanFeeBps: requireBigInt(native, "flash_loan_fee_bps", "PoolInfo"),
+      admin: requireText(native, "admin", "PoolInfo"),
+    };
+  }
+
+  /** Fetch pool fields in one RPC call, without querying pause status. */
+  async getInfoLight(): Promise<Omit<PoolInfo, "isPaused">> {
+    const raw = await this.simulate("get_info");
+    return this.decodeInfo(scValToNative(raw) as Record<string, unknown>);
+  }
+
+  /**
+   * Fetch full pool state, including pause status. `get_info` and `is_paused`
+   * are simulated concurrently, so this performs two RPC calls.
+   */
+  async getInfo(): Promise<PoolInfo> {
+    const [infoRaw, pausedRaw] = await Promise.all([
+      this.simulate("get_info"),
+      this.simulate("is_paused"),
+    ]);
+    const paused: unknown = scValToNative(pausedRaw);
+    if (typeof paused !== "boolean") {
+      throw new TypeError(`expected a boolean contract value for is_paused, got ${typeof paused}`);
+    }
+    return {
+      ...this.decodeInfo(scValToNative(infoRaw) as Record<string, unknown>),
+      isPaused: paused,
     };
   }
 
@@ -169,14 +190,14 @@ export class AmmPool {
    * helper — so this reads the field from `get_info` instead.
    */
   async getFlashLoanFeeBps(): Promise<bigint> {
-    const info = await this.getInfo();
+    const info = await this.getInfoLight();
     return info.flashLoanFeeBps;
   }
 
   /** Return the LP share balance of `address`. */
   async sharesOf(address: string): Promise<bigint> {
     const raw = await this.simulate("shares_of", addr(address));
-    return BigInt(scValToNative(raw) as number);
+    return toBigInt(scValToNative(raw));
   }
 
   // ── Swap simulation ────────────────────────────────────────────────────────
@@ -197,24 +218,24 @@ export class AmmPool {
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
       amountIn,
-      amountOut: toBigInt(native.amount_out),
-      feeAmount: toBigInt(native.fee_amount),
-      priceImpactBps: Number(toBigInt(native.price_impact_bps)),
-      effectivePrice: toBigInt(native.effective_price),
-      spotPrice: toBigInt(native.spot_price),
+      amountOut: requireBigInt(native, "amount_out", "SwapSimulation"),
+      feeAmount: requireBigInt(native, "fee_amount", "SwapSimulation"),
+      priceImpactBps: Number(requireBigInt(native, "price_impact_bps", "SwapSimulation")),
+      effectivePrice: requireBigInt(native, "effective_price", "SwapSimulation"),
+      spotPrice: requireBigInt(native, "spot_price", "SwapSimulation"),
     };
   }
 
   /** Return the amount out for `amountIn` of `tokenIn` (on-chain query). */
   async getAmountOut(tokenIn: string, amountIn: bigint): Promise<bigint> {
     const raw = await this.simulate("get_amount_out", addr(tokenIn), i128(amountIn));
-    return BigInt(scValToNative(raw) as number);
+    return toBigInt(scValToNative(raw));
   }
 
   /** Return the amount in required to receive `amountOut` of `tokenOut`. */
   async getAmountIn(tokenOut: string, amountOut: bigint): Promise<bigint> {
     const raw = await this.simulate("get_amount_in", addr(tokenOut), i128(amountOut));
-    return BigInt(scValToNative(raw) as number);
+    return toBigInt(scValToNative(raw));
   }
 
   async swap(input: SwapParams, signer: Signer, options?: InvokeOptions): Promise<InvocationResult<bigint>> {
