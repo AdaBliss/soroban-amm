@@ -817,6 +817,8 @@ count. Events marked unversioned carry their payload without the
 | `released` | 1 | `beneficiary`, `schedule_id`, `releasable` | v1 |
 | `beneficiary_changed` | 1 | `old_beneficiary`, `old_schedule_id`, `new_beneficiary`, `new_schedule_id` | v1 |
 | `vesting_revoked` | 1 | `beneficiary`, `schedule_id`, `to_beneficiary`, `to_treasury` | v1 |
+| `initialized` | 1 | `governance`, `treasury` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 
 ### `reserve_manager`
 

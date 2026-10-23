@@ -25239,6 +25239,44 @@
       },
       {
         "function_v0": {
+          "doc": "Replace this contract's WASM. Governance only.\\n\\nSchedules, committed balances and the governance and treasury addresses\\nare storage the upgrade does not touch, so live schedules keep vesting.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "governance",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type_": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "VestingError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Total LP tokens currently committed to live schedules for `lp_token`.\\n\\nThis is the amount the contract must keep in reserve: the sum of every\\nschedule's unreleased remainder on that token. The difference between the\\ncontract's token balance and this figure is what a new schedule may draw.",
           "inputs": [
             {
@@ -25711,6 +25749,11 @@
               "doc": "A beneficiary already holds the maximum number of live schedules.",
               "name": "TooManySchedules",
               "value": 12
+            },
+            {
+              "doc": "`lp_token` is not an LP token administered by `pool`, or is not an LP\\ntoken at all.",
+              "name": "LpTokenMismatch",
+              "value": 13
             }
           ],
           "doc": "",

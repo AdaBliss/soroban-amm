@@ -1773,6 +1773,27 @@
               "to_treasury"
             ]
           }
+        ],
+        "initialized": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "governance",
+              "treasury"
+            ]
+          }
+        ],
+        "upgraded": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_wasm_hash"
+            ]
+          }
         ]
       }
     },
