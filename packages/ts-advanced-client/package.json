@@ -1,8 +1,18 @@
 {
-  "name": "@example/ts-advanced-client",
+  "name": "@soroban-amm/ts-advanced-client",
   "version": "0.1.0",
+  "description": "Chainable middleware client for Soroban transactions",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": ["lib"],
+  "sideEffects": false,
   "engines": {
     "node": ">=22"
   },
@@ -13,6 +23,15 @@
     "lint": "eslint ."
   },
   "devDependencies": {
-    "typescript": "^4.9.5"
+    "typescript": "^5.4.0",
+    "@stellar/stellar-sdk": ">=12.0.0"
+  },
+  "peerDependencies": {
+    "@stellar/stellar-sdk": ">=12.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@stellar/stellar-sdk": {
+      "optional": true
+    }
   }
 }

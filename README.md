@@ -717,6 +717,7 @@ Notes:
 | Language | Package | Covers |
 |---|---|---|
 | TypeScript | [`packages/sdk`](packages/sdk) (`@soroban-amm/sdk`) | AMM pool, factory, governance, concentrated liquidity, staking, incentive campaigns, router |
+| TypeScript (middleware client) | [`packages/ts-advanced-client`](packages/ts-advanced-client) (`@soroban-amm/ts-advanced-client`) | Chainable signing, validation, price-feed, retry and plugin middleware around a Soroban simulate → sign → send → poll submitter |
 | Go | [`packages/go-sdk`](packages/go-sdk) | AMM pool (`contracts/amm`), with its own envelope, ScVal and RPC code and no third-party dependencies |
 | Rust | [`contracts/amm-sdk`](contracts/amm-sdk) (`soroban_amm_sdk`) | typed client, shared types and event decoders for the AMM contracts |
 
