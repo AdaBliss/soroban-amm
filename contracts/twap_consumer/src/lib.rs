@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, Address,
-    Env, Vec,
+    BytesN, Env, Symbol, Vec,
 };
 
 #[contractclient(name = "AmmPoolOracleClient")]
@@ -47,6 +47,20 @@ pub enum TwapError {
     CrossContractCallFailed = 14,
     SnapshotRateLimited = 15,
     PoolNotRegistered = 16,
+    /// Registering one more pool (explicitly through `add_tracked_pool`, or
+    /// implicitly through a first `save_snapshot` / `save_cl_snapshot`) would
+    /// push the tracked set past `TwapConsumer::MAX_TRACKED_POOLS`. Storage is
+    /// left unchanged.
+    TooManyTrackedPools = 17,
+    /// `remove_tracked_pool` was called with a pool that is not tracked.
+    NotTracked = 18,
+    /// `get_twap_batch` was called with more than
+    /// `TwapConsumer::MAX_TRACKED_POOLS` pools.
+    TooManyPools = 19,
+    /// `accept_keeper` was called without a pending keeper proposal.
+    NoPendingKeeper = 20,
+    /// `accept_keeper` was called by an address other than the pending keeper.
+    WrongPendingKeeper = 21,
 }
 
 #[contracttype]
@@ -77,6 +91,8 @@ pub enum DataKey {
     /// Typed tracked-pool list (`Vec<TrackedPool>`), replacing the untyped
     /// `TrackedPoolsPersistent` (#964).
     TrackedPools,
+    /// Nominee of a two-step keeper rotation; absent when none is pending.
+    PendingKeeper,
 }
 
 #[contracttype]
@@ -143,6 +159,24 @@ pub struct TwapEntry {
     pub twap: i128,
 }
 
+/// One pool's result from a fault-isolated batch TWAP read.
+///
+/// `get_twap_all_safe` and `get_twap_batch` return exactly one entry per pool
+/// queried, whether or not that pool's read succeeded, so one dead, empty or
+/// panicking pool can never take down the rest of the batch.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwapSafeEntry {
+    pub pool: Address,
+    pub pool_type: PoolType,
+    /// Same quantity as [`TwapEntry::twap`]; `0` when `ok == false`.
+    pub twap: i128,
+    pub ok: bool,
+    /// The `TwapError` discriminant that caused the pool to be skipped when
+    /// `ok == false`; `0` when `ok == true`.
+    pub error_code: u32,
+}
+
 /// One retained snapshot as stored under [`DataKey::Snapshots`]:
 /// `(ledger_ts, cum_a, cum_b, pool_ts)`. A tuple rather than
 /// [`PriceSnapshot`] because it encodes at roughly half the size, which is
@@ -196,6 +230,10 @@ impl TwapConsumer {
     pub const DEFAULT_MAX_SNAPSHOTS_PER_POOL: u32 = 0;
     /// Maximum number of eligible snapshots opportunistically pruned during save_snapshot.
     pub const AMORTIZED_PRUNE_LIMIT: u32 = 2;
+    /// Cap on the tracked-pool set, and on the length of a `get_twap_batch`
+    /// request. Keeps `get_twap_all`, `prune_all` and `get_tracked_pools`
+    /// bounded and the set far from the 64 KiB ledger-entry limit.
+    pub const MAX_TRACKED_POOLS: u32 = 100;
 
     /// Instance-storage TTL: below this many remaining ledgers, `extend_ttl`
     /// renews the entry; each renewal bumps it back up to `INSTANCE_TTL_BUMP_TO`.
@@ -221,12 +259,83 @@ impl TwapConsumer {
             .extend_ttl(Self::INSTANCE_TTL_THRESHOLD, Self::INSTANCE_TTL_BUMP_TO);
     }
 
+    /// One-shot setup that records the keeper and emits `initialized`.
+    ///
+    /// Deliberately does not call `keeper.require_auth()`: an attacker would
+    /// simply authorize their own address, and a contract-address keeper
+    /// cannot sign for itself. Deployers must read `get_keeper` back right
+    /// after deployment (`scripts/deploy/twap_consumer.sh` does) and redeploy
+    /// if it is not the intended address.
     pub fn initialize(env: Env, keeper: Address) -> Result<(), TwapError> {
         Self::extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Keeper) {
             return Err(TwapError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Keeper, &keeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "initialized"),),
+            (keeper,)
+        );
+        Ok(())
+    }
+
+    /// Nominate a keeper successor. Keeper-only; the nominee must separately
+    /// authorize `accept_keeper`.
+    pub fn propose_keeper(env: Env, new_keeper: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_keeper(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingKeeper, &new_keeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "keeper_proposed"),),
+            (new_keeper,)
+        );
+        Ok(())
+    }
+
+    /// Complete a rotation started by `propose_keeper`. The pending address
+    /// must sign; once it has, the old keeper loses every keeper right.
+    pub fn accept_keeper(env: Env, new_keeper: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingKeeper)
+            .ok_or(TwapError::NoPendingKeeper)?;
+        if new_keeper != pending {
+            return Err(TwapError::WrongPendingKeeper);
+        }
+        new_keeper.require_auth();
+        env.storage().instance().set(&DataKey::Keeper, &new_keeper);
+        env.storage().instance().remove(&DataKey::PendingKeeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "keeper_changed"),),
+            (new_keeper,)
+        );
+        Ok(())
+    }
+
+    /// The pending keeper nominee, or `None` when no rotation is in flight.
+    pub fn get_pending_keeper(env: Env) -> Option<Address> {
+        Self::extend_instance_ttl(&env);
+        env.storage().instance().get(&DataKey::PendingKeeper)
+    }
+
+    /// Replace this contract's WASM. Keeper-only; stored state is preserved.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_keeper(&env)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "upgraded"),),
+            (new_wasm_hash,)
+        );
         Ok(())
     }
 
@@ -386,8 +495,7 @@ impl TwapConsumer {
         Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
         let (cum_a, cum_b, pool_ts) = Self::amm_price_cumulative(&env, &pool)?;
-        Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts);
-        Ok(())
+        Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts)
     }
 
     /// Save an AMM snapshot without keeper authorization for a factory pool.
@@ -396,8 +504,7 @@ impl TwapConsumer {
         Self::extend_instance_ttl(&env);
         Self::require_registered_pool(&env, &pool)?;
         let (cum_a, cum_b, pool_ts) = Self::amm_price_cumulative(&env, &pool)?;
-        Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts);
-        Ok(())
+        Self::record_snapshot(&env, &pool, PoolType::Amm, cum_a, cum_b, pool_ts)
     }
 
     /// Deletes a price snapshot from persistent storage.
@@ -462,7 +569,11 @@ impl TwapConsumer {
         cum_a: i128,
         cum_b: i128,
         pool_ts: u64,
-    ) {
+    ) -> Result<(), TwapError> {
+        // Register first: past the cap this fails before any snapshot is
+        // written, so a rejected pool leaves storage exactly as it was.
+        Self::register_tracked_pool(env, pool, pool_type)?;
+
         let ledger_ts = env.ledger().timestamp();
         let entry: SnapshotEntry = (ledger_ts, cum_a, cum_b, pool_ts);
         let mut snapshots = Self::load_snapshots(env, pool);
@@ -476,8 +587,7 @@ impl TwapConsumer {
         // snapshot and this removes up to two, so the count cap always holds.
         Self::prune_list(env, pool, &mut snapshots, Self::AMORTIZED_PRUNE_LIMIT);
         Self::store_snapshots(env, pool, &snapshots);
-
-        Self::register_tracked_pool(env, pool, pool_type);
+        Ok(())
     }
 
     /// Reads the tracked-pool set, falling back to the legacy untyped list.
@@ -529,25 +639,67 @@ impl TwapConsumer {
     /// snapshot call that succeeded for it, and each call only succeeds
     /// against the matching oracle interface, so re-typing can only correct a
     /// migrated legacy entry, never corrupt a good one.
-    fn register_tracked_pool(env: &Env, pool: &Address, pool_type: PoolType) {
+    fn register_tracked_pool(
+        env: &Env,
+        pool: &Address,
+        pool_type: PoolType,
+    ) -> Result<(), TwapError> {
         let mut tracked = Self::load_tracked(env);
-        for i in 0..tracked.len() {
+        if let Some(i) = Self::first_tracked_index(&tracked, pool) {
             let mut entry = tracked.get(i).unwrap();
-            if entry.address == *pool {
-                if entry.pool_type == pool_type {
-                    return;
-                }
-                entry.pool_type = pool_type;
-                tracked.set(i, entry);
-                Self::store_tracked(env, &tracked);
-                return;
+            if entry.pool_type == pool_type {
+                return Ok(());
             }
+            entry.pool_type = pool_type;
+            tracked.set(i, entry);
+            Self::store_tracked(env, &tracked);
+            return Ok(());
+        }
+        if tracked.len() >= Self::MAX_TRACKED_POOLS {
+            return Err(TwapError::TooManyTrackedPools);
         }
         tracked.push_back(TrackedPool {
             address: pool.clone(),
             pool_type,
         });
         Self::store_tracked(env, &tracked);
+        soroban_amm_sdk::emit_versioned_event!(env, (Symbol::new(env, "pool_add"),), pool.clone());
+        Ok(())
+    }
+
+    fn first_tracked_index(tracked: &Vec<TrackedPool>, pool: &Address) -> Option<u32> {
+        (0..tracked.len()).find(|&i| tracked.get(i).unwrap().address == *pool)
+    }
+
+    /// Adds `pool` to the tracked set as `pool_type`. Keeper-only and
+    /// idempotent (re-adding with the same type is a no-op that emits nothing;
+    /// re-adding with the other type corrects it). Rejects growth past
+    /// `MAX_TRACKED_POOLS` with `TooManyTrackedPools`.
+    pub fn add_tracked_pool(env: Env, pool: Address, pool_type: PoolType) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_keeper(&env)?;
+        Self::register_tracked_pool(&env, &pool, pool_type)
+    }
+
+    /// Removes `pool` from the tracked set, keeping the order of the rest.
+    /// Keeper-only; `NotTracked` if it was never tracked. The pool's snapshots
+    /// are kept, so `get_twap_price` / `get_cl_twap` still read it; a later
+    /// `save_snapshot` tracks it again.
+    pub fn remove_tracked_pool(env: Env, pool: Address) -> Result<(), TwapError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_keeper(&env)?;
+        let mut tracked = Self::load_tracked(&env);
+        let index = Self::first_tracked_index(&tracked, &pool).ok_or(TwapError::NotTracked)?;
+        tracked.remove(index);
+        Self::store_tracked(&env, &tracked);
+        soroban_amm_sdk::emit_versioned_event!(&env, (Symbol::new(&env, "pool_remove"),), pool);
+        Ok(())
+    }
+
+    /// Whether `pool` is currently tracked.
+    pub fn is_tracked(env: Env, pool: Address) -> bool {
+        Self::extend_instance_ttl(&env);
+        Self::first_tracked_index(&Self::load_tracked(&env), &pool).is_some()
     }
 
     /// `get_price_cumulative` on an AMM pool, with any failure of the call
@@ -860,8 +1012,10 @@ impl TwapConsumer {
     /// its pool type because the two report different quantities (see
     /// `TwapEntry`).
     ///
-    /// Returns the first error encountered, like `twal_consumer::get_twal_all`.
-    /// A pool that does not implement the interface its type implies yields
+    /// Returns the first error encountered, like `twal_consumer::get_twal_all`,
+    /// so one bad pool fails the whole call. Prefer `get_twap_all_safe`,
+    /// which reports a result or an error per pool and never aborts. A pool
+    /// that does not implement the interface its type implies yields
     /// `CrossContractCallFailed` rather than a host trap (#964).
     pub fn get_twap_all(env: Env, window_seconds: u64) -> Result<Vec<TwapEntry>, TwapError> {
         Self::extend_instance_ttl(&env);
@@ -885,6 +1039,79 @@ impl TwapConsumer {
             });
         }
         Ok(results)
+    }
+
+    /// Fault-isolated version of `get_twap_all`: exactly one
+    /// [`TwapSafeEntry`] per tracked pool. A pool with too little history, a
+    /// zero elapsed time, a non-contract address or a panicking oracle yields
+    /// `ok: false` with its `TwapError` code in that slot and does not affect
+    /// the others.
+    pub fn get_twap_all_safe(env: Env, window_seconds: u64) -> Vec<TwapSafeEntry> {
+        Self::extend_instance_ttl(&env);
+        let tracked = Self::load_tracked(&env);
+        let mut out = Vec::new(&env);
+        for entry in tracked.iter() {
+            out.push_back(Self::twap_safe_entry(
+                &env,
+                entry.address,
+                entry.pool_type,
+                window_seconds,
+            ));
+        }
+        out
+    }
+
+    /// Fault-isolated read over a caller-chosen set of pools, so a consumer can
+    /// read just the pools it cares about without depending on the global
+    /// tracked set. The type of each pool is supplied explicitly because an
+    /// arbitrary address has no recorded type. At most `MAX_TRACKED_POOLS`
+    /// pools, else `TooManyPools`.
+    pub fn get_twap_batch(
+        env: Env,
+        pools: Vec<(Address, PoolType)>,
+        window_seconds: u64,
+    ) -> Result<Vec<TwapSafeEntry>, TwapError> {
+        Self::extend_instance_ttl(&env);
+        if pools.len() > Self::MAX_TRACKED_POOLS {
+            return Err(TwapError::TooManyPools);
+        }
+        let mut out = Vec::new(&env);
+        for (pool, pool_type) in pools.iter() {
+            out.push_back(Self::twap_safe_entry(&env, pool, pool_type, window_seconds));
+        }
+        Ok(out)
+    }
+
+    fn twap_safe_entry(
+        env: &Env,
+        pool: Address,
+        pool_type: PoolType,
+        window_seconds: u64,
+    ) -> TwapSafeEntry {
+        // Both read paths reach the pool only through `try_` clients, so a
+        // panicking callee surfaces as `CrossContractCallFailed`.
+        let result = match pool_type {
+            PoolType::Amm => Self::get_twap_price(env.clone(), pool.clone(), window_seconds),
+            PoolType::Cl => {
+                Self::get_cl_twap(env.clone(), pool.clone(), window_seconds).map(i128::from)
+            }
+        };
+        match result {
+            Ok(twap) => TwapSafeEntry {
+                pool,
+                pool_type,
+                twap,
+                ok: true,
+                error_code: 0,
+            },
+            Err(error) => TwapSafeEntry {
+                pool,
+                pool_type,
+                twap: 0,
+                ok: false,
+                error_code: error as u32,
+            },
+        }
     }
 
     pub fn get_cl_twap(env: Env, pool: Address, window_seconds: u64) -> Result<i64, TwapError> {
@@ -931,8 +1158,7 @@ impl TwapConsumer {
         Self::extend_instance_ttl(&env);
         Self::require_keeper(&env)?;
         let (tick_cum, pool_ts) = Self::cl_tick_cumulative(&env, &pool)?;
-        Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts);
-        Ok(())
+        Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts)
     }
 
     /// Save a CL snapshot without keeper authorization for a factory pool.
@@ -940,8 +1166,7 @@ impl TwapConsumer {
         Self::extend_instance_ttl(&env);
         Self::require_registered_pool(&env, &pool)?;
         let (tick_cum, pool_ts) = Self::cl_tick_cumulative(&env, &pool)?;
-        Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts);
-        Ok(())
+        Self::record_snapshot(&env, &pool, PoolType::Cl, tick_cum as i128, 0, pool_ts)
     }
 }
 
@@ -2750,5 +2975,690 @@ mod tests {
         assert_eq!(typed.len(), 2);
         assert_eq!(typed.get(0).unwrap().pool_type, PoolType::Amm);
         assert_eq!(typed.get(1).unwrap().pool_type, PoolType::Cl);
+    }
+
+    // ── #1159: tracked-set management, fault-isolated reads, keeper rotation ──
+
+    /// A CL pool that can be snapshotted (`get_tick_cumulative` works) but
+    /// whose `observe` panics, i.e. a pool that breaks at read time.
+    mod panicking_cl_pool {
+        use soroban_sdk::{contract, contractimpl, Env};
+
+        #[contract]
+        pub struct PanickingClPool;
+
+        #[contractimpl]
+        impl PanickingClPool {
+            pub fn get_tick_cumulative(_env: Env) -> (i64, u64) {
+                (1_000_i64, 10_000_u64)
+            }
+
+            pub fn observe(_env: Env, _seconds_ago: u64) -> i64 {
+                panic!("pool oracle is broken");
+            }
+        }
+    }
+    use panicking_cl_pool::PanickingClPool;
+
+    fn event_count(env: &Env, contract: &Address, name: &str) -> usize {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = (Symbol::new(env, name),).into_val(env);
+        env.events()
+            .all()
+            .iter()
+            .filter(|e| e.0 == *contract && e.1 == topics)
+            .count()
+    }
+
+    fn test_env() -> Env {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.budget().reset_unlimited();
+        env.ledger().set_timestamp(10_000);
+        env
+    }
+
+    /// Three CL pools tracked in this order: a healthy one (cumulative moves
+    /// to tick -250 over the window), one with no history for the window, and
+    /// one whose oracle panics. Time is left at 10_060.
+    struct Poisoned {
+        healthy: Address,
+        empty: Address,
+        panicking: Address,
+    }
+
+    fn poisoned_set(env: &Env, consumer: &TwapConsumerClient) -> Poisoned {
+        let healthy = env.register_contract(None, MockClPool);
+        let empty = env.register_contract(None, MockClPool);
+        let panicking = env.register_contract(None, PanickingClPool);
+        consumer.save_cl_snapshot(&healthy);
+        // `empty` is tracked but was never snapshotted, so it has no history.
+        consumer.add_tracked_pool(&empty, &PoolType::Cl);
+        consumer.save_cl_snapshot(&panicking);
+        env.ledger().set_timestamp(10_060);
+        MockClPoolClient::new(env, &healthy).set_tick_cumulative(&(1_000_i64 - 250 * 60), &10_060);
+        MockClPoolClient::new(env, &empty).set_tick_cumulative(&1_000_i64, &10_060);
+        Poisoned {
+            healthy,
+            empty,
+            panicking,
+        }
+    }
+
+    #[test]
+    fn test_initialize_emits_initialized_event_with_keeper() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+
+        assert_eq!(event_count(&env, &consumer.address, "initialized"), 1);
+        let (_, _, data) = env.events().all().last().unwrap();
+        let (version, (keeper,)): (u32, (Address,)) = data.into_val(&env);
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(keeper, admin);
+    }
+
+    #[test]
+    fn test_get_twap_all_safe_isolates_a_panicking_a_thin_and_a_healthy_pool() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let p = poisoned_set(&env, &consumer);
+
+        let entries = consumer.get_twap_all_safe(&60);
+        assert_eq!(entries.len(), 3);
+
+        let healthy = entries.get(0).unwrap();
+        assert_eq!(healthy.pool, p.healthy);
+        assert!(healthy.ok);
+        assert_eq!(healthy.twap, -250);
+        assert_eq!(healthy.error_code, 0);
+        assert_eq!(healthy.pool_type, PoolType::Cl);
+
+        let thin = entries.get(1).unwrap();
+        assert_eq!(thin.pool, p.empty);
+        assert!(!thin.ok);
+        assert_eq!(thin.error_code, TwapError::InsufficientHistory as u32);
+
+        let broken = entries.get(2).unwrap();
+        assert_eq!(broken.pool, p.panicking);
+        assert!(!broken.ok);
+        assert_eq!(broken.error_code, TwapError::CrossContractCallFailed as u32);
+        assert_ne!(thin.error_code, broken.error_code);
+        assert_eq!(broken.twap, 0);
+    }
+
+    #[test]
+    fn test_get_twap_all_still_returns_the_first_error() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        poisoned_set(&env, &consumer);
+
+        assert_eq!(
+            consumer.try_get_twap_all(&60),
+            Err(Ok(TwapError::InsufficientHistory))
+        );
+    }
+
+    #[test]
+    fn test_get_twap_all_safe_on_an_empty_set_is_empty() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+
+        assert_eq!(consumer.get_twap_all_safe(&60).len(), 0);
+    }
+
+    #[test]
+    fn test_get_twap_all_safe_reports_a_zero_window_per_pool() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        poisoned_set(&env, &consumer);
+
+        let entries = consumer.get_twap_all_safe(&0);
+        assert_eq!(entries.len(), 3);
+        for entry in entries.iter() {
+            assert!(!entry.ok);
+            assert_eq!(entry.error_code, TwapError::ZeroWindow as u32);
+        }
+    }
+
+    #[test]
+    fn test_get_twap_all_safe_mixes_amm_and_cl_pools() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let amm = seeded_amm(&env, &admin);
+        let cl = env.register_contract(None, MockClPool);
+        let consumer = new_consumer(&env, &admin);
+        consumer.save_snapshot(&amm.address);
+        consumer.save_cl_snapshot(&cl);
+        env.ledger().set_timestamp(10_060);
+        poke_amm(&env, &amm);
+        MockClPoolClient::new(&env, &cl).set_tick_cumulative(&(1_000_i64 - 250 * 60), &10_060);
+
+        let entries = consumer.get_twap_all_safe(&60);
+        assert_eq!(entries.get(0).unwrap().pool_type, PoolType::Amm);
+        assert_eq!(entries.get(0).unwrap().twap, 1_000_000);
+        assert_eq!(entries.get(1).unwrap().pool_type, PoolType::Cl);
+        assert_eq!(entries.get(1).unwrap().twap, -250);
+        assert!(entries.iter().all(|e| e.ok));
+    }
+
+    #[test]
+    fn test_get_twap_batch_reads_a_caller_chosen_subset_including_untracked_pools() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let p = poisoned_set(&env, &consumer);
+        let untracked = env.register_contract(None, MockClPool);
+
+        let pools = soroban_sdk::vec![
+            &env,
+            (p.panicking.clone(), PoolType::Cl),
+            (p.healthy.clone(), PoolType::Cl),
+            (untracked.clone(), PoolType::Cl),
+        ];
+        let entries = consumer.get_twap_batch(&pools, &60);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries.get(0).unwrap().pool, p.panicking);
+        assert!(!entries.get(0).unwrap().ok);
+        assert!(entries.get(1).unwrap().ok);
+        assert_eq!(entries.get(1).unwrap().twap, -250);
+        // An untracked pool with no snapshots reports thin history, not a trap.
+        assert_eq!(entries.get(2).unwrap().pool, untracked);
+        assert_eq!(
+            entries.get(2).unwrap().error_code,
+            TwapError::InsufficientHistory as u32
+        );
+        assert!(
+            !consumer.is_tracked(&untracked),
+            "a batch read must not track pools"
+        );
+    }
+
+    #[test]
+    fn test_get_twap_batch_isolates_a_non_contract_address() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let nowhere = Address::generate(&env);
+
+        let pools = soroban_sdk::vec![
+            &env,
+            (nowhere.clone(), PoolType::Cl),
+            (nowhere.clone(), PoolType::Amm),
+        ];
+        let entries = consumer.get_twap_batch(&pools, &60);
+        assert_eq!(entries.len(), 2);
+        for entry in entries.iter() {
+            assert!(!entry.ok);
+            assert_eq!(entry.error_code, TwapError::CrossContractCallFailed as u32);
+        }
+    }
+
+    #[test]
+    fn test_get_twap_batch_rejects_more_than_the_cap() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pool = Address::generate(&env);
+        let mut pools = soroban_sdk::Vec::new(&env);
+        for _ in 0..=TwapConsumer::MAX_TRACKED_POOLS {
+            pools.push_back((pool.clone(), PoolType::Amm));
+        }
+
+        assert_eq!(
+            consumer.try_get_twap_batch(&pools, &60),
+            Err(Ok(TwapError::TooManyPools))
+        );
+        let mut at_cap = soroban_sdk::Vec::new(&env);
+        for _ in 0..TwapConsumer::MAX_TRACKED_POOLS {
+            at_cap.push_back((pool.clone(), PoolType::Amm));
+        }
+        assert_eq!(consumer.get_twap_batch(&at_cap, &60).len(), 100);
+    }
+
+    #[test]
+    fn test_removing_the_bad_pools_unpoisons_get_twap_all() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let p = poisoned_set(&env, &consumer);
+        assert!(consumer.try_get_twap_all(&60).is_err());
+
+        consumer.remove_tracked_pool(&p.empty);
+        consumer.remove_tracked_pool(&p.panicking);
+
+        let all = consumer.get_twap_all(&60);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all.get(0).unwrap().pool, p.healthy);
+        assert_eq!(all.get(0).unwrap().twap, -250);
+    }
+
+    #[test]
+    fn test_a_removed_pool_keeps_its_snapshots_readable() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let p = poisoned_set(&env, &consumer);
+
+        consumer.remove_tracked_pool(&p.healthy);
+
+        assert!(!consumer.is_tracked(&p.healthy));
+        assert_eq!(consumer.get_snapshot_count(&p.healthy), 1);
+        assert_eq!(consumer.get_cl_twap(&p.healthy, &60), -250);
+    }
+
+    #[test]
+    fn test_removing_preserves_the_order_of_the_remaining_pools() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pools: std::vec::Vec<Address> = (0..4)
+            .map(|_| env.register_contract(None, MockClPool))
+            .collect();
+        for pool in &pools {
+            consumer.add_tracked_pool(pool, &PoolType::Cl);
+        }
+
+        consumer.remove_tracked_pool(&pools[1]);
+
+        assert_eq!(
+            consumer.get_tracked_pools(),
+            soroban_sdk::vec![&env, pools[0].clone(), pools[2].clone(), pools[3].clone()]
+        );
+    }
+
+    #[test]
+    fn test_remove_tracked_pool_rejects_an_untracked_pool() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+
+        assert_eq!(
+            consumer.try_remove_tracked_pool(&Address::generate(&env)),
+            Err(Ok(TwapError::NotTracked))
+        );
+    }
+
+    #[test]
+    fn test_remove_and_add_tracked_pool_are_keeper_only() {
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pool = env.register_contract(None, MockClPool);
+        let stranger = Address::generate(&env);
+
+        // Nobody signs: both fail. Only a stranger signs: both still fail.
+        env.set_auths(&[]);
+        assert!(consumer.try_add_tracked_pool(&pool, &PoolType::Cl).is_err());
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &consumer.address,
+                fn_name: "add_tracked_pool",
+                args: (pool.clone(), PoolType::Cl).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(consumer.try_add_tracked_pool(&pool, &PoolType::Cl).is_err());
+        assert!(!consumer.is_tracked(&pool));
+
+        // The keeper can; then the same two failures apply to removal.
+        env.mock_all_auths();
+        consumer.add_tracked_pool(&pool, &PoolType::Cl);
+        env.set_auths(&[]);
+        assert!(consumer.try_remove_tracked_pool(&pool).is_err());
+        env.mock_auths(&[MockAuth {
+            address: &stranger,
+            invoke: &MockAuthInvoke {
+                contract: &consumer.address,
+                fn_name: "remove_tracked_pool",
+                args: (pool.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(consumer.try_remove_tracked_pool(&pool).is_err());
+        assert!(consumer.is_tracked(&pool));
+    }
+
+    #[test]
+    fn test_add_tracked_pool_is_idempotent_and_emits_one_event() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pool = env.register_contract(None, MockClPool);
+
+        consumer.add_tracked_pool(&pool, &PoolType::Cl);
+        consumer.add_tracked_pool(&pool, &PoolType::Cl);
+
+        assert_eq!(consumer.get_tracked_pools().len(), 1);
+        assert_eq!(event_count(&env, &consumer.address, "pool_add"), 1);
+    }
+
+    #[test]
+    fn test_remove_tracked_pool_emits_a_versioned_event() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pool = env.register_contract(None, MockClPool);
+        consumer.add_tracked_pool(&pool, &PoolType::Cl);
+
+        consumer.remove_tracked_pool(&pool);
+
+        assert_eq!(event_count(&env, &consumer.address, "pool_remove"), 1);
+        let (_, _, data) = env.events().all().last().unwrap();
+        let (version, removed): (u32, Address) = data.into_val(&env);
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(removed, pool);
+    }
+
+    fn fill_tracked_set(env: &Env, consumer: &TwapConsumerClient) {
+        for _ in 0..TwapConsumer::MAX_TRACKED_POOLS {
+            consumer.add_tracked_pool(&env.register_contract(None, MockClPool), &PoolType::Cl);
+        }
+        assert_eq!(
+            consumer.get_tracked_pools().len(),
+            TwapConsumer::MAX_TRACKED_POOLS
+        );
+    }
+
+    #[test]
+    fn test_the_101st_pool_is_rejected_and_storage_is_unchanged() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        fill_tracked_set(&env, &consumer);
+        let before = consumer.get_tracked_pools();
+        let extra = env.register_contract(None, MockClPool);
+        let events_before = event_count(&env, &consumer.address, "pool_add");
+
+        assert_eq!(
+            consumer.try_add_tracked_pool(&extra, &PoolType::Cl),
+            Err(Ok(TwapError::TooManyTrackedPools))
+        );
+        assert_eq!(
+            consumer.try_save_cl_snapshot(&extra),
+            Err(Ok(TwapError::TooManyTrackedPools))
+        );
+
+        assert_eq!(consumer.get_tracked_pools(), before);
+        assert!(!consumer.is_tracked(&extra));
+        assert_eq!(
+            consumer.get_snapshot_count(&extra),
+            0,
+            "no snapshot may be written"
+        );
+        assert_eq!(
+            event_count(&env, &consumer.address, "pool_add"),
+            events_before
+        );
+    }
+
+    #[test]
+    fn test_save_snapshot_for_the_101st_amm_pool_is_rejected_too() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        fill_tracked_set(&env, &consumer);
+        let amm = seeded_amm(&env, &admin);
+
+        assert_eq!(
+            consumer.try_save_snapshot(&amm.address),
+            Err(Ok(TwapError::TooManyTrackedPools))
+        );
+        assert_eq!(consumer.get_snapshot_count(&amm.address), 0);
+    }
+
+    #[test]
+    fn test_pools_already_tracked_can_still_snapshot_at_the_cap() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let first = env.register_contract(None, MockClPool);
+        consumer.save_cl_snapshot(&first);
+        for _ in 1..TwapConsumer::MAX_TRACKED_POOLS {
+            consumer.add_tracked_pool(&env.register_contract(None, MockClPool), &PoolType::Cl);
+        }
+
+        env.ledger().set_timestamp(10_060);
+        consumer.save_cl_snapshot(&first);
+
+        assert_eq!(consumer.get_snapshot_count(&first), 2);
+        assert_eq!(
+            consumer.get_tracked_pools().len(),
+            TwapConsumer::MAX_TRACKED_POOLS
+        );
+    }
+
+    #[test]
+    fn test_removing_a_pool_frees_a_slot() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        fill_tracked_set(&env, &consumer);
+        let victim = consumer.get_tracked_pools().get(0).unwrap();
+        let extra = env.register_contract(None, MockClPool);
+
+        consumer.remove_tracked_pool(&victim);
+        consumer.add_tracked_pool(&extra, &PoolType::Cl);
+
+        assert!(consumer.is_tracked(&extra));
+    }
+
+    // Keeper rotation ----------------------------------------------------------
+
+    #[test]
+    fn test_keeper_rotation_moves_every_keeper_right() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let successor = Address::generate(&env);
+        let pool = env.register_contract(None, MockClPool);
+        let policy = RetentionPolicy {
+            max_age_seconds: TwapConsumer::LONGEST_TWAP_WINDOW,
+            max_snapshots_per_pool: 10,
+        };
+
+        consumer.propose_keeper(&successor);
+        assert_eq!(consumer.get_pending_keeper(), Some(successor.clone()));
+        // Until accepted the old keeper is still in charge.
+        assert_eq!(consumer.get_keeper(), admin);
+        consumer.accept_keeper(&successor);
+
+        assert_eq!(consumer.get_keeper(), successor);
+        assert_eq!(consumer.get_pending_keeper(), None);
+        assert_eq!(event_count(&env, &consumer.address, "keeper_proposed"), 1);
+        assert_eq!(event_count(&env, &consumer.address, "keeper_changed"), 1);
+
+        // The old keeper loses its rights...
+        assert_eq!(
+            consumer.try_set_retention_policy(&admin, &policy),
+            Err(Ok(TwapError::Unauthorized))
+        );
+        consumer.set_retention_policy(&successor, &policy);
+        // ...and the keeper-only snapshot path follows the stored keeper.
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &consumer.address,
+                fn_name: "save_cl_snapshot",
+                args: (pool.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        assert!(consumer.try_save_cl_snapshot(&pool).is_err());
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &successor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &consumer.address,
+                fn_name: "save_cl_snapshot",
+                args: (pool.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        consumer.save_cl_snapshot(&pool);
+        assert!(consumer.is_tracked(&pool));
+    }
+
+    #[test]
+    fn test_accept_keeper_without_a_proposal_is_rejected() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+
+        assert_eq!(
+            consumer.try_accept_keeper(&Address::generate(&env)),
+            Err(Ok(TwapError::NoPendingKeeper))
+        );
+    }
+
+    #[test]
+    fn test_a_non_nominee_cannot_accept_the_keeper_role() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let nominee = Address::generate(&env);
+        consumer.propose_keeper(&nominee);
+
+        assert_eq!(
+            consumer.try_accept_keeper(&Address::generate(&env)),
+            Err(Ok(TwapError::WrongPendingKeeper))
+        );
+        assert_eq!(consumer.get_keeper(), admin);
+        assert_eq!(consumer.get_pending_keeper(), Some(nominee));
+    }
+
+    #[test]
+    fn test_accept_keeper_needs_the_nominees_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let consumer = TwapConsumerClient::new(&env, &env.register_contract(None, TwapConsumer));
+        consumer.initialize(&admin);
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &consumer.address,
+                fn_name: "propose_keeper",
+                args: (nominee.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        consumer.propose_keeper(&nominee);
+
+        env.set_auths(&[]);
+        assert!(consumer.try_accept_keeper(&nominee).is_err());
+        assert_eq!(consumer.get_keeper(), admin);
+    }
+
+    #[test]
+    fn test_propose_keeper_is_keeper_only() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let consumer = TwapConsumerClient::new(&env, &env.register_contract(None, TwapConsumer));
+        consumer.initialize(&admin);
+
+        assert!(consumer
+            .try_propose_keeper(&Address::generate(&env))
+            .is_err());
+        assert_eq!(consumer.get_pending_keeper(), None);
+    }
+
+    fn own_wasm(env: &Env) -> soroban_sdk::BytesN<32> {
+        env.budget().reset_unlimited();
+        let wasm = soroban_sdk::Bytes::from_slice(
+            env,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../target/wasm32v1-none/release/twap_consumer.wasm"
+            )),
+        );
+        env.deployer().upload_contract_wasm(wasm)
+    }
+
+    #[test]
+    fn test_upgrade_rejects_a_non_keeper() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let consumer = TwapConsumerClient::new(&env, &env.register_contract(None, TwapConsumer));
+        consumer.initialize(&admin);
+        let hash = own_wasm(&env);
+
+        assert!(consumer.try_upgrade(&hash).is_err());
+    }
+
+    #[test]
+    fn test_keeper_upgrade_preserves_state_and_emits_an_event() {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        let pool = env.register_contract(None, MockClPool);
+        consumer.save_cl_snapshot(&pool);
+        let hash = own_wasm(&env);
+
+        consumer.upgrade(&hash);
+
+        assert_eq!(event_count(&env, &consumer.address, "upgraded"), 1);
+        assert_eq!(consumer.get_keeper(), admin);
+        assert_eq!(consumer.get_snapshot_count(&pool), 1);
+        assert!(consumer.is_tracked(&pool));
+    }
+
+    // Instance TTL --------------------------------------------------------------
+
+    /// Each call runs against a fresh instance whose TTL has been pushed below
+    /// the threshold, with no persistent entry that could expire along with it.
+    fn assert_bumps_instance_ttl(call: impl FnOnce(&Env, &TwapConsumerClient<'_>)) {
+        let env = test_env();
+        let admin = Address::generate(&env);
+        let consumer = new_consumer(&env, &admin);
+        lower_instance_ttl_below_threshold(&env, &consumer);
+        call(&env, &consumer);
+        assert_instance_ttl_bumped(&env, &consumer);
+    }
+
+    #[test]
+    fn test_add_tracked_pool_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|env, c| {
+            c.add_tracked_pool(&env.register_contract(None, MockClPool), &PoolType::Cl)
+        });
+    }
+
+    #[test]
+    fn test_get_twap_all_safe_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|_, c| {
+            c.get_twap_all_safe(&60);
+        });
+    }
+
+    #[test]
+    fn test_get_twap_batch_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|env, c| {
+            c.get_twap_batch(&soroban_sdk::Vec::new(env), &60);
+        });
+    }
+
+    #[test]
+    fn test_is_tracked_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|env, c| {
+            c.is_tracked(&Address::generate(env));
+        });
+    }
+
+    #[test]
+    fn test_propose_keeper_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|env, c| c.propose_keeper(&Address::generate(env)));
+    }
+
+    #[test]
+    fn test_get_pending_keeper_extends_the_instance_ttl() {
+        assert_bumps_instance_ttl(|_, c| {
+            c.get_pending_keeper();
+        });
     }
 }

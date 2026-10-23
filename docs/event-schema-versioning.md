@@ -918,6 +918,12 @@ count. Events marked unversioned carry their payload without the
 |---|---|---|---|
 | `snap_del` | 2 | `ledger_ts` (bare value) | v1 |
 | `pruned` | 2 | `removed_count`, `oldest_remaining_ts` | v1 |
+| `initialized` | 1 | `keeper` | v1 |
+| `keeper_proposed` | 1 | `new_keeper` | v1 |
+| `keeper_changed` | 1 | `new_keeper` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
+| `pool_add` | 1 | `pool` (bare value) | v1 |
+| `pool_remove` | 1 | `pool` (bare value) | v1 |
 
 ### `v2_to_v3_migration`
 

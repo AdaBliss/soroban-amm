@@ -37137,6 +37137,39 @@
     "twap_consumer": [
       {
         "function_v0": {
+          "doc": "Replace this contract's WASM. Keeper-only; stored state is preserved.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type_": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Permissionless sweep across all tracked pools, removing up to `max_to_remove_per_pool`\\neligible snapshots per pool. Fault-isolated so one pool cannot abort the sweep.",
           "inputs": [
             {
@@ -37198,6 +37231,12 @@
                 "doc": "Typed tracked-pool list (`Vec<TrackedPool>`), replacing the untyped\\n`TrackedPoolsPersistent` (#964).",
                 "name": "TrackedPools"
               }
+            },
+            {
+              "void_v0": {
+                "doc": "Nominee of a two-step keeper rotation; absent when none is pending.",
+                "name": "PendingKeeper"
+              }
             }
           ],
           "doc": "",
@@ -37226,7 +37265,7 @@
       },
       {
         "function_v0": {
-          "doc": "",
+          "doc": "One-shot setup that records the keeper and emits `initialized`.\\n\\nDeliberately does not call `keeper.require_auth()`: an attacker would\\nsimply authorize their own address, and a contract-address keeper\\ncannot sign for itself. Deployers must read `get_keeper` back right\\nafter deployment (`scripts/deploy/twap_consumer.sh` does) and redeploy\\nif it is not the intended address.",
           "inputs": [
             {
               "doc": "",
@@ -37250,6 +37289,22 @@
                 }
               }
             }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Whether `pool` is currently tracked.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            }
+          ],
+          "name": "is_tracked",
+          "outputs": [
+            "bool"
           ]
         }
       },
@@ -37414,6 +37469,31 @@
               "doc": "",
               "name": "PoolNotRegistered",
               "value": 16
+            },
+            {
+              "doc": "Registering one more pool (explicitly through `add_tracked_pool`, or\\nimplicitly through a first `save_snapshot` / `save_cl_snapshot`) would\\npush the tracked set past `TwapConsumer::MAX_TRACKED_POOLS`. Storage is\\nleft unchanged.",
+              "name": "TooManyTrackedPools",
+              "value": 17
+            },
+            {
+              "doc": "`remove_tracked_pool` was called with a pool that is not tracked.",
+              "name": "NotTracked",
+              "value": 18
+            },
+            {
+              "doc": "`get_twap_batch` was called with more than\\n`TwapConsumer::MAX_TRACKED_POOLS` pools.",
+              "name": "TooManyPools",
+              "value": 19
+            },
+            {
+              "doc": "`accept_keeper` was called without a pending keeper proposal.",
+              "name": "NoPendingKeeper",
+              "value": 20
+            },
+            {
+              "doc": "`accept_keeper` was called by an address other than the pending keeper.",
+              "name": "WrongPendingKeeper",
+              "value": 21
             }
           ],
           "doc": "",
@@ -37423,7 +37503,7 @@
       },
       {
         "function_v0": {
-          "doc": "TWAP for every tracked pool, dispatched by pool type: `get_twap_price`\\nfor `Amm` pools and `get_cl_twap` for `Cl` pools. Each entry carries\\nits pool type because the two report different quantities (see\\n`TwapEntry`).\\n\\nReturns the first error encountered, like `twal_consumer::get_twal_all`.\\nA pool that does not implement the interface its type implies yields\\n`CrossContractCallFailed` rather than a host trap (#964).",
+          "doc": "TWAP for every tracked pool, dispatched by pool type: `get_twap_price`\\nfor `Amm` pools and `get_cl_twap` for `Cl` pools. Each entry carries\\nits pool type because the two report different quantities (see\\n`TwapEntry`).\\n\\nReturns the first error encountered, like `twal_consumer::get_twal_all`,\\nso one bad pool fails the whole call. Prefer `get_twap_all_safe`,\\nwhich reports a result or an error per pool and never aborts. A pool\\nthat does not implement the interface its type implies yields\\n`CrossContractCallFailed` rather than a host trap (#964).",
           "inputs": [
             {
               "doc": "",
@@ -37476,6 +37556,35 @@
           ],
           "lib": "",
           "name": "TwapResult"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Complete a rotation started by `propose_keeper`. The pending address\\nmust sign; once it has, the old keeper loses every keeper right.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_keeper",
+              "type_": "address"
+            }
+          ],
+          "name": "accept_keeper",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       {
@@ -37679,6 +37788,59 @@
       },
       {
         "function_v0": {
+          "doc": "Fault-isolated read over a caller-chosen set of pools, so a consumer can\\nread just the pools it cares about without depending on the global\\ntracked set. The type of each pool is supplied explicitly because an\\narbitrary address has no recorded type. At most `MAX_TRACKED_POOLS`\\npools, else `TooManyPools`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pools",
+              "type_": {
+                "vec": {
+                  "element_type": {
+                    "tuple": {
+                      "value_types": [
+                        "address",
+                        {
+                          "udt": {
+                            "name": "PoolType"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "doc": "",
+              "name": "window_seconds",
+              "type_": "u64"
+            }
+          ],
+          "name": "get_twap_batch",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "vec": {
+                    "element_type": {
+                      "udt": {
+                        "name": "TwapSafeEntry"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "",
           "inputs": [
             {
@@ -37702,6 +37864,35 @@
                   }
                 },
                 "ok_type": "i128"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Nominate a keeper successor. Keeper-only; the nominee must separately\\nauthorize `accept_keeper`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_keeper",
+              "type_": "address"
+            }
+          ],
+          "name": "propose_keeper",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
               }
             }
           ]
@@ -37850,6 +38041,82 @@
         }
       },
       {
+        "udt_struct_v0": {
+          "doc": "One pool's result from a fault-isolated batch TWAP read.\\n\\n`get_twap_all_safe` and `get_twap_batch` return exactly one entry per pool\\nqueried, whether or not that pool's read succeeded, so one dead, empty or\\npanicking pool can never take down the rest of the batch.",
+          "fields": [
+            {
+              "doc": "The `TwapError` discriminant that caused the pool to be skipped when\\n`ok == false`; `0` when `ok == true`.",
+              "name": "error_code",
+              "type_": "u32"
+            },
+            {
+              "doc": "",
+              "name": "ok",
+              "type_": "bool"
+            },
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "pool_type",
+              "type_": {
+                "udt": {
+                  "name": "PoolType"
+                }
+              }
+            },
+            {
+              "doc": "Same quantity as [`TwapEntry::twap`]; `0` when `ok == false`.",
+              "name": "twap",
+              "type_": "i128"
+            }
+          ],
+          "lib": "",
+          "name": "TwapSafeEntry"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Adds `pool` to the tracked set as `pool_type`. Keeper-only and\\nidempotent (re-adding with the same type is a no-op that emits nothing;\\nre-adding with the other type corrects it). Rejects growth past\\n`MAX_TRACKED_POOLS` with `TooManyTrackedPools`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            },
+            {
+              "doc": "",
+              "name": "pool_type",
+              "type_": {
+                "udt": {
+                  "name": "PoolType"
+                }
+              }
+            }
+          ],
+          "name": "add_tracked_pool",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
         "function_v0": {
           "doc": "",
           "inputs": [
@@ -37887,6 +38154,30 @@
             {
               "vec": {
                 "element_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Fault-isolated version of `get_twap_all`: exactly one\\n[`TwapSafeEntry`] per tracked pool. A pool with too little history, a\\nzero elapsed time, a non-contract address or a panicking oracle yields\\n`ok: false` with its `TwapError` code in that slot and does not affect\\nthe others.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "window_seconds",
+              "type_": "u64"
+            }
+          ],
+          "name": "get_twap_all_safe",
+          "outputs": [
+            {
+              "vec": {
+                "element_type": {
+                  "udt": {
+                    "name": "TwapSafeEntry"
+                  }
+                }
               }
             }
           ]
@@ -37947,6 +38238,20 @@
       },
       {
         "function_v0": {
+          "doc": "The pending keeper nominee, or `None` when no rotation is in flight.",
+          "inputs": [],
+          "name": "get_pending_keeper",
+          "outputs": [
+            {
+              "option": {
+                "value_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Returns the number of snapshots retained for `pool`.",
           "inputs": [
             {
@@ -37958,6 +38263,35 @@
           "name": "get_snapshot_count",
           "outputs": [
             "u32"
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Removes `pool` from the tracked set, keeping the order of the rest.\\nKeeper-only; `NotTracked` if it was never tracked. The pool's snapshots\\nare kept, so `get_twap_price` / `get_cl_twap` still read it; a later\\n`save_snapshot` tracks it again.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            }
+          ],
+          "name": "remove_tracked_pool",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwapError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
           ]
         }
       },

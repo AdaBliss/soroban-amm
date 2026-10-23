@@ -2443,6 +2443,66 @@
               "oldest_remaining_ts"
             ]
           }
+        ],
+        "initialized": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "keeper"
+            ]
+          }
+        ],
+        "keeper_proposed": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_keeper"
+            ]
+          }
+        ],
+        "keeper_changed": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_keeper"
+            ]
+          }
+        ],
+        "upgraded": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_wasm_hash"
+            ]
+          }
+        ],
+        "pool_add": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "scalar",
+            "fields": [
+              "pool"
+            ]
+          }
+        ],
+        "pool_remove": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "scalar",
+            "fields": [
+              "pool"
+            ]
+          }
         ]
       }
     },

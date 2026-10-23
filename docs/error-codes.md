@@ -614,6 +614,11 @@ Defined in [contracts/twap_consumer/src/lib.rs](../contracts/twap_consumer/src/l
 | 14 | `CrossContractCallFailed` | A call into a pool's oracle failed: the pool does not implement the interface its tracked type implies (`get_price_cumulative` for `Amm`, `get_tick_cumulative` for `Cl`), the address is not a contract, or the callee panicked. Returned by the snapshot and TWAP reads, including `get_twap_all`, instead of a host trap (#964). | Check the pool address and type with `get_tracked_pools_typed`. A legacy entry that is really a CL pool is re-typed by calling `save_cl_snapshot` for it. |
 | 15 | `SnapshotRateLimited` | A snapshot was saved for a pool less than `MinSnapshotInterval` seconds (300 by default) after its previous snapshot. | Wait until the minimum snapshot interval has elapsed before saving another snapshot. |
 | 16 | `PoolNotRegistered` | The pool is not registered with the factory (no factory is configured, or the factory has no token pair for it), so a snapshot was refused. | Register the pool through the factory, or pass a pool the factory created. |
+| 17 | `TooManyTrackedPools` | `add_tracked_pool`, or the implicit registration inside `save_snapshot` / `save_cl_snapshot`, would grow the tracked set past `MAX_TRACKED_POOLS` (100). Storage is left unchanged. | `remove_tracked_pool` a stale pool first, or snapshot only pools you need. |
+| 18 | `NotTracked` | `remove_tracked_pool` was called with a pool that is not currently tracked. | Check `is_tracked` before removing. |
+| 19 | `TooManyPools` | `get_twap_batch` was called with more pools than `MAX_TRACKED_POOLS`. | Split the request into smaller batches. |
+| 20 | `NoPendingKeeper` | `accept_keeper` was called while no `propose_keeper` nomination is pending. | Have the current keeper call `propose_keeper` first. |
+| 21 | `WrongPendingKeeper` | `accept_keeper` was called with an address other than the pending keeper. | Sign and call `accept_keeper` as the nominated address. |
 
 ---
 
@@ -623,6 +628,12 @@ When `stellar-sdk-rs` (or the Soroban RPC) returns a failed invocation, the
 result contains an XDR `ScError` with kind `Contract` and a `code` field. Map
 the code to the table above using the contract address to identify which enum
 applies.
+
+`get_twap_all_safe` and `get_twap_batch` never return an `Err` for a single bad
+pool — they return a `TwapSafeEntry` with `ok: false` and `error_code` set to one
+of the codes above instead, so a single dead pool cannot take down a batch
+read. `get_twap_all` is kept on the ABI for existing callers and still
+surfaces the first such code as a typed `Err`.
 
 ```rust
 // Pseudocode — adapt to your stellar-sdk-rs version

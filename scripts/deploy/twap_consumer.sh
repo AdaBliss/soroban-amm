@@ -41,23 +41,28 @@ deploy_twap_consumer() {
     else
       CURRENT_STEP="initialize twap_consumer"
       log "initializing twap_consumer keeper=$ADMIN_ADDRESS"
-      if ! invoke "$TWAP_CONSUMER_CONTRACT_ID" initialize --keeper "$ADMIN_ADDRESS" >/dev/null 2>&1; then
-        if invoke_read "$TWAP_CONSUMER_CONTRACT_ID" get_keeper 2>/dev/null | grep -q "$ADMIN_ADDRESS"; then
-          log "twap_consumer already initialized"
-        else
-          warn "failed to initialize twap_consumer"
-        fi
-      else
+      if invoke "$TWAP_CONSUMER_CONTRACT_ID" initialize --keeper "$ADMIN_ADDRESS" >/dev/null 2>&1; then
         log "twap_consumer initialized"
+      elif invoke_read "$TWAP_CONSUMER_CONTRACT_ID" get_keeper >/dev/null 2>&1; then
+        # A previous run initialized it but died before persisting the marker.
+        # The verification below decides whether its keeper is the intended one.
+        log "twap_consumer already initialized"
+      else
+        die "failed to initialize twap_consumer at $TWAP_CONSUMER_CONTRACT_ID"
       fi
       persist_var "TWAP_CONSUMER_INITIALIZED" "1"
     fi
   fi
 
   CURRENT_STEP="verify twap_consumer"
-  if invoke_read "$TWAP_CONSUMER_CONTRACT_ID" get_keeper >/dev/null 2>/dev/null; then
-    log "verified twap_consumer keeper"
-  else
-    warn "twap_consumer verification warning"
-  fi
+  verify_twap_consumer "$TWAP_CONSUMER_CONTRACT_ID" "$ADMIN_ADDRESS"
+}
+
+# verify_twap_consumer ID EXPECTED_KEEPER
+# `initialize` takes no require_auth (an attacker would just authorize their own
+# address, and a contract keeper cannot sign for itself), so whoever calls it
+# first becomes the keeper. Read the stored keeper back and abort the deploy on
+# any difference instead of carrying on with a hijacked instance.
+verify_twap_consumer() {
+  verify_contract_admin twap_consumer "$1" "$2" get_keeper
 }
