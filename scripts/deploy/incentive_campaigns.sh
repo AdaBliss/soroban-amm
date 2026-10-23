@@ -61,7 +61,12 @@ deploy_incentive_campaigns() {
   fi
 
   CURRENT_STEP="verify incentive_campaigns"
-  if invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" get_next_campaign_id >/dev/null 2>/dev/null || invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" list_campaigns >/dev/null 2>/dev/null; then
+  local ver paused
+  ver=$(invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" version 2>/dev/null || echo "")
+  paused=$(invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" is_paused 2>/dev/null || echo "")
+  if (invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" get_next_campaign_id >/dev/null 2>/dev/null || invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" list_campaigns >/dev/null 2>/dev/null) && [[ -n "$ver" ]] && [[ -n "$paused" ]]; then
+    log "verified incentive_campaigns liveness (version=$ver is_paused=$paused)"
+  elif invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" get_next_campaign_id >/dev/null 2>/dev/null || invoke_read "$INCENTIVE_CAMPAIGNS_CONTRACT_ID" list_campaigns >/dev/null 2>/dev/null; then
     log "verified incentive_campaigns liveness"
   else
     warn "incentive_campaigns verification: read failed"

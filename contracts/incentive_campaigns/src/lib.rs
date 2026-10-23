@@ -57,11 +57,70 @@
 //!
 //! Campaigns that existed before the upgrade have no stake marker and keep
 //! running under the old live-balance rules (see `docs/incentive-campaigns.md`).
+//!
+//! # Pause policy
+//!
+//! Governance can pause contract activity with `pause` (and resume with `unpause`).
+//! While paused, `create_campaign`, `set_campaign_rate` and `claim_rewards` are
+//! blocked with `IncentiveError::Paused`. All views, `stake`, `unstake`, and
+//! `recover_leftover_funds` (after campaign ends) remain functional.
+//! Accrual is unaffected by a pause: rewards accrue strictly by ledger time, so
+//! claims after unpause pay exactly what they would have paid without the pause.
+//!
+//! | Function | While paused | Reason |
+//! |---|---|---|
+//! | `initialize` | allowed | One-shot setup. |
+//! | `propose_governance` | allowed | Governance rotation. |
+//! | `accept_governance` | allowed | Governance rotation. |
+//! | `get_governance` | allowed | View. |
+//! | `get_pending_governance` | allowed | View. |
+//! | `create_campaign` | blocked (`Paused`) | Creates a new campaign and takes funding. |
+//! | `set_campaign_rate` | blocked (`Paused`) | Modifies campaign reward rate. |
+//! | `recover_leftover_funds` | allowed | Post-campaign leftover recovery. |
+//! | `stake` | allowed | LP position management. |
+//! | `unstake` | allowed | LP position exit; stakers must always be able to withdraw principal. |
+//! | `claim_rewards` | blocked (`Paused`) | Reward payout. |
+//! | `get_stake` | allowed | View. |
+//! | `get_total_staked` | allowed | View. |
+//! | `uses_staking` | allowed | View. |
+//! | `get_pending_rewards` | allowed | View. |
+//! | `get_campaign` | allowed | View. |
+//! | `get_campaign_accrual` | allowed | View. |
+//! | `list_campaigns` | allowed | View. |
+//! | `get_campaigns` | allowed | View. |
+//! | `get_distribution_record` | allowed | View. |
+//! | `get_active_campaigns` | allowed | View. |
+//! | `get_active_campaigns_paged` | allowed | View. |
+//! | `get_campaign_count` | allowed | View. |
+//! | `list_campaigns_paginated` | allowed | View. |
+//! | `get_campaigns_paginated` | allowed | View. |
+//! | `get_active_campaigns_paginated` | allowed | View. |
+//! | `get_campaigns_by_creator` | allowed | View. |
+//! | `is_campaign_active` | allowed | View. |
+//! | `get_distribution_count` | allowed | View. |
+//! | `list_distribution_records` | allowed | View. |
+//! | `get_claim_history` | allowed | View. |
+//! | `pause` | allowed | Governance control. |
+//! | `unpause` | allowed | Governance control. |
+//! | `is_paused` | allowed | View. |
+//! | `upgrade` | allowed | Governance control. |
+//! | `version` | allowed | View. |
 
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype,
-    token::Client as TokenClient, Address, Env, Symbol, Vec,
+    token::Client as TokenClient, Address, BytesN, Env, Symbol, Vec,
 };
+
+/// Contract build version returned by `version()`. Bump with each release so
+/// integrators (and the deploy verification) can tell which build they talk
+/// to, including after an in-place `upgrade`.
+pub const CONTRACT_VERSION: u32 = 1;
+
+#[cfg(any(test, feature = "testutils"))]
+pub const WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../target/wasm32v1-none/release/incentive_campaigns.wasm"
+));
 
 /// Typed failures for every caller-triggerable precondition in this contract.
 ///
@@ -540,6 +599,59 @@ impl IncentiveCampaigns {
         Ok(())
     }
 
+    /// Halt contract activity (campaign creation, rate updates, reward claims). Governance only.
+    pub fn pause(env: Env, caller: Address) -> Result<(), IncentiveError> {
+        extend_instance_ttl(&env);
+        caller.require_auth();
+        Self::require_governance(&env, &caller)?;
+        env.storage().instance().set(&DataKey::Paused, &true);
+        soroban_amm_sdk::emit_versioned_event!(&env, (Symbol::new(&env, "paused"),), (caller,));
+        Ok(())
+    }
+
+    /// Resume contract activity. Governance only.
+    pub fn unpause(env: Env, caller: Address) -> Result<(), IncentiveError> {
+        extend_instance_ttl(&env);
+        caller.require_auth();
+        Self::require_governance(&env, &caller)?;
+        env.storage().instance().set(&DataKey::Paused, &false);
+        soroban_amm_sdk::emit_versioned_event!(&env, (Symbol::new(&env, "unpaused"),), (caller,));
+        Ok(())
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Replace this contract's WASM with a new version. Governance only.
+    pub fn upgrade(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), IncentiveError> {
+        extend_instance_ttl(&env);
+        caller.require_auth();
+        Self::require_governance(&env, &caller)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "upgraded"),),
+            (new_wasm_hash,)
+        );
+        Ok(())
+    }
+
+    /// Return the build version of this contract (`CONTRACT_VERSION`).
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+
     /// Accept a pending governance nomination. Nominee only.
     pub fn accept_governance(env: Env, new_governance: Address) -> Result<(), IncentiveError> {
         extend_instance_ttl(&env);
@@ -758,6 +870,7 @@ impl IncentiveCampaigns {
         campaign_id: u64,
         new_rate: i128,
     ) -> Result<(), IncentiveError> {
+        Self::ensure_not_paused(&env)?;
         extend_instance_ttl(&env);
         caller.require_auth();
         Self::require_governance(&env, &caller)?;
@@ -1048,6 +1161,7 @@ impl IncentiveCampaigns {
         provider: Address,
         campaign_id: u64,
     ) -> Result<i128, IncentiveError> {
+        Self::ensure_not_paused(&env)?;
         extend_instance_ttl(&env);
         provider.require_auth();
 
@@ -1678,6 +1792,18 @@ impl IncentiveCampaigns {
             }
         }
         page
+    }
+
+    fn ensure_not_paused(env: &Env) -> Result<(), IncentiveError> {
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if paused {
+            return Err(IncentiveError::Paused);
+        }
+        Ok(())
     }
 
     fn read_governance(env: &Env) -> Result<Address, IncentiveError> {
@@ -4807,6 +4933,406 @@ mod tests {
 
         assert_eq!(client.claim_rewards(&provider, &id), 0);
         set_time(&env, 6_000);
+        assert!(client.claim_rewards(&provider, &id) > 0);
+    }
+
+    // ── Pause, Upgrade, and Policy Table Tests ─────────────────────────────────
+
+    #[test]
+    fn test_pause_policy_table_covers_every_public_function() {
+        use std::collections::BTreeSet;
+        use std::string::String;
+
+        let source = include_str!("lib.rs");
+
+        // 1. Extract table functions from module doc
+        let mut table_functions = BTreeSet::new();
+        let mut in_table = false;
+        for line in source.lines() {
+            if line.contains("# Pause policy") {
+                in_table = true;
+                continue;
+            }
+            if in_table {
+                if line.starts_with("#![no_std]") || line.starts_with("use ") {
+                    break;
+                }
+                let trimmed = line.trim();
+                if trimmed.starts_with("//! | `") {
+                    let rest = &trimmed["//! | `".len()..];
+                    if let Some(end_idx) = rest.find('`') {
+                        let fn_name = &rest[..end_idx];
+                        table_functions.insert(String::from(fn_name));
+                    }
+                }
+            }
+        }
+
+        // 2. Extract public functions from `impl IncentiveCampaigns`
+        let mut contract_functions = BTreeSet::new();
+        let mut in_impl = false;
+        for line in source.lines() {
+            if line.contains("impl IncentiveCampaigns {") {
+                in_impl = true;
+                continue;
+            }
+            if in_impl {
+                if line.starts_with("}") {
+                    break;
+                }
+                let trimmed = line.trim();
+                if trimmed.starts_with("pub fn ") {
+                    let rest = &trimmed["pub fn ".len()..];
+                    if let Some(paren_idx) = rest.find('(') {
+                        let fn_name = rest[..paren_idx].trim();
+                        contract_functions.insert(String::from(fn_name));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            !contract_functions.is_empty(),
+            "Must have found public functions in IncentiveCampaigns"
+        );
+        assert!(
+            !table_functions.is_empty(),
+            "Must have found functions in pause policy table"
+        );
+
+        let missing_from_table: std::vec::Vec<_> =
+            contract_functions.difference(&table_functions).collect();
+        let extra_in_table: std::vec::Vec<_> =
+            table_functions.difference(&contract_functions).collect();
+
+        assert!(
+            missing_from_table.is_empty(),
+            "Public functions missing from the pause policy table: {:?}",
+            missing_from_table
+        );
+        assert!(
+            extra_in_table.is_empty(),
+            "Extra functions in pause policy table not in contract: {:?}",
+            extra_in_table
+        );
+    }
+
+    #[test]
+    fn test_pause_unpause_governance_only_and_emits_events() {
+        let (env, incentives, _pool, _lp, _reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let stranger = Address::generate(&env);
+
+        assert!(!client.is_paused());
+
+        // Stranger cannot pause
+        let res = client.try_pause(&stranger);
+        assert_eq!(res, Err(Ok(IncentiveError::Unauthorized)));
+        assert!(!client.is_paused());
+
+        // Governance can pause
+        client.pause(&gov);
+        assert!(client.is_paused());
+
+        let (version, (paused_by,)): (u32, (Address,)) =
+            last_versioned_event(&env, &incentives, "paused");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(paused_by, gov);
+
+        // Stranger cannot unpause
+        let res = client.try_unpause(&stranger);
+        assert_eq!(res, Err(Ok(IncentiveError::Unauthorized)));
+        assert!(client.is_paused());
+
+        // Governance can unpause
+        client.unpause(&gov);
+        assert!(!client.is_paused());
+
+        let (version, (unpaused_by,)): (u32, (Address,)) =
+            last_versioned_event(&env, &incentives, "unpaused");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(unpaused_by, gov);
+    }
+
+    #[test]
+    fn test_create_campaign_blocked_while_paused() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        client.pause(&gov);
+
+        let res =
+            client.try_create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+        assert_eq!(res, Err(Ok(IncentiveError::Paused)));
+
+        client.unpause(&gov);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+        assert_eq!(id, 1);
+    }
+
+    #[test]
+    fn test_set_campaign_rate_blocked_while_paused() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+
+        client.pause(&gov);
+
+        let res = client.try_set_campaign_rate(&gov, &id, &150);
+        assert_eq!(res, Err(Ok(IncentiveError::Paused)));
+
+        client.unpause(&gov);
+        client.set_campaign_rate(&gov, &id, &150);
+        assert_eq!(client.get_campaign(&id).reward_rate, 150);
+    }
+
+    #[test]
+    fn test_claim_rewards_blocked_while_paused() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+
+        client.stake(&provider, &id, &500_000);
+        set_time(&env, 2_000);
+
+        client.pause(&gov);
+
+        let res = client.try_claim_rewards(&provider, &id);
+        assert_eq!(res, Err(Ok(IncentiveError::Paused)));
+
+        client.unpause(&gov);
+        let claimed = client.claim_rewards(&provider, &id);
+        assert!(claimed > 0);
+    }
+
+    #[test]
+    fn test_accrual_unaffected_by_pause_twin_campaign_comparison() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        // Campaign 1: will be paused during t=2_000..3_000
+        let id1 =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+
+        // Provider stakes in Campaign 1
+        client.stake(&provider, &id1, &500_000);
+
+        // Advance to 2_000 and pause
+        set_time(&env, 2_000);
+        client.pause(&gov);
+
+        // While paused, attempt claim and verify failure
+        assert_eq!(
+            client.try_claim_rewards(&provider, &id1),
+            Err(Ok(IncentiveError::Paused))
+        );
+
+        // Advance to 3_000 while still paused
+        set_time(&env, 3_000);
+
+        // Unpause at 3_000
+        client.unpause(&gov);
+
+        // Advance to 4_000 and claim
+        set_time(&env, 4_000);
+        let payout1 = client.claim_rewards(&provider, &id1);
+
+        // Now setup twin campaign under identical ledger timeline but without pause
+        // (starts at 10_000, provider stakes at 10_000, claims at 13_000, identical 3_000s elapsed)
+        let id2 = client.create_campaign(
+            &gov, &pool, &lp, &reward, &10_000, &15_000, &100, &1_000_000,
+        );
+        set_time(&env, 10_000);
+        client.stake(&provider, &id2, &500_000);
+        set_time(&env, 13_000); // 3_000s elapsed, exactly matching t=1_000 to t=4_000 in id1
+        let payout2 = client.claim_rewards(&provider, &id2);
+
+        assert_eq!(
+            payout1, payout2,
+            "Claimant's accrued rewards after unpause must match an unpaused twin campaign advanced by the same ledgers"
+        );
+        assert_eq!(payout1, 300_000); // 100 reward/s * 3_000 s = 300_000
+    }
+
+    #[test]
+    fn test_recover_leftover_funds_works_while_paused() {
+        let (env, incentives, pool, lp, reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let treasury = Address::generate(&env);
+
+        let id = client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &2_000, &100, &500_000);
+
+        set_time(&env, 3_000); // Campaign ended
+        client.pause(&gov);
+
+        let recovered = client.recover_leftover_funds(&gov, &id, &treasury);
+        assert_eq!(recovered, 500_000);
+        assert!(!client.get_campaign(&id).active);
+    }
+
+    #[test]
+    fn test_stake_and_unstake_work_while_paused() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+
+        client.pause(&gov);
+
+        // Staking works while paused
+        client.stake(&provider, &id, &200_000);
+        assert_eq!(client.get_stake(&id, &provider), 200_000);
+        assert_eq!(client.get_total_staked(&id), 200_000);
+
+        // Unstaking works while paused (principal withdrawal is never held hostage)
+        client.unstake(&provider, &id, &100_000);
+        assert_eq!(client.get_stake(&id, &provider), 100_000);
+        assert_eq!(client.get_total_staked(&id), 100_000);
+    }
+
+    #[test]
+    fn test_views_work_while_paused() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+        client.stake(&provider, &id, &200_000);
+
+        client.pause(&gov);
+
+        assert!(client.is_paused());
+        assert_eq!(client.version(), CONTRACT_VERSION);
+        assert_eq!(client.get_governance(), gov.clone());
+        assert_eq!(client.get_pending_governance(), None);
+        assert_eq!(client.get_stake(&id, &provider), 200_000);
+        assert_eq!(client.get_total_staked(&id), 200_000);
+        assert!(client.uses_staking(&id));
+        assert_eq!(client.get_campaign_count(), 1);
+        assert_eq!(client.list_campaigns().len(), 1);
+        assert_eq!(client.get_campaigns(&0, &10).len(), 1);
+        assert_eq!(client.list_campaigns_paginated(&0, &10).len(), 1);
+        assert_eq!(client.get_campaigns_paginated(&0, &10).len(), 1);
+        assert_eq!(client.get_campaigns_by_creator(&gov, &0, &10).len(), 1);
+        assert!(client.is_campaign_active(&id));
+        assert_eq!(client.get_distribution_count(&id), 0);
+        assert_eq!(client.list_distribution_records(&id, &0, &10).len(), 0);
+        assert_eq!(client.get_claim_history(&provider, &0, &10).len(), 0);
+        let camp = client.get_campaign(&id);
+        assert_eq!(camp.id, id);
+        let accrual = client.get_campaign_accrual(&id);
+        assert_eq!(accrual.1, 1_000);
+    }
+
+    #[test]
+    fn test_governance_rotation_works_while_paused() {
+        let (env, incentives, _pool, _lp, _reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let new_gov = Address::generate(&env);
+
+        client.pause(&gov);
+
+        client.propose_governance(&gov, &new_gov);
+        assert_eq!(client.get_pending_governance(), Some(new_gov.clone()));
+
+        client.accept_governance(&new_gov);
+        assert_eq!(client.get_governance(), new_gov.clone());
+        assert_eq!(client.get_pending_governance(), None);
+
+        // New governance can unpause
+        client.unpause(&new_gov);
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_version_view() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let gov = Address::generate(&env);
+        let incentives = env.register_contract(None, IncentiveCampaigns);
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        client.initialize(&gov);
+
+        assert_eq!(client.version(), CONTRACT_VERSION);
+        assert_eq!(client.version(), 1);
+    }
+
+    #[test]
+    fn test_upgrade_requires_governance() {
+        let (env, incentives, _pool, _lp, _reward, _provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let stranger = Address::generate(&env);
+        let wasm_hash = env.deployer().upload_contract_wasm(WASM);
+
+        let res = client.try_upgrade(&stranger, &wasm_hash);
+        assert_eq!(res, Err(Ok(IncentiveError::Unauthorized)));
+
+        // Governance call succeeds
+        client.upgrade(&gov, &wasm_hash);
+    }
+
+    #[test]
+    fn test_upgrade_preserves_campaigns_and_distribution_records_and_emits_upgraded() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+
+        let id =
+            client.create_campaign(&gov, &pool, &lp, &reward, &1_000, &5_000, &100, &1_000_000);
+        client.stake(&provider, &id, &300_000);
+        set_time(&env, 2_000);
+        let claimed = client.claim_rewards(&provider, &id);
+        assert_eq!(claimed, 100_000);
+        assert_eq!(client.get_distribution_count(&id), 1);
+
+        client.pause(&gov);
+
+        // Upload same WASM and upgrade
+        let wasm_hash = env.deployer().upload_contract_wasm(WASM);
+        client.upgrade(&gov, &wasm_hash);
+
+        // Verify upgraded event emitted
+        let (version, (event_hash,)): (u32, (BytesN<32>,)) =
+            last_versioned_event(&env, &incentives, "upgraded");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(event_hash, wasm_hash);
+
+        // Verify state is preserved: campaign, distribution record, stake, pause status
+        assert!(client.is_paused());
+        assert_eq!(client.version(), CONTRACT_VERSION);
+        let camp = client.get_campaign(&id);
+        assert_eq!(camp.total_distributed, 100_000);
+        assert_eq!(client.get_stake(&id, &provider), 300_000);
+        assert_eq!(client.get_total_staked(&id), 300_000);
+        assert_eq!(client.get_distribution_count(&id), 1);
+        let rec = client.get_distribution_record(&1);
+        assert_eq!(rec.amount, 100_000);
+        assert_eq!(rec.provider, provider);
+
+        // Unpause and further operations work seamlessly
+        client.unpause(&gov);
+        set_time(&env, 3_000);
+        let claimed_next = client.claim_rewards(&provider, &id);
+        assert_eq!(claimed_next, 100_000);
+        assert_eq!(client.get_distribution_count(&id), 2);
+    }
+
+    #[test]
+    fn test_legacy_campaign_claim_blocked_while_paused() {
+        let (env, incentives, pool, lp, reward, provider, gov) = setup();
+        let client = IncentiveCampaignsClient::new(&env, &incentives);
+        let id = std_campaign(&client, &gov, &pool, &lp, &reward);
+        make_legacy(&env, &incentives, id);
+
+        assert_eq!(client.claim_rewards(&provider, &id), 0);
+        set_time(&env, 6_000);
+
+        client.pause(&gov);
+        let res = client.try_claim_rewards(&provider, &id);
+        assert_eq!(res, Err(Ok(IncentiveError::Paused)));
+
+        client.unpause(&gov);
         assert!(client.claim_rewards(&provider, &id) > 0);
     }
 }

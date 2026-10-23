@@ -1442,6 +1442,36 @@
               "total_staked"
             ]
           }
+        ],
+        "paused": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "caller"
+            ]
+          }
+        ],
+        "unpaused": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "caller"
+            ]
+          }
+        ],
+        "upgraded": [
+          {
+            "version": 1,
+            "topics": 1,
+            "shape": "tuple",
+            "fields": [
+              "new_wasm_hash"
+            ]
+          }
         ]
       }
     },
