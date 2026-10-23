@@ -93,16 +93,27 @@ pub mod collateral_swap;
 pub mod failure_modes;
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token::Client as TokenClient, Address, Bytes, Env,
+    contract, contracterror, contractimpl, contracttype, token::Client as TokenClient, Address,
+    Bytes, Env,
 };
 
-/// Storage keys for the pool address and its token pair, cached at
+/// Errors returned by the flash loan receiver contract.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ReceiverError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+}
+
+/// Storage keys for the pool address, its token pair, and owner, cached at
 /// `initialize` time.
 #[contracttype]
 enum DataKey {
     Pool,
     TokenA,
     TokenB,
+    Owner,
 }
 
 /// The main flash loan receiver contract.
@@ -114,21 +125,35 @@ pub struct FlashLoanReceiver;
 
 #[contractimpl]
 impl FlashLoanReceiver {
-    /// Initialize the receiver with the pool address.
+    /// Initialize the receiver with the pool address and owner address.
     ///
     /// This must be called before any flash loan callback. It stores the pool
-    /// address and looks up its token pair once, up front, since `get_info`
+    /// address, owner address, and looks up its token pair once, up front, since `get_info`
     /// cannot be called on the pool from inside `on_flash_loan` — the pool is
     /// still on the call stack there, and Soroban's host rejects any call
     /// back into a contract that is already executing, regardless of whether
     /// the call is a plain read.
     ///
+    /// # One-shot Initialization & Deployment-Window Caveat
+    ///
+    /// This function is one-shot: calling it a second time fails with
+    /// [`ReceiverError::AlreadyInitialized`].
+    ///
+    /// Because `initialize` does not authenticate the caller at deployment time,
+    /// deployers must verify the initialization succeeded with their intended pool
+    /// and owner addresses immediately after deployment (e.g. by reading back
+    /// contract instance storage or inspecting deployment receipt).
+    ///
     /// # Arguments
     /// - `pool`: The address of the AMM pool contract
+    /// - `owner`: The address authorized to rescue stranded funds
     ///
-    /// # Panics
-    /// None; initialization is idempotent.
-    pub fn initialize(env: Env, pool: Address) {
+    /// # Errors
+    /// Returns [`ReceiverError::AlreadyInitialized`] if already initialized.
+    pub fn initialize(env: Env, pool: Address, owner: Address) -> Result<(), ReceiverError> {
+        if env.storage().instance().has(&DataKey::Pool) {
+            return Err(ReceiverError::AlreadyInitialized);
+        }
         let info = soroban_amm_sdk::client::AmmPoolClient::new(&env, &pool).get_info();
         env.storage().instance().set(&DataKey::Pool, &pool);
         env.storage()
@@ -137,6 +162,34 @@ impl FlashLoanReceiver {
         env.storage()
             .instance()
             .set(&DataKey::TokenB, &info.token_b);
+        env.storage().instance().set(&DataKey::Owner, &owner);
+        Ok(())
+    }
+
+    /// Rescue stranded tokens from the receiver contract.
+    ///
+    /// Can only be called by the configured owner.
+    ///
+    /// # Arguments
+    /// - `token`: The address of the token to transfer
+    /// - `amount`: Amount of tokens to transfer
+    /// - `to`: Recipient address
+    ///
+    /// # Errors
+    /// Returns [`ReceiverError::NotInitialized`] if the receiver has not been initialized.
+    pub fn rescue(
+        env: Env,
+        token: Address,
+        amount: i128,
+        to: Address,
+    ) -> Result<(), ReceiverError> {
+        let owner: Address = match env.storage().instance().get(&DataKey::Owner) {
+            Some(addr) => addr,
+            None => return Err(ReceiverError::NotInitialized),
+        };
+        owner.require_auth();
+        TokenClient::new(&env, &token).transfer(&env.current_contract_address(), &to, &amount);
+        Ok(())
     }
 
     /// Handle an incoming flash loan.
@@ -174,6 +227,11 @@ impl FlashLoanReceiver {
             Some(addr) => addr,
             None => return false, // Pool not initialized
         };
+
+        // Authenticate that the direct caller is the configured pool contract.
+        // Direct calls by strangers or other contracts will fail authorization.
+        pool.require_auth();
+
         let token_a: Address = env.storage().instance().get(&DataKey::TokenA).unwrap();
         let token_b: Address = env.storage().instance().get(&DataKey::TokenB).unwrap();
         let receiver = env.current_contract_address();

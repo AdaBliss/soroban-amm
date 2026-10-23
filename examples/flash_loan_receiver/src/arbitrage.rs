@@ -51,6 +51,13 @@ pub struct ArbitrageConfig {
 
 /// Execute an arbitrage by trading borrowed tokens at a better price elsewhere.
 ///
+/// # Security Invariant
+///
+/// This strategy entry point is only intended to be called from within the verified
+/// [`crate::FlashLoanReceiver::on_flash_loan`] callback after pool caller authentication
+/// (`pool.require_auth()`). Never invoke strategy logic or transfer borrowed funds
+/// directly from unauthenticated public functions.
+///
 /// This is a skeleton implementation demonstrating the flow. A real implementation
 /// would:
 /// 1. Check if the opportunity still exists at `counter_pool`
@@ -79,17 +86,4 @@ pub fn execute_arbitrage(
     // See tests/flash_loan_test.rs for a fully worked example.
 
     Err("Arbitrage opportunity closed")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn arbitrage_profitable() {
-        // Tested in flash_loan_test.rs with real pool interaction
-    }
-
-    #[test]
-    fn arbitrage_unprofitable_aborts() {
-        // Tested in flash_loan_test.rs with real pool interaction
-    }
 }

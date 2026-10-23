@@ -42,6 +42,13 @@ pub struct CollateralSwapConfig {
 
 /// Execute a collateral swap by migrating LP position from one pool to another.
 ///
+/// # Security Invariant
+///
+/// This strategy entry point is only intended to be called from within the verified
+/// [`crate::FlashLoanReceiver::on_flash_loan`] callback after pool caller authentication
+/// (`pool.require_auth()`). Never invoke strategy logic or transfer borrowed funds
+/// directly from unauthenticated public functions.
+///
 /// This is a skeleton implementation. A real implementation would:
 /// 1. Remove liquidity from the old pool using borrowed collateral
 /// 2. Restructure the position if needed (e.g., rebalance into a new tick range)
@@ -71,17 +78,4 @@ pub fn execute_collateral_swap(
     // See tests/flash_loan_test.rs for a fully worked example.
 
     Err("Collateral swap not yet implemented")
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn collateral_swap_succeeds() {
-        // Tested in flash_loan_test.rs with real pool interaction
-    }
-
-    #[test]
-    fn collateral_swap_inadequate_liquidity() {
-        // Tested in flash_loan_test.rs with real pool interaction
-    }
 }
