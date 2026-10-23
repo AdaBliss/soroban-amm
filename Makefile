@@ -113,7 +113,11 @@ audit: ## Run a security audit of dependencies (cargo install cargo-audit if mis
 
 check: fmt lint test check-docs check-branch-protection check-storage-keys check-deploy-scripts check-test-modules size-check doc ## Run the checks CI enforces before pushing
 
-bench: ## Run hot-path benchmarks
+bench: build ## Run hot-path benchmarks against the optimized pool WASM (what CI measures)
+	@mkdir -p $(WASM_DIR)/optimized
+	@for c in amm token; do \
+		stellar contract optimize --wasm $(WASM_DIR)/$$c.wasm --wasm-out $(WASM_DIR)/optimized/$$c.wasm || exit 1; \
+	done
 	cargo run -p benches -- --check
 
 deploy: ## Deploy contracts via scripts/deploy.sh

@@ -20,6 +20,42 @@ use token::{LpToken, LpTokenClient};
 const REGRESSION_BPS: u128 = 500;
 const BASELINE_PATH: &str = "benches/baseline.json";
 
+/// Where the optimized pool WASM is looked for after `BENCH_WASM_DIR`: the directory CI
+/// writes it to, then the one `scripts/optimize_contracts.sh` writes it to.
+const OPTIMIZED_WASM_DIRS: [&str; 2] = [
+    "target/wasm32v1-none/release/optimized",
+    "optimized-artifacts",
+];
+
+/// Contracts the factory deploys from compiled WASM, so their calls pay for loading the
+/// module into the VM.
+const FACTORY_DEPLOYED_WASM: [&str; 2] = ["amm", "token"];
+
+/// Path of the optimized build of `name`, if there is one.
+fn optimized_wasm_path(name: &str) -> Option<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(dir) = std_env::var("BENCH_WASM_DIR") {
+        dirs.push(dir);
+    }
+    dirs.extend(OPTIMIZED_WASM_DIRS.iter().map(|dir| dir.to_string()));
+    dirs.into_iter()
+        .map(|dir| format!("{dir}/{name}.wasm"))
+        .find(|path| std::path::Path::new(path).is_file())
+}
+
+/// The optimized build of `name` when present, else the raw build embedded in the crate.
+///
+/// Pools made by the factory run as WASM, and the cost of a call is dominated by loading
+/// the module, which scales with its size. The raw `amm` build is over the network's
+/// 128KB contract cap and can never be deployed, so benchmarking it overstates every
+/// routing path by about 20%. The optimized build is what ships.
+fn pool_wasm(name: &str, embedded: &'static [u8]) -> Vec<u8> {
+    match optimized_wasm_path(name) {
+        Some(path) => fs::read(&path).unwrap_or_else(|err| panic!("read {path}: {err}")),
+        None => embedded.to_vec(),
+    }
+}
+
 #[derive(Clone)]
 struct Metric {
     name: String,
@@ -106,6 +142,28 @@ impl BenchFlashLoanReceiver {
 
 fn main() {
     let args: Vec<String> = std_env::args().collect();
+    let missing: Vec<&str> = FACTORY_DEPLOYED_WASM
+        .iter()
+        .copied()
+        .filter(|name| optimized_wasm_path(name).is_none())
+        .collect();
+    if !missing.is_empty() {
+        let gated = args
+            .iter()
+            .any(|arg| arg == "--check" || arg == "--write-baseline");
+        eprintln!(
+            "benches: no optimized WASM for {}. The baseline is measured against the optimized \
+             build, the one that gets deployed. Run `make bench`, or optimize them into \
+             target/wasm32v1-none/release/optimized/ (`stellar contract optimize --wasm \
+             target/wasm32v1-none/release/<name>.wasm --wasm-out \
+             target/wasm32v1-none/release/optimized/<name>.wasm`), or set BENCH_WASM_DIR.",
+            missing.join(", ")
+        );
+        if gated {
+            process::exit(2);
+        }
+        eprintln!("benches: continuing with the raw build; these numbers are not comparable with the baseline.");
+    }
     let metrics = run_all();
     let json = render_json(&metrics);
 
@@ -629,8 +687,10 @@ struct PoolChain<'a> {
 /// run in the metered VM exactly as they would on-chain.
 fn setup_factory(env: &Env) -> (FactoryClient<'_>, Address) {
     let admin = Address::generate(env);
-    let amm_hash: BytesN<32> = env.deployer().upload_contract_wasm(amm::WASM);
-    let lp_hash: BytesN<32> = env.deployer().upload_contract_wasm(token::WASM);
+    let amm_wasm = pool_wasm("amm", amm::WASM);
+    let lp_wasm = pool_wasm("token", token::WASM);
+    let amm_hash: BytesN<32> = env.deployer().upload_contract_wasm(&amm_wasm[..]);
+    let lp_hash: BytesN<32> = env.deployer().upload_contract_wasm(&lp_wasm[..]);
     let factory_addr = env.register_contract(None, Factory);
     let factory = FactoryClient::new(env, &factory_addr);
     factory.initialize(&admin, &amm_hash, &lp_hash);
@@ -707,11 +767,7 @@ fn bench_aggregator_swap_best(env: &Env) {
     let agg = setup_aggregator(env, &chain);
     let token_in = chain.tokens.get(0).unwrap();
     let token_out = chain.tokens.get(2).unwrap();
-    // This path now costs ~100.4M CPU instructions, just over the 100M
-    // per-transaction cap that `reset_default` enforces. Give it a 110M / 50MB
-    // ceiling so a further regression still aborts the run, and bring it back
-    // under the real cap, then switch this to `reset_default()` again.
-    env.budget().reset_limits(110_000_000, 50_000_000);
+    env.budget().reset_default();
     agg.swap_best(&chain.trader, &token_in, &token_out, &10_000, &0, &u64::MAX);
 }
 
