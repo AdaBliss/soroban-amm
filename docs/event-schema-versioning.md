@@ -888,7 +888,11 @@ count. Events marked unversioned carry their payload without the
 |---|---|---|---|
 | `pool_add` | 1 | `pool` (bare value) | v1 |
 | `pool_remove` | 1 | `pool` (bare value) | v1 |
-| `snapshot_deleted` | 1 | `pool`, `ledger_ts` | v1 |
+| `snapshot_deleted` | 1 | `pool`, `ledger_ts`, `liquidity` | v1 |
+| `initialized` | 1 | `keeper` | v1 |
+| `keeper_proposed` | 1 | `new_keeper` | v1 |
+| `keeper_changed` | 1 | `new_keeper` | v1 |
+| `upgraded` | 1 | `new_wasm_hash` | v1 |
 
 ### `twap_consumer`
 

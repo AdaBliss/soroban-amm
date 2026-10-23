@@ -34986,6 +34986,39 @@
     ],
     "twal_consumer": [
       {
+        "function_v0": {
+          "doc": "Replace this contract's WASM. Keeper-only; contract state is preserved.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_wasm_hash",
+              "type_": {
+                "bytes_n": {
+                  "n": 32
+                }
+              }
+            }
+          ],
+          "name": "upgrade",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwalError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
         "udt_union_v0": {
           "cases": [
             {
@@ -35016,6 +35049,12 @@
                 "type_": [
                   "address"
                 ]
+              }
+            },
+            {
+              "void_v0": {
+                "doc": "",
+                "name": "PendingKeeper"
               }
             }
           ],
@@ -35235,6 +35274,21 @@
               "doc": "Reserve multiplication or cumulative extrapolation overflowed i128.",
               "name": "ArithmeticOverflow",
               "value": 13
+            },
+            {
+              "doc": "`accept_keeper` was called without a pending keeper proposal.",
+              "name": "NoPendingKeeper",
+              "value": 14
+            },
+            {
+              "doc": "`accept_keeper` was called by an address other than the pending keeper.",
+              "name": "WrongPendingKeeper",
+              "value": 15
+            },
+            {
+              "doc": "Deleting this snapshot would remove the newest snapshot or leave fewer\\nthan two snapshots available for history reads.",
+              "name": "CannotDeleteRequiredSnapshot",
+              "value": 16
             }
           ],
           "doc": "",
@@ -35295,6 +35349,35 @@
           ],
           "lib": "",
           "name": "TwalResult"
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Accept the pending keeper proposal. The pending address must authorize\\nthe call; strangers cannot accept a transfer on its behalf.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_keeper",
+              "type_": "address"
+            }
+          ],
+          "name": "accept_keeper",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwalError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
         }
       },
       {
@@ -35468,6 +35551,35 @@
       },
       {
         "function_v0": {
+          "doc": "Propose a keeper successor. Only the current keeper may nominate one;\\nthe nominee must separately authorize `accept_keeper`.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "new_keeper",
+              "type_": "address"
+            }
+          ],
+          "name": "propose_keeper",
+          "outputs": [
+            {
+              "result": {
+                "error_type": {
+                  "udt": {
+                    "name": "TwalError"
+                  }
+                },
+                "ok_type": {
+                  "tuple": {
+                    "value_types": []
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Deletes a stored liquidity snapshot from persistent storage. Keeper-only.",
           "inputs": [
             {
@@ -35611,6 +35723,20 @@
       },
       {
         "function_v0": {
+          "doc": "Return the pending keeper nominee, or `None` when no transfer is active.",
+          "inputs": [],
+          "name": "get_pending_keeper",
+          "outputs": [
+            {
+              "option": {
+                "value_type": "address"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "function_v0": {
           "doc": "Returns the number of snapshots retained for `pool`.",
           "inputs": [
             {
@@ -35652,6 +35778,22 @@
                 "ok_type": "i128"
               }
             }
+          ]
+        }
+      },
+      {
+        "function_v0": {
+          "doc": "Return the age in seconds of the oldest retained snapshot, or zero if\\nthe pool has no retained snapshots. This is the longest history window\\ncurrently supported by stored data, independent of pool type.",
+          "inputs": [
+            {
+              "doc": "",
+              "name": "pool",
+              "type_": "address"
+            }
+          ],
+          "name": "max_servable_window",
+          "outputs": [
+            "u64"
           ]
         }
       },

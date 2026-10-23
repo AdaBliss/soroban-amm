@@ -255,7 +255,7 @@ Defined in [contracts/twal_consumer/src/lib.rs](../contracts/twal_consumer/src/l
 | 2 | `NotInitialized` | `get_keeper` (and thus keeper-gated calls) invoked before `initialize`. | Call `initialize` first. |
 | 3 | `ZeroWindow` | `window_seconds` was `0` on `get_twal_liquidity` or a batch read. | Pass a positive window. |
 | 4 | `InsufficientHistory` | The ledger has not yet advanced past `window_seconds`, so `now - window` would underflow. | Wait until `ledger_timestamp >= window_seconds`, or use a shorter window. |
-| 5 | `NoSnapshotFound` | No `save_snapshot`/`save_cl_snapshot` was recorded at exactly `now - window_seconds`. | Snapshot on a fixed cadence that lines up with the windows you intend to query. |
+| 5 | `NoSnapshotFound` | No retained snapshot exists at or before the requested window boundary. | Check `max_servable_window(pool)` and ensure the keeper continues saving snapshots. |
 | 6 | `ElapsedZero` | The pool's own timestamp did not advance between the snapshot and now (no liquidity-changing operation occurred). | Query a window in which the pool actually transacted. |
 | 7 | `TooManyTrackedPools` | `add_tracked_pool`, or implicit registration inside `save_snapshot`/`save_cl_snapshot`, would grow the tracked set past `MAX_TRACKED_POOLS` (100). | Call `remove_tracked_pool` on a stale pool first, or track fewer pools. |
 | 8 | `NotTracked` | `remove_tracked_pool` was called with a pool that is not currently tracked. | Check `is_tracked` before removing. |
@@ -264,6 +264,16 @@ Defined in [contracts/twal_consumer/src/lib.rs](../contracts/twal_consumer/src/l
 | 11 | `CrossContractCallFailed` | A pool's liquidity-oracle call failed at the host level or the callee panicked (non-contract address, buggy pool). Only ever appears as a `TwalEntry.error_code` from `get_twal_all_safe`/`get_twal_batch`, or as the `Err` from `get_twal_all` once any entry fails this way. | Investigate the specific pool with `get_twal_batch([pool], window)`; consider `remove_tracked_pool` if it is permanently dead. |
 | 12 | `MissingClAccumulator` | A CL TWAL query found a stored `LiquiditySnapshot` for the pool but no `ClAccumulator` entry, so there is no running liquidity-cumulative to extrapolate to now. | Call `save_cl_snapshot` for the pool (it writes both) before querying `get_cl_twal`. |
 | 13 | `ArithmeticOverflow` | AMM reserve multiplication or ledger-time cumulative extrapolation exceeded the signed 128-bit accounting range. | Treat the quote as unavailable and investigate the pool's reserve scale before retrying. |
+| 14 | `NoPendingKeeper` | `accept_keeper` was called when no keeper transfer is pending. | Have the current keeper call `propose_keeper` first. |
+| 15 | `WrongPendingKeeper` | `accept_keeper` was called with an address other than the pending nominee. | Have the nominated keeper call `accept_keeper`. |
+| 16 | `CannotDeleteRequiredSnapshot` | `delete_snapshot` targeted the newest snapshot or would leave fewer than two snapshots for the pool. | Delete only a non-newest snapshot when at least three are retained. |
+
+Snapshot entries have a persistent-storage TTL of 120,960 ledgers (about seven
+days at five seconds per ledger), while reads permit windows up to 90 days.
+The longer window is available only while the keeper continues refreshing
+snapshot storage. Consumers can call `max_servable_window(pool)` to get the
+age of the oldest currently retained snapshot before requesting a TWAL window;
+it returns zero when no snapshot is retained.
 
 `get_twal_all_safe` and `get_twal_batch` never return an `Err` for a single bad
 pool — they return a `TwalEntry` with `ok: false` and `error_code` set to one

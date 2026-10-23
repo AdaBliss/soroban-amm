@@ -1,6 +1,13 @@
 #![no_std]
 
 //! TWAL (time-weighted average liquidity) consumer contract.
+//!
+//! Snapshot entries share a persistent-storage TTL of [`TwalConsumer::SNAPSHOT_TTL_LEDGERS`]
+//! (about seven days at five seconds per ledger), while TWAL reads permit
+//! windows up to [`TwalConsumer::MAX_WINDOW_SECONDS`] (90 days). A keeper must
+//! continue saving snapshots to keep the history entry live; callers should
+//! use `max_servable_window` to check how much retained history is available
+//! before requesting a TWAL window.
 
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec,
@@ -66,6 +73,13 @@ pub enum TwalError {
     MissingClAccumulator = 12,
     /// Reserve multiplication or cumulative extrapolation overflowed i128.
     ArithmeticOverflow = 13,
+    /// `accept_keeper` was called without a pending keeper proposal.
+    NoPendingKeeper = 14,
+    /// `accept_keeper` was called by an address other than the pending keeper.
+    WrongPendingKeeper = 15,
+    /// Deleting this snapshot would remove the newest snapshot or leave fewer
+    /// than two snapshots available for history reads.
+    CannotDeleteRequiredSnapshot = 16,
 }
 
 #[contracttype]
@@ -88,6 +102,7 @@ pub enum DataKey {
     Snapshots(Address),
     /// Running liquidity-cumulative state for a CL pool (see `save_cl_snapshot`).
     ClAccumulator(Address),
+    PendingKeeper,
 }
 
 /// One retained snapshot as stored under [`DataKey::Snapshots`]:
@@ -174,9 +189,9 @@ impl TwalConsumer {
     /// tracked set.
     pub const MAX_TRACKED_POOLS: u32 = 100;
 
-    /// Ceiling on `window_seconds` for any TWAL read (90 days). Bounds how
-    /// far back a snapshot lookup can reach and keeps a single call's cost
-    /// predictable regardless of caller-supplied input.
+    /// Ceiling on `window_seconds` for any TWAL read (90 days). Snapshot
+    /// storage has a roughly seven-day TTL, so this ceiling is only servable
+    /// while the keeper continues refreshing the pool's snapshot entry.
     pub const MAX_WINDOW_SECONDS: u64 = 7_776_000;
 
     /// Ceiling on snapshots retained per pool. All of a pool's snapshots
@@ -214,6 +229,70 @@ impl TwalConsumer {
             return Err(TwalError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Keeper, &keeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "initialized"),),
+            (keeper,)
+        );
+        Ok(())
+    }
+
+    /// Propose a keeper successor. Only the current keeper may nominate one;
+    /// the nominee must separately authorize `accept_keeper`.
+    pub fn propose_keeper(env: Env, new_keeper: Address) -> Result<(), TwalError> {
+        Self::extend_ttl(&env);
+        Self::require_keeper(&env)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingKeeper, &new_keeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "keeper_proposed"),),
+            (new_keeper,)
+        );
+        Ok(())
+    }
+
+    /// Accept the pending keeper proposal. The pending address must authorize
+    /// the call; strangers cannot accept a transfer on its behalf.
+    pub fn accept_keeper(env: Env, new_keeper: Address) -> Result<(), TwalError> {
+        Self::extend_ttl(&env);
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingKeeper)
+            .ok_or(TwalError::NoPendingKeeper)?;
+        if new_keeper != pending {
+            return Err(TwalError::WrongPendingKeeper);
+        }
+        new_keeper.require_auth();
+        env.storage().instance().set(&DataKey::Keeper, &new_keeper);
+        env.storage().instance().remove(&DataKey::PendingKeeper);
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "keeper_changed"),),
+            (new_keeper,)
+        );
+        Ok(())
+    }
+
+    /// Return the pending keeper nominee, or `None` when no transfer is active.
+    pub fn get_pending_keeper(env: Env) -> Option<Address> {
+        Self::extend_ttl(&env);
+        env.storage().instance().get(&DataKey::PendingKeeper)
+    }
+
+    /// Replace this contract's WASM. Keeper-only; contract state is preserved.
+    pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), TwalError> {
+        Self::extend_ttl(&env);
+        Self::require_keeper(&env)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        soroban_amm_sdk::emit_versioned_event!(
+            &env,
+            (Symbol::new(&env, "upgraded"),),
+            (new_wasm_hash,)
+        );
         Ok(())
     }
 
@@ -387,7 +466,20 @@ impl TwalConsumer {
 
     /// Returns the number of snapshots retained for `pool`.
     pub fn get_snapshot_count(env: Env, pool: Address) -> u32 {
+        Self::extend_ttl(&env);
         Self::load_snapshots(&env, &pool).len()
+    }
+
+    /// Return the age in seconds of the oldest retained snapshot, or zero if
+    /// the pool has no retained snapshots. This is the longest history window
+    /// currently supported by stored data, independent of pool type.
+    pub fn max_servable_window(env: Env, pool: Address) -> u64 {
+        Self::extend_ttl(&env);
+        let snapshots = Self::load_snapshots(&env, &pool);
+        match snapshots.get(0) {
+            Some(oldest) => env.ledger().timestamp().saturating_sub(oldest.0),
+            None => 0,
+        }
     }
 
     fn first_tracked_index(tracked: &Vec<TrackedPool>, pool: &Address) -> Option<u32> {
@@ -737,12 +829,16 @@ impl TwalConsumer {
             .iter()
             .position(|entry| entry.0 == ledger_ts)
             .ok_or(TwalError::NoSnapshotFound)?;
+        if index as u32 == snapshots.len() - 1 || snapshots.len() < 3 {
+            return Err(TwalError::CannotDeleteRequiredSnapshot);
+        }
+        let removed = snapshots.get(index as u32).unwrap();
         snapshots.remove(index as u32);
         Self::store_snapshots(&env, &pool, &snapshots);
         soroban_amm_sdk::emit_versioned_event!(
             &env,
             (Symbol::new(&env, "snapshot_deleted"),),
-            (pool, ledger_ts)
+            (pool, ledger_ts, removed.1)
         );
         Ok(())
     }
@@ -979,17 +1075,13 @@ mod tests {
         let consumer = TwalConsumerClient::new(&env, &consumer_addr);
         consumer.initialize(&admin);
         consumer.save_snapshot(&amm_addr);
+        env.ledger().with_mut(|l| l.timestamp = 10_100);
+        consumer.save_snapshot(&amm_addr);
+        env.ledger().with_mut(|l| l.timestamp = 10_200);
+        consumer.save_snapshot(&amm_addr);
 
-        // Snapshot stored at ledger timestamp 10_000; deleting it removes it
-        // (and its entry in the timestamp index) so a later TWAL query whose
-        // window lands at or before that point has no floor snapshot left.
-        consumer.delete_snapshot(&amm_addr, &10_000_u64);
-
-        env.ledger().with_mut(|l| l.timestamp = 10_600);
-        assert_eq!(
-            consumer.try_get_twal_liquidity(&amm_addr, &600),
-            Err(Ok(TwalError::InsufficientHistory))
-        );
+        consumer.delete_snapshot(&amm_addr, &10_100_u64);
+        assert_eq!(consumer.get_snapshot_count(&amm_addr), 2);
     }
 
     // ── Issue #469: arbitrary window_seconds should hit the nearest older
@@ -1996,13 +2088,23 @@ mod tests {
         let consumer = TwalConsumerClient::new(&env, &consumer_addr);
         consumer.initialize(&admin);
         consumer.save_snapshot(&amm_addr);
-        consumer.delete_snapshot(&amm_addr, &10_000_u64);
+        env.ledger().with_mut(|l| l.timestamp = 10_100);
+        consumer.save_snapshot(&amm_addr);
+        env.ledger().with_mut(|l| l.timestamp = 10_200);
+        consumer.save_snapshot(&amm_addr);
+        let removed_cumulative = env.as_contract(&consumer.address, || {
+            TwalConsumer::load_snapshots(&env, &amm_addr)
+                .get(1)
+                .unwrap()
+                .1
+        });
+        consumer.delete_snapshot(&amm_addr, &10_100_u64);
 
-        let (version, data): (u32, (Address, u64)) =
+        let (version, data): (u32, (Address, u64, i128)) =
             last_versioned_event(&env, &consumer.address, "snapshot_deleted");
         assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
         assert_eq!(version, 1);
-        assert_eq!(data, (amm_addr, 10_000_u64));
+        assert_eq!(data, (amm_addr, 10_100_u64, removed_cumulative));
     }
 
     // ── #911: instance TTL is extended on every entrypoint ───────────────────
@@ -2040,5 +2142,268 @@ mod tests {
             assert_eq!(consumer.get_tracked_pool_count(), 0);
             assert!(!consumer.is_tracked(&pool));
         }
+    }
+
+    #[test]
+    fn initialize_emits_keeper_in_versioned_event() {
+        let env = Env::default();
+        let keeper = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+
+        // The payload is the one-element tuple `(keeper,)`.
+        let (version, (data,)): (u32, (Address,)) =
+            last_versioned_event(&env, &consumer_addr, "initialized");
+        assert_eq!(version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(data, keeper);
+    }
+
+    #[test]
+    fn propose_keeper_requires_current_keeper_auth() {
+        let env = Env::default();
+        let keeper = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+
+        assert!(consumer
+            .try_propose_keeper(&Address::generate(&env))
+            .is_err());
+    }
+
+    #[test]
+    fn pending_keeper_view_is_empty_until_proposed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+
+        assert_eq!(consumer.get_pending_keeper(), None);
+        consumer.propose_keeper(&nominee);
+        assert_eq!(consumer.get_pending_keeper(), Some(nominee));
+    }
+
+    #[test]
+    fn accept_keeper_requires_an_existing_proposal() {
+        let env = Env::default();
+        let keeper = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+
+        assert_eq!(
+            consumer.try_accept_keeper(&keeper),
+            Err(Ok(TwalError::NoPendingKeeper))
+        );
+    }
+
+    #[test]
+    fn stranger_cannot_accept_keeper_proposal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.propose_keeper(&nominee);
+
+        assert_eq!(
+            consumer.try_accept_keeper(&stranger),
+            Err(Ok(TwalError::WrongPendingKeeper))
+        );
+    }
+
+    #[test]
+    fn accepting_keeper_changes_keeper_and_clears_pending() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.propose_keeper(&nominee);
+        consumer.accept_keeper(&nominee);
+
+        assert_eq!(consumer.get_keeper(), nominee);
+        assert_eq!(consumer.get_pending_keeper(), None);
+    }
+
+    #[test]
+    fn keeper_rotation_emits_versioned_proposal_and_change_events() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.propose_keeper(&nominee);
+        let (proposal_version, (proposed,)): (u32, (Address,)) =
+            last_versioned_event(&env, &consumer_addr, "keeper_proposed");
+        consumer.accept_keeper(&nominee);
+        let (change_version, (changed,)): (u32, (Address,)) =
+            last_versioned_event(&env, &consumer_addr, "keeper_changed");
+
+        assert_eq!(proposal_version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(proposed, nominee);
+        assert_eq!(change_version, soroban_amm_sdk::EVENT_SCHEMA_VERSION);
+        assert_eq!(changed, nominee);
+    }
+
+    #[test]
+    fn old_keeper_cannot_call_any_keeper_write_path_after_rotation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(10_000);
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let pool = env.register_contract(None, StubAmmPool);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.propose_keeper(&nominee);
+        consumer.accept_keeper(&nominee);
+        env.set_auths(&[]);
+
+        assert!(consumer.try_save_snapshot(&pool).is_err());
+        assert!(consumer.try_save_cl_snapshot(&pool).is_err());
+        assert!(consumer
+            .try_add_tracked_pool(&pool, &PoolType::Amm)
+            .is_err());
+        assert!(consumer.try_remove_tracked_pool(&pool).is_err());
+        assert!(consumer.try_delete_snapshot(&pool, &10_000).is_err());
+    }
+
+    #[test]
+    fn new_keeper_can_use_each_keeper_write_path_after_rotation() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(10_000);
+        let keeper = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let amm_pool = env.register_contract(None, StubAmmPool);
+        let cl_pool = env.register_contract(None, MockClPool);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.propose_keeper(&nominee);
+        consumer.accept_keeper(&nominee);
+
+        consumer.save_snapshot(&amm_pool);
+        env.ledger().with_mut(|l| l.timestamp += 10);
+        consumer.save_snapshot(&amm_pool);
+        env.ledger().with_mut(|l| l.timestamp += 10);
+        consumer.save_snapshot(&amm_pool);
+        consumer.save_cl_snapshot(&cl_pool);
+        consumer.add_tracked_pool(&Address::generate(&env), &PoolType::Amm);
+        consumer.remove_tracked_pool(&amm_pool);
+        consumer.delete_snapshot(&amm_pool, &10_010);
+        assert_eq!(consumer.get_snapshot_count(&amm_pool), 2);
+    }
+
+    /// Upload this contract's own release WASM, built by `build_workspace.sh`
+    /// before `cargo test` (same approach as `router` / `batch_router`).
+    fn upload_own_wasm(env: &Env) -> soroban_sdk::BytesN<32> {
+        env.budget().reset_unlimited();
+        let wasm = soroban_sdk::Bytes::from_slice(
+            env,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../target/wasm32v1-none/release/twal_consumer.wasm"
+            )),
+        );
+        env.deployer().upload_contract_wasm(wasm)
+    }
+
+    #[test]
+    fn upgrade_rejects_non_keeper() {
+        let env = Env::default();
+        let keeper = Address::generate(&env);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        let wasm_hash = upload_own_wasm(&env);
+
+        assert!(consumer.try_upgrade(&wasm_hash).is_err());
+    }
+
+    #[test]
+    fn keeper_upgrade_preserves_snapshots() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(10_000);
+        let keeper = Address::generate(&env);
+        let pool = env.register_contract(None, StubAmmPool);
+        let consumer_addr = env.register_contract(None, TwalConsumer);
+        let consumer = TwalConsumerClient::new(&env, &consumer_addr);
+        consumer.initialize(&keeper);
+        consumer.save_snapshot(&pool);
+        let wasm_hash = upload_own_wasm(&env);
+
+        consumer.upgrade(&wasm_hash);
+
+        assert_eq!(consumer.get_snapshot_count(&pool), 1);
+        assert_eq!(consumer.max_servable_window(&pool), 0);
+    }
+
+    #[test]
+    fn deleting_newest_snapshot_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (pool, consumer) = setup_amm_pool(&env);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp += 10);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp += 10);
+        consumer.save_snapshot(&pool);
+
+        assert_eq!(
+            consumer.try_delete_snapshot(&pool, &10_020),
+            Err(Ok(TwalError::CannotDeleteRequiredSnapshot))
+        );
+    }
+
+    #[test]
+    fn deleting_when_only_two_snapshots_remain_is_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (pool, consumer) = setup_amm_pool(&env);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp += 10);
+        consumer.save_snapshot(&pool);
+
+        assert_eq!(
+            consumer.try_delete_snapshot(&pool, &10_000),
+            Err(Ok(TwalError::CannotDeleteRequiredSnapshot))
+        );
+    }
+
+    #[test]
+    fn max_servable_window_tracks_oldest_of_three_snapshots() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (pool, consumer) = setup_amm_pool(&env);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp = 10_120);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp = 10_250);
+        consumer.save_snapshot(&pool);
+        env.ledger().with_mut(|l| l.timestamp = 10_500);
+
+        assert_eq!(consumer.max_servable_window(&pool), 500);
+    }
+
+    #[test]
+    fn max_servable_window_is_zero_for_untracked_pool() {
+        let env = Env::default();
+        let (_keeper, consumer) = setup_consumer(&env);
+        assert_eq!(consumer.max_servable_window(&Address::generate(&env)), 0);
     }
 }
