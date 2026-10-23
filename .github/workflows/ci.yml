@@ -223,6 +223,25 @@ jobs:
             - name: Test the event schema checker
               run: node --test scripts/check_event_schemas.test.mjs
 
+    # Every non-test module under a package's src/ must be reachable from that
+    # package's public entrypoint. An unreferenced module type-checks and lints
+    # clean on its own, so it needs its own check (#1168).
+    reachability:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v7
+            - name: Setup Node
+              uses: actions/setup-node@v7
+              with:
+                  node-version-file: .nvmrc
+            - name: Check every module is reachable from its entrypoint
+              run: node scripts/check_reachability.mjs
+            - name: Test the reachability checker
+              run: node --test scripts/check_reachability.test.mjs
+
     npm-packages:
         # Explicit so the reported context is "npm-packages (<dir>)" and does not
         # include the test command (see .github/BRANCH_PROTECTION.md).

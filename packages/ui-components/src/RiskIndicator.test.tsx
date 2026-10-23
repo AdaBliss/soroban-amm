@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RiskIndicator } from "./RiskIndicator.js";
+import { assessPositionRisk, riskLevelForScore, RISK_THRESHOLDS } from "./lib/riskAssessment.js";
 import type { RiskAssessment } from "./types.js";
 
 const assessment: RiskAssessment = {
@@ -90,5 +91,100 @@ describe("RiskIndicator", () => {
   it("applies the level border colour to the root", () => {
     const { container } = render(<RiskIndicator assessment={assessment} />);
     expect(container.firstChild).toHaveStyle({ borderColor: "#f0883e" });
+  });
+
+  it("renders an explicit unknown state when metrics are missing or invalid", () => {
+    const { container } = render(
+      <RiskIndicator
+        assessment={assessPositionRisk({
+          priceDeviationBps: NaN,
+          rangePct: NaN,
+          tvl: NaN,
+          isInRange: true,
+        })}
+      />,
+    );
+    expect(screen.getByText("Risk Unknown")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Position metrics are missing or invalid/),
+    ).toBeInTheDocument();
+    expect(container.firstChild).toHaveStyle({ borderColor: "#8b949e" });
+    // The unknown state must not be announced as a healthy score.
+    expect(screen.getByRole("status")).toHaveAttribute(
+      "aria-label",
+      "Overall risk: Risk Unknown, position metrics missing or invalid",
+    );
+  });
+
+  it("does not render the numeric score gauge in the unknown state", () => {
+    render(
+      <RiskIndicator assessment={{ level: "unknown", score: 0, factors: [] }} />,
+    );
+    expect(screen.queryByText(/Score:/)).not.toBeInTheDocument();
+  });
+
+  it("renders the level implied by a score on the RISK_THRESHOLDS boundary", () => {
+    // A score exactly on the low/medium boundary must render as Low Risk; one
+    // just below it as Medium Risk. This ties the rendered level to the shared
+    // thresholds rather than a private copy of the numbers.
+    const { unmount } = render(
+      <RiskIndicator
+        assessment={{
+          level: riskLevelForScore(RISK_THRESHOLDS.low),
+          score: RISK_THRESHOLDS.low,
+          factors: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Low Risk")).toBeInTheDocument();
+    unmount();
+
+    render(
+      <RiskIndicator
+        assessment={{
+          level: riskLevelForScore(RISK_THRESHOLDS.low - 1),
+          score: RISK_THRESHOLDS.low - 1,
+          factors: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Medium Risk")).toBeInTheDocument();
+  });
+
+  it("renders the critical level for a score below the high threshold", () => {
+    render(
+      <RiskIndicator
+        assessment={{
+          level: riskLevelForScore(RISK_THRESHOLDS.high - 1),
+          score: RISK_THRESHOLDS.high - 1,
+          factors: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Critical Risk")).toBeInTheDocument();
+  });
+
+  it("changes the rendered level when a RISK_THRESHOLDS value changes", () => {
+    // The component must derive its level from the shared thresholds, not from
+    // a private copy: raising `low` above 85 turns an 85 into Medium Risk.
+    const thresholds = RISK_THRESHOLDS as unknown as {
+      low: number;
+      medium: number;
+      high: number;
+    };
+    const original = thresholds.low;
+    thresholds.low = 90;
+    try {
+      expect(riskLevelForScore(85)).toBe("medium");
+      render(
+        <RiskIndicator
+          assessment={{ level: riskLevelForScore(85), score: 85, factors: [] }}
+        />,
+      );
+      expect(screen.getByText("Medium Risk")).toBeInTheDocument();
+      expect(screen.queryByText("Low Risk")).not.toBeInTheDocument();
+    } finally {
+      thresholds.low = original;
+    }
   });
 });

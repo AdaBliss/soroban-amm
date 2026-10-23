@@ -47,5 +47,5 @@ export function validatePosition({
 }
 
 function fmt(n: number): string {
-  return Number.isFinite(n) ? String(n) : String(n);
+  return String(n);
 }

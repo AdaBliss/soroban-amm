@@ -11,7 +11,12 @@
 
 import React, { useMemo, useId } from "react";
 import type { BaseProps, PriceRange } from "./types.js";
-import { computeEfficiency, formatEfficiency } from "./lib/capitalEfficiency.js";
+import {
+  computeEfficiency,
+  formatEfficiency,
+  isInRange,
+  rangePct,
+} from "./lib/capitalEfficiency.js";
 
 export interface CapitalEfficiencyCalcProps extends BaseProps {
   /** Current spot price. */
@@ -49,10 +54,8 @@ export function CapitalEfficiencyCalc({
   );
 
   const concentratedCapital = depositUsd / efficiency;
-  const rangePct =
-    ((priceRange.upper - priceRange.lower) / currentPrice) * 100;
-  const inRange =
-    currentPrice >= priceRange.lower && currentPrice <= priceRange.upper;
+  const widthPct = rangePct(priceRange.lower, priceRange.upper, currentPrice);
+  const inRange = isInRange(currentPrice, priceRange);
 
   const effStr = formatEfficiency(efficiency);
   const barWidth = Math.min(100, ((efficiency - 1) / 99) * 100);
@@ -109,7 +112,7 @@ export function CapitalEfficiencyCalc({
       <div style={styles.infoGrid}>
         <div style={styles.infoCell}>
           <div style={styles.infoLabel}>Range width</div>
-          <div style={styles.infoValue}>{rangePct.toFixed(1)}%</div>
+          <div style={styles.infoValue}>{widthPct.toFixed(1)}%</div>
         </div>
         <div style={styles.infoCell}>
           <div style={styles.infoLabel}>Lower bound</div>

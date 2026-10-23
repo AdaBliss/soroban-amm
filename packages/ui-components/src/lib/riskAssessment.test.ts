@@ -3,15 +3,14 @@ import {
   assessPositionRisk,
   riskLevelForScore,
   RISK_THRESHOLDS,
+  INVALID_DATA_FACTOR,
 } from "./riskAssessment.js";
 
 const healthy = {
   priceDeviationBps: 0,
   rangePct: 50,
   tvl: 1_000_000,
-  volume24h: 500_000,
   isInRange: true,
-  feeBps: 30,
 };
 
 describe("riskLevelForScore — every threshold on both sides", () => {
@@ -101,9 +100,7 @@ describe("assessPositionRisk", () => {
       priceDeviationBps: 600,
       rangePct: 4,
       tvl: 5_000,
-      volume24h: 1,
       isInRange: true,
-      feeBps: 100,
     });
     // 100 - 25 (high deviation) - 15 (narrow) - 5 (low TVL) = 55 → medium
     expect(r.score).toBe(55);
@@ -115,9 +112,7 @@ describe("assessPositionRisk", () => {
       priceDeviationBps: 1000,
       rangePct: 1,
       tvl: 500,
-      volume24h: 0,
       isInRange: false,
-      feeBps: 100,
     });
     // 100 - 40 - 25 - 15 - 20 = 0 → critical
     expect(r.score).toBe(0);
@@ -133,5 +128,51 @@ describe("assessPositionRisk", () => {
     });
     expect(Number.isFinite(r.score)).toBe(true);
     expect(r.score).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("assessPositionRisk — missing or invalid data", () => {
+  it("returns the unknown level and an invalid-data factor for NaN metrics", () => {
+    const r = assessPositionRisk({
+      priceDeviationBps: NaN,
+      rangePct: NaN,
+      tvl: NaN,
+      isInRange: true,
+    });
+    expect(r.level).toBe("unknown");
+    expect(r.score).toBe(0);
+    expect(r.factors).toHaveLength(1);
+    expect(r.factors[0].name).toBe(INVALID_DATA_FACTOR);
+    expect(r.factors[0].severity).toBe("critical");
+  });
+
+  it("treats each NaN metric on its own as invalid", () => {
+    expect(assessPositionRisk({ ...healthy, priceDeviationBps: NaN }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, rangePct: NaN }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, tvl: NaN }).level).toBe("unknown");
+  });
+
+  it("treats negative metrics as invalid rather than as a good score", () => {
+    // -5 previously scored 80 ("low") because it is simply below the TVL
+    // threshold; it must now be rejected outright.
+    expect(assessPositionRisk({ ...healthy, tvl: -5 }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, priceDeviationBps: -1 }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, rangePct: -1 }).level).toBe("unknown");
+  });
+
+  it("treats non-finite Infinity metrics as invalid", () => {
+    expect(assessPositionRisk({ ...healthy, tvl: Infinity }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, rangePct: Infinity }).level).toBe("unknown");
+    expect(assessPositionRisk({ ...healthy, priceDeviationBps: -Infinity }).level).toBe("unknown");
+  });
+
+  it("does not add risk factors for an invalid assessment beyond the invalid-data factor", () => {
+    const r = assessPositionRisk({
+      priceDeviationBps: NaN,
+      rangePct: 1,
+      tvl: 500,
+      isInRange: false,
+    });
+    expect(r.factors.map((f) => f.name)).toEqual([INVALID_DATA_FACTOR]);
   });
 });

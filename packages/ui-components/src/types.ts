@@ -37,8 +37,14 @@ export interface Position {
   feesEarnedUsd: number;
 }
 
-/** Risk level classification. */
-export type RiskLevel = "low" | "medium" | "high" | "critical";
+/**
+ * Risk level classification.
+ *
+ * `"unknown"` is produced by {@link assessPositionRisk} when the metrics it
+ * was given are missing or invalid, so the UI can distinguish "we could not
+ * assess this" from "we assessed it and it is critical".
+ */
+export type RiskLevel = "low" | "medium" | "high" | "critical" | "unknown";
 
 /** Risk assessment for a position or pool. */
 export interface RiskAssessment {

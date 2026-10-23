@@ -2,7 +2,10 @@
  * RiskIndicator — displays a risk assessment for a position or pool.
  *
  * Shows an overall risk level, a numeric score, and a breakdown of
- * individual risk factors with descriptions and severity badges.
+ * individual risk factors with descriptions and severity badges. When the
+ * assessment carries the `"unknown"` level (metrics missing or invalid) the
+ * component renders an explicit unknown state instead of a colour that could
+ * be read as "safe".
  *
  * Accessibility: WCAG 2.1 AA. Risk level is announced via aria-live
  * region. Severity badges use color + text to convey meaning (not color
@@ -11,6 +14,10 @@
 
 import React, { useState, useId } from "react";
 import type { BaseProps, RiskAssessment, RiskFactor, RiskLevel } from "./types.js";
+// Re-exported so the deep import path `RiskIndicator.js` keeps exposing the
+// same public name it always did; the implementation lives in the lib.
+export { assessPositionRisk } from "./lib/riskAssessment.js";
+export type { RiskParams } from "./lib/riskAssessment.js";
 
 export interface RiskIndicatorProps extends BaseProps {
   /** The risk assessment to display. */
@@ -24,6 +31,7 @@ const levelColor: Record<RiskLevel, string> = {
   medium:   "#d29922",
   high:     "#f0883e",
   critical: "#f85149",
+  unknown:  "#8b949e",
 };
 
 const levelBg: Record<RiskLevel, string> = {
@@ -31,6 +39,7 @@ const levelBg: Record<RiskLevel, string> = {
   medium:   "#3d2e00",
   high:     "#3d1f00",
   critical: "#3d1a1a",
+  unknown:  "#21262d",
 };
 
 const levelLabel: Record<RiskLevel, string> = {
@@ -38,6 +47,7 @@ const levelLabel: Record<RiskLevel, string> = {
   medium:   "Medium Risk",
   high:     "High Risk",
   critical: "Critical Risk",
+  unknown:  "Risk Unknown",
 };
 
 function SeverityBadge({ level }: { level: RiskLevel }) {
@@ -137,6 +147,34 @@ export function RiskIndicator({
   const id = useId();
   const detailsId = `${id}-details`;
 
+  // Metrics were missing or invalid: render an explicit unknown state so a
+  // grey/absent colour is never mistaken for "low risk".
+  if (assessment.level === "unknown") {
+    return (
+      <div
+        className={className}
+        style={{ ...styles.root, borderColor: levelColor.unknown }}
+        aria-label={ariaLabel ?? "Risk indicator"}
+      >
+        <div style={styles.headerRow}>
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label="Overall risk: Risk Unknown, position metrics missing or invalid"
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
+            <span style={{ ...styles.levelText, color: levelColor.unknown }}>
+              {levelLabel.unknown}
+            </span>
+            <span style={styles.scoreLabel}>
+              Position metrics are missing or invalid — risk cannot be assessed.
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={className}
@@ -198,68 +236,6 @@ export function RiskIndicator({
       )}
     </div>
   );
-}
-
-/** Derives a RiskAssessment from common position metrics. */
-export function assessPositionRisk(params: {
-  priceDeviationBps: number;
-  rangePct: number;
-  tvl: number;
-  volume24h: number;
-  isInRange: boolean;
-  feeBps: number;
-}): RiskAssessment {
-  const factors: RiskFactor[] = [];
-  let score = 100;
-
-  if (!params.isInRange) {
-    factors.push({
-      name: "Out of range",
-      description: "Current price is outside your selected range. The position is inactive and earning no fees.",
-      severity: "critical",
-    });
-    score -= 40;
-  }
-
-  if (params.priceDeviationBps > 200) {
-    const sev: RiskLevel = params.priceDeviationBps > 500 ? "high" : "medium";
-    factors.push({
-      name: "High price deviation",
-      description: `Price has deviated ${(params.priceDeviationBps / 100).toFixed(1)}% from TWAP, indicating unusual volatility.`,
-      severity: sev,
-      value: params.priceDeviationBps,
-      threshold: 500,
-    });
-    score -= params.priceDeviationBps > 500 ? 25 : 10;
-  }
-
-  if (params.rangePct < 5) {
-    factors.push({
-      name: "Very narrow range",
-      description: `Range spans only ${params.rangePct.toFixed(1)}% around current price. High efficiency but high rebalancing risk.`,
-      severity: "medium",
-      value: params.rangePct,
-      threshold: 5,
-    });
-    score -= 15;
-  }
-
-  if (params.tvl < 10_000) {
-    factors.push({
-      name: "Low TVL",
-      description: "Pool TVL below $10,000. Thin liquidity may cause higher slippage.",
-      severity: params.tvl < 1_000 ? "high" : "low",
-      value: params.tvl,
-      threshold: 10_000,
-    });
-    score -= params.tvl < 1_000 ? 20 : 5;
-  }
-
-  score = Math.max(0, Math.min(100, score));
-  const level: RiskLevel =
-    score >= 80 ? "low" : score >= 55 ? "medium" : score >= 30 ? "high" : "critical";
-
-  return { level, score, factors };
 }
 
 const styles: Record<string, React.CSSProperties> = {

@@ -27,6 +27,7 @@ list by hand without running the checker.
 - `go-sdk`
 - `node-versions`
 - `event-schemas`
+- `reachability`
 - `npm-packages (packages/sdk)`
 - `npm-packages (packages/ui-components)`
 - `npm-packages (packages/ts-advanced-client)`
@@ -74,6 +75,7 @@ gh api -X PUT repos/promisszn/soroban-amm/branches/main/protection \
       "go-sdk",
       "node-versions",
       "event-schemas",
+      "reachability",
       "npm-packages (packages/sdk)",
       "npm-packages (packages/ui-components)",
       "npm-packages (packages/ts-advanced-client)",
