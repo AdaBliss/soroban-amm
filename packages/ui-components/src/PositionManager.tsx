@@ -16,7 +16,10 @@ import React, { useCallback, useId, useState } from "react";
 import { RangeSelector } from "./RangeSelector.js";
 import { FeeTierComparison } from "./FeeTierComparison.js";
 import { CapitalEfficiencyCalc } from "./CapitalEfficiencyCalc.js";
-import { RiskIndicator, assessPositionRisk } from "./RiskIndicator.js";
+import { RiskIndicator } from "./RiskIndicator.js";
+import { assessPositionRisk } from "./lib/riskAssessment.js";
+import { validatePosition } from "./lib/positionValidation.js";
+import { isInRange, rangePct } from "./lib/capitalEfficiency.js";
 import type { BaseProps, FeeTier, PriceRange, Position } from "./types.js";
 
 export interface PositionManagerProps extends BaseProps {
@@ -34,8 +37,6 @@ export interface PositionManagerProps extends BaseProps {
   priceDeviationBps?: number;
   /** Pool TVL in USD. */
   poolTvl?: number;
-  /** 24-hour pool volume in USD. */
-  poolVolume24h?: number;
   /** Called when the user submits the form. */
   onSubmit?: (values: PositionFormValues) => void;
   /** Called when the user cancels. */
@@ -78,7 +79,6 @@ export function PositionManager({
   tokenB = "Token B",
   priceDeviationBps = 0,
   poolTvl = 0,
-  poolVolume24h = 0,
   onSubmit,
   onCancel,
   className = "",
@@ -101,33 +101,23 @@ export function PositionManager({
   const minPrice = currentPrice * 0.01;
   const maxPrice = currentPrice * 10;
 
-  const isInRange =
-    currentPrice >= priceRange.lower && currentPrice <= priceRange.upper;
-  const rangePct =
-    ((priceRange.upper - priceRange.lower) / currentPrice) * 100;
+  const isPositionInRange = isInRange(currentPrice, priceRange);
+  const currentRangePct = rangePct(priceRange.lower, priceRange.upper, currentPrice);
 
   const risk = assessPositionRisk({
     priceDeviationBps,
-    rangePct,
+    rangePct: currentRangePct,
     tvl: poolTvl,
-    volume24h: poolVolume24h,
-    isInRange,
-    feeBps,
+    isInRange: isPositionInRange,
   });
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      const nextErrors: string[] = [];
-      if (!(amountA > 0)) {
-        nextErrors.push("Amount A must be a positive number.");
-      }
-      if (!(amountB > 0)) {
-        nextErrors.push("Amount B must be a positive number.");
-      }
-      if (priceRange.lower >= priceRange.upper) {
-        nextErrors.push("Lower price must be below the upper price.");
-      }
+      // The lib validator is the single source of truth: it rejects
+      // non-finite and non-positive amounts and a malformed range, and its
+      // messages are what the form surfaces.
+      const nextErrors = validatePosition({ amountA, amountB, priceRange });
       setErrors(nextErrors);
       if (nextErrors.length > 0) {
         return;

@@ -11,15 +11,11 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "html"],
-      include: [
-        "src/lib/**/*.{ts,tsx}",
-        "src/RangeSelector.tsx",
-        "src/FeeTierComparison.tsx",
-        "src/CapitalEfficiencyCalc.tsx",
-        "src/RiskIndicator.tsx",
-        "src/PositionManager.tsx",
-        "src/GovernanceForum.tsx",
-      ],
+      // Measure every shipped source file rather than a hand-maintained list:
+      // the lib modules used to need their own entry because nothing imported
+      // them. `scripts/check_reachability.mjs` now guarantees they are part of
+      // the graph, so the include no longer names them.
+      include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/test/**", "src/**/*.d.ts"],
       thresholds: {
         // Enforced rather than merely reported: a drop below these fails the

@@ -49,6 +49,8 @@ export default defineConfig(
             "packages/ui-components/vitest.config.ts",
             "packages/ts-advanced-client/test/*.js",
             "services/graphql-api/scripts/*.mjs",
+            "scripts/check_reachability.mjs",
+            "scripts/check_reachability.test.mjs",
           ],
         },
         tsconfigRootDir: import.meta.dirname,

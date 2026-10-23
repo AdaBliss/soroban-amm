@@ -204,6 +204,9 @@ An integration contract that reads the AMM's cumulative price oracle and compute
 - Stores periodic snapshots (`save_snapshot`).
 - Computes windowed average prices (`get_twap_price`).
 - Validates spot prices against TWAP with configurable maximum deviation (`validate_price_against_twap`, `assert_lending_price_safe`).
+- **Tracked pools**: `save_snapshot` / `save_cl_snapshot` track a pool on first use; the keeper can also `add_tracked_pool(pool, pool_type)` and `remove_tracked_pool(pool)` (a removed pool's snapshots stay readable). The set is capped at 100 pools (`TooManyTrackedPools`).
+- **Fault-isolated batch reads**: `get_twap_all` returns the first error, so one bad pool fails the call. `get_twap_all_safe(window)` and `get_twap_batch(pools, window)` return one `TwapSafeEntry { ok, error_code, twap, pool_type }` per pool and never abort; reach for them from lending and derivatives integrations.
+- **Keeper rotation and upgrades**: two-step `propose_keeper` / `accept_keeper` (with `get_pending_keeper`) and a keeper-gated `upgrade(new_wasm_hash)`. `initialize` emits `initialized`; it takes no signature, so read `get_keeper` back after deploying (`scripts/deploy/twap_consumer.sh` does).
 - **Interface & Schema**: See [`docs/abi.json`](docs/abi.json) under `"twap_consumer"`.
 
 ### Concentrated Liquidity Contract

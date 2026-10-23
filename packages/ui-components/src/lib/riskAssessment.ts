@@ -1,7 +1,7 @@
 /**
- * Pure risk-assessment logic, extracted from RiskIndicator.tsx so that the
- * financial math behind the UI can be unit-tested directly without a React
- * render.
+ * Pure risk-assessment logic for the UI. This module is the single source of
+ * truth: `RiskIndicator` renders what `assessPositionRisk` returns and nothing
+ * in the components re-derives a level or score.
  *
  * `assessPositionRisk` derives a {@link RiskAssessment} (level, score and a
  * list of contributing factors) from a set of common position/pool metrics.
@@ -35,17 +35,43 @@ export function riskLevelForScore(score: number): RiskLevel {
 }
 
 export interface RiskParams {
+  /** Deviation from TWAP in basis points (non-negative). */
   priceDeviationBps: number;
+  /** Range width around the current price, in percent (non-negative). */
   rangePct: number;
+  /** Pool TVL in USD (non-negative). */
   tvl: number;
-  volume24h: number;
+  /** Whether the current price sits inside the selected range. */
   isInRange: boolean;
-  feeBps: number;
 }
+
+/** Name of the factor emitted when the inputs cannot be assessed. */
+export const INVALID_DATA_FACTOR = "Missing or invalid data";
 
 /** Derives a RiskAssessment from common position metrics. */
 export function assessPositionRisk(params: RiskParams): RiskAssessment {
   const factors: RiskFactor[] = [];
+
+  // Missing or nonsensical inputs (NaN/Infinity, negative magnitudes) must not
+  // be scored as if the position were healthy: every comparison against a
+  // threshold is false for NaN, which previously produced a perfect score and
+  // a green indicator for absent data. Report an explicit outcome instead.
+  const metrics = [params.priceDeviationBps, params.rangePct, params.tvl];
+  if (metrics.some((m) => !Number.isFinite(m) || m < 0)) {
+    return {
+      level: "unknown",
+      score: 0,
+      factors: [
+        {
+          name: INVALID_DATA_FACTOR,
+          description:
+            "One or more position metrics are missing or invalid, so the risk of this position cannot be assessed.",
+          severity: "critical",
+        },
+      ],
+    };
+  }
+
   let score = 100;
 
   if (!params.isInRange) {
