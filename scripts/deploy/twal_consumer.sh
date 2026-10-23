@@ -54,8 +54,14 @@ deploy_twal_consumer() {
       else
         die "failed to initialize twal_consumer at $TWAL_CONSUMER_CONTRACT_ID"
       fi
-      persist_var "TWAL_CONSUMER_INITIALIZED" "1"
     fi
+  fi
+
+  CURRENT_STEP="verify twal_consumer keeper"
+  verify_twal_consumer_keeper "$TWAL_CONSUMER_CONTRACT_ID" "$ADMIN_ADDRESS" \
+    || die "twal_consumer $TWAL_CONSUMER_CONTRACT_ID keeper verification failed"
+  if should_deploy "twal_consumer"; then
+    persist_var "TWAL_CONSUMER_INITIALIZED" "1"
   fi
 
   if should_deploy "twal_consumer"; then
@@ -63,15 +69,21 @@ deploy_twal_consumer() {
     twal_consumer_track_pool "${CL_POOL_CONTRACT_ID:-}" Cl
   fi
 
-  CURRENT_STEP="verify twal_consumer"
-  local keeper
-  keeper=$(invoke_read "$TWAL_CONSUMER_CONTRACT_ID" get_keeper || true)
-  if printf '%s\n' "$keeper" | grep -q "$ADMIN_ADDRESS"; then
-    log "verified twal_consumer keeper=$ADMIN_ADDRESS"
-  else
-    die "twal_consumer $TWAL_CONSUMER_CONTRACT_ID keeper mismatch: expected $ADMIN_ADDRESS, got: $keeper"
-  fi
   log "twal_consumer tracks $(invoke_read "$TWAL_CONSUMER_CONTRACT_ID" get_tracked_pool_count | tail -n 1) pool(s)"
+}
+
+# Read back and compare the complete keeper value before deployment proceeds.
+verify_twal_consumer_keeper() {
+  local contract_id="$1"
+  local expected_keeper="$2"
+  local keeper
+  keeper=$(invoke_read "$contract_id" get_keeper || true)
+  if printf '%s\n' "$keeper" | grep -Fqx -- "$expected_keeper"; then
+    log "verified twal_consumer keeper=$expected_keeper"
+    return 0
+  fi
+  die "twal_consumer $contract_id keeper mismatch: expected $expected_keeper, got: $keeper"
+  return 1
 }
 
 # twal_consumer_track_pool POOL_ID POOL_TYPE — register a deployed pool with

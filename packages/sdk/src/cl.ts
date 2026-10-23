@@ -16,7 +16,7 @@ import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
-import { toBigInt } from "./internal/decode.js";
+import { ContractDecodeError, requireBigInt, toBigInt } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -118,10 +118,10 @@ export class ConcentratedLiquidityClient {
     const raw = await this.simulate("get_pool_state");
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      sqrtPrice: toBigInt(native.sqrt_price),
-      currentTick: Number(native.current_tick ?? 0),
-      activeLiquidity: toBigInt(native.active_liquidity),
-      tickSpacing: Number(native.tick_spacing ?? 1),
+      sqrtPrice: requireBigInt(native, "sqrt_price", "PoolState"),
+      currentTick: Number(requireBigInt(native, "current_tick", "PoolState")),
+      activeLiquidity: requireBigInt(native, "active_liquidity", "PoolState"),
+      tickSpacing: Number(requireBigInt(native, "tick_spacing", "PoolState")),
     };
   }
 
@@ -134,7 +134,7 @@ export class ConcentratedLiquidityClient {
   /** Returns the current active liquidity across the current tick. */
   async activeLiquidity(): Promise<bigint> {
     const raw = await this.simulate("active_liquidity");
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /**
@@ -155,13 +155,21 @@ export class ConcentratedLiquidityClient {
   async getPosition(owner: string, lowerTick: number, upperTick: number): Promise<Position> {
     const raw = await this.simulate("get_position", addr(owner), i32(lowerTick), i32(upperTick));
     const native = scValToNative(raw) as Record<string, unknown>;
-    const owed = native.tokens_owed as [unknown, unknown];
+    const posLower = Number(requireBigInt(native, "lower_tick", "Position"));
+    const posUpper = Number(requireBigInt(native, "upper_tick", "Position"));
+    const liquidity = requireBigInt(native, "liquidity", "Position");
+    const feeGrowthInsideA = requireBigInt(native, "fee_growth_inside_a", "Position");
+    const feeGrowthInsideB = requireBigInt(native, "fee_growth_inside_b", "Position");
+    const owed = native.tokens_owed;
+    if (!Array.isArray(owed) || owed.length !== 2) {
+      throw new ContractDecodeError("Position", "tokens_owed", Object.keys(native));
+    }
     return {
-      lowerTick: Number(native.lower_tick ?? lowerTick),
-      upperTick: Number(native.upper_tick ?? upperTick),
-      liquidity: toBigInt(native.liquidity),
-      feeGrowthInsideA: toBigInt(native.fee_growth_inside_a),
-      feeGrowthInsideB: toBigInt(native.fee_growth_inside_b),
+      lowerTick: posLower,
+      upperTick: posUpper,
+      liquidity,
+      feeGrowthInsideA,
+      feeGrowthInsideB,
       tokensOwedA: toBigInt(owed?.[0]),
       tokensOwedB: toBigInt(owed?.[1]),
     };
@@ -212,19 +220,19 @@ export class ConcentratedLiquidityClient {
     );
     const native = scValToNative(raw) as Record<string, unknown>;
     return {
-      amountIn: toBigInt(native.amount_in),
-      amountInAfterFee: toBigInt(native.amount_in_after_fee),
-      amountOut: toBigInt(native.amount_out),
-      feeAmount: toBigInt(native.fee_amount),
-      spotPriceBefore: toBigInt(native.spot_price_before),
-      effectivePrice: toBigInt(native.effective_price),
-      priceImpactBps: toBigInt(native.price_impact_bps),
-      sqrtPriceBefore: toBigInt(native.sqrt_price_before),
-      sqrtPriceAfter: toBigInt(native.sqrt_price_after),
-      tickBefore: Number(native.tick_before ?? 0),
-      tickAfter: Number(native.tick_after ?? 0),
-      activeLiquidityBefore: toBigInt(native.active_liquidity_before),
-      activeLiquidityAfter: toBigInt(native.active_liquidity_after),
+      amountIn: requireBigInt(native, "amount_in", "PriceImpactEstimate"),
+      amountInAfterFee: requireBigInt(native, "amount_in_after_fee", "PriceImpactEstimate"),
+      amountOut: requireBigInt(native, "amount_out", "PriceImpactEstimate"),
+      feeAmount: requireBigInt(native, "fee_amount", "PriceImpactEstimate"),
+      spotPriceBefore: requireBigInt(native, "spot_price_before", "PriceImpactEstimate"),
+      effectivePrice: requireBigInt(native, "effective_price", "PriceImpactEstimate"),
+      priceImpactBps: requireBigInt(native, "price_impact_bps", "PriceImpactEstimate"),
+      sqrtPriceBefore: requireBigInt(native, "sqrt_price_before", "PriceImpactEstimate"),
+      sqrtPriceAfter: requireBigInt(native, "sqrt_price_after", "PriceImpactEstimate"),
+      tickBefore: Number(requireBigInt(native, "tick_before", "PriceImpactEstimate")),
+      tickAfter: Number(requireBigInt(native, "tick_after", "PriceImpactEstimate")),
+      activeLiquidityBefore: requireBigInt(native, "active_liquidity_before", "PriceImpactEstimate"),
+      activeLiquidityAfter: requireBigInt(native, "active_liquidity_after", "PriceImpactEstimate"),
     };
   }
 
@@ -250,7 +258,7 @@ export class ConcentratedLiquidityClient {
    */
   async tickToPrice(tick: number): Promise<bigint> {
     const raw = await this.simulate("tick_to_price", i32(tick));
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /**
@@ -264,7 +272,7 @@ export class ConcentratedLiquidityClient {
    */
   async observe(secondsAgo: bigint): Promise<bigint> {
     const raw = await this.simulate("observe", u64(secondsAgo));
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /**

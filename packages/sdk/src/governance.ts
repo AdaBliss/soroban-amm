@@ -38,7 +38,16 @@ import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
-import { toBigInt, toText, toVariant } from "./internal/decode.js";
+import {
+  optionalBigInt,
+  requireBigInt,
+  requireBoolean,
+  requireText,
+  requireValue,
+  toBigInt,
+  toText,
+  toVariant,
+} from "./internal/decode.js";
 
 // ── Contract error ─────────────────────────────────────────────────────────────
 
@@ -515,12 +524,6 @@ function toOptionalText(value: unknown): string | null {
  *
  * `scValToNative` reads `Some(x)` as a one-element array and `None` as `null`.
  */
-function toOptionalBigInt(value: unknown): bigint | null {
-  if (value === null || value === undefined) return null;
-  if (Array.isArray(value)) return value.length === 0 ? null : toBigInt(value[0]);
-  return toBigInt(value);
-}
-
 /**
  * Decode a `#[contracttype]` struct payload into camelCase fields.
  *
@@ -690,40 +693,37 @@ export class GovernanceClient {
       decodeError: decodeGovernanceError, ...options });
   }
 
-  private proposalFromNative(
-    native: Record<string, unknown>,
-    fallbackId?: number
-  ): ProposalData {
+  private proposalFromNative(native: Record<string, unknown>): ProposalData {
     return {
-      id: Number(native.id ?? fallbackId ?? 0),
-      proposer: toText(native.proposer ?? ""),
-      kind: decodeProposalKind(native.kind),
-      snapshotTotalSupply: toBigInt(native.snapshot_total_supply),
-      snapshotLedger: Number(toBigInt(native.snapshot_ledger)),
-      voteStart: toBigInt(native.vote_start),
-      voteEnd: toBigInt(native.vote_end),
-      executeAfter: toBigInt(native.execute_after),
-      expiresAt: toBigInt(native.expires_at),
-      votesFor: toBigInt(native.votes_for),
-      votesAgainst: toBigInt(native.votes_against),
-      votesAbstain: toBigInt(native.votes_abstain),
-      executed: Boolean(native.executed),
-      cancelled: Boolean(native.cancelled),
-      vetoed: Boolean(native.vetoed),
+      id: Number(requireBigInt(native, "id", "Proposal")),
+      proposer: requireText(native, "proposer", "Proposal"),
+      kind: decodeProposalKind(requireValue(native, "kind", "Proposal")),
+      snapshotTotalSupply: requireBigInt(native, "snapshot_total_supply", "Proposal"),
+      snapshotLedger: Number(requireBigInt(native, "snapshot_ledger", "Proposal")),
+      voteStart: requireBigInt(native, "vote_start", "Proposal"),
+      voteEnd: requireBigInt(native, "vote_end", "Proposal"),
+      executeAfter: requireBigInt(native, "execute_after", "Proposal"),
+      expiresAt: requireBigInt(native, "expires_at", "Proposal"),
+      votesFor: requireBigInt(native, "votes_for", "Proposal"),
+      votesAgainst: requireBigInt(native, "votes_against", "Proposal"),
+      votesAbstain: requireBigInt(native, "votes_abstain", "Proposal"),
+      executed: requireBoolean(native, "executed", "Proposal"),
+      cancelled: requireBoolean(native, "cancelled", "Proposal"),
+      vetoed: requireBoolean(native, "vetoed", "Proposal"),
       vetoedBy: toOptionalText(native.vetoed_by),
-      vetoedAt: toOptionalBigInt(native.vetoed_at),
-      discussionEnd: toOptionalBigInt(native.discussion_end),
+      vetoedAt: optionalBigInt(native.vetoed_at),
+      discussionEnd: optionalBigInt(native.discussion_end),
     };
   }
 
   private paramsFromNative(native: Record<string, unknown>): GovernanceParams {
     return {
-      votingPeriodSecs: toBigInt(native.voting_period_secs),
-      timelockSecs: toBigInt(native.timelock_secs),
-      quorumBps: toBigInt(native.quorum_bps),
-      minProposerStakeBps: toBigInt(native.min_proposer_stake_bps),
+      votingPeriodSecs: requireBigInt(native, "voting_period_secs", "GovernanceParams"),
+      timelockSecs: requireBigInt(native, "timelock_secs", "GovernanceParams"),
+      quorumBps: requireBigInt(native, "quorum_bps", "GovernanceParams"),
+      minProposerStakeBps: requireBigInt(native, "min_proposer_stake_bps", "GovernanceParams"),
       vetoMultisig: toOptionalText(native.veto_multisig),
-      quorumDecayRateBpsPerDay: toBigInt(native.quorum_decay_rate_bps_per_day),
+      quorumDecayRateBpsPerDay: requireBigInt(native, "quorum_decay_rate_bps_per_day", "GovernanceParams"),
     };
   }
 
@@ -758,10 +758,7 @@ export class GovernanceClient {
    */
   async getProposal(proposalId: number): Promise<ProposalData> {
     const raw = await this.simulate("get_proposal", u32(proposalId));
-    return this.proposalFromNative(
-      scValToNative(raw) as Record<string, unknown>,
-      proposalId
-    );
+    return this.proposalFromNative(scValToNative(raw) as Record<string, unknown>);
   }
 
   /**
@@ -995,10 +992,10 @@ export class GovernanceClient {
     const native = scValToNative(raw) as Record<string, unknown> | null;
     if (native === null || native === undefined) return null;
     return {
-      proposalId: Number(toBigInt(native.proposal_id)),
+      proposalId: Number(requireBigInt(native, "proposal_id", "VetoAudit")),
       vetoedBy: toText(native.vetoed_by),
-      vetoedAt: toBigInt(native.vetoed_at),
-      discussionEnd: toBigInt(native.discussion_end),
+      vetoedAt: requireBigInt(native, "vetoed_at", "VetoAudit"),
+      discussionEnd: requireBigInt(native, "discussion_end", "VetoAudit"),
     };
   }
 

@@ -3,7 +3,10 @@
 
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    Symbol, Vec,
+};
 
 use pool_interfaces::{AmmPoolClient, ConcentratedLiquidityClient, FactoryClient};
 use soroban_amm_sdk::emit_versioned_event;
@@ -14,6 +17,11 @@ const BUMP_TO: u32 = 518_400;
 #[contracttype]
 pub enum DataKey {
     Factory,
+    Admin,
+    /// Nominee of a two-step admin rotation; absent when none is pending.
+    PendingAdmin,
+    /// `true` while the router is halted by the admin; absent means unpaused.
+    Paused,
 }
 
 /// Pool type for distinguishing between AMM and concentrated liquidity pools.
@@ -57,6 +65,18 @@ pub enum BatchRouterError {
     /// `amm::add_liquidity`'s `AmmError::InsufficientShares`
     /// (`contracts/amm/src/lib.rs:1633`).
     InsufficientShares = 11,
+    /// A function that needs the stored admin or factory ran before
+    /// `initialize`.
+    NotInitialized = 12,
+    /// The address supplied as admin (or as the nominee in `accept_admin`) is
+    /// not the one stored.
+    Unauthorized = 13,
+    /// `accept_admin` was called without a pending nomination.
+    NoPendingAdmin = 14,
+    /// The router is paused by its admin. Returned by `execute_batch`,
+    /// `simulate_batch` and `validate_batch` alike so the pre-flight never
+    /// disagrees with execution.
+    Paused = 15,
 }
 
 #[contracttype]
@@ -169,17 +189,128 @@ pub struct BatchRouter;
 
 #[contractimpl]
 impl BatchRouter {
-    /// Initialize the router with the factory that tracks all deployed pools.
-    pub fn initialize(env: Env, factory: Address) -> Result<(), BatchRouterError> {
+    /// Initialize the router with its admin and the factory that tracks all
+    /// deployed pools.
+    ///
+    /// # Deployment window
+    ///
+    /// `initialize` is one-shot but deliberately does not call
+    /// `admin.require_auth()`: an attacker could authorize their own address,
+    /// so it would not stop a front-run, and it would break deployments whose
+    /// admin is a contract that cannot sign for itself. Deployers must read
+    /// back `get_admin` and `get_factory` right after deployment (the deploy
+    /// script does) and redeploy if either differs from the intended value.
+    pub fn initialize(env: Env, admin: Address, factory: Address) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
         if env.storage().instance().has(&DataKey::Factory) {
             return Err(BatchRouterError::AlreadyInitialized);
         }
+        env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Factory, &factory);
+        emit_versioned_event!(env, (Symbol::new(&env, "initialized"),), (admin, factory));
         Ok(())
     }
 
+    /// Halt `execute_batch`, and make `simulate_batch` / `validate_batch`
+    /// report [`BatchRouterError::Paused`] for the same batches. Admin-only.
+    pub fn pause(env: Env, admin: Address) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Paused, &true);
+        emit_versioned_event!(env, (symbol_short!("pause"),), (admin,));
+        Ok(())
+    }
+
+    /// Resume after `pause`. Admin-only.
+    pub fn unpause(env: Env, admin: Address) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &admin)?;
+        env.storage().instance().set(&DataKey::Paused, &false);
+        emit_versioned_event!(env, (symbol_short!("unpause"),), (admin,));
+        Ok(())
+    }
+
+    /// Whether the router is currently halted.
+    pub fn is_paused(env: Env) -> bool {
+        Self::extend_ttl(&env);
+        Self::paused(&env)
+    }
+
+    /// Nominate `new_admin`; the nominee must call `accept_admin`. Admin-only.
+    pub fn propose_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &current_admin)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        emit_versioned_event!(
+            env,
+            (Symbol::new(&env, "admin_nominated"),),
+            (current_admin, new_admin)
+        );
+        Ok(())
+    }
+
+    /// Complete a rotation started by `propose_admin`. The nominee must sign.
+    pub fn accept_admin(env: Env, new_admin: Address) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        let nominee: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(BatchRouterError::NoPendingAdmin)?;
+        if new_admin != nominee {
+            return Err(BatchRouterError::Unauthorized);
+        }
+        new_admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        emit_versioned_event!(env, (Symbol::new(&env, "admin_changed"),), (new_admin,));
+        Ok(())
+    }
+
+    /// Replace the contract WASM. Admin-only.
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::require_admin(&env, &admin)?;
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        emit_versioned_event!(env, (symbol_short!("upgraded"),), (new_wasm_hash,));
+        Ok(())
+    }
+
+    /// The current admin.
+    pub fn get_admin(env: Env) -> Result<Address, BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::read_admin(&env)
+    }
+
+    /// The nominee awaiting `accept_admin`, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::extend_ttl(&env);
+        env.storage().instance().get(&DataKey::PendingAdmin)
+    }
+
+    /// The factory every op's pool is resolved against.
+    pub fn get_factory(env: Env) -> Result<Address, BatchRouterError> {
+        Self::extend_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(BatchRouterError::NotInitialized)
+    }
+
     /// The maximum number of operations a single batch may contain.
-    pub fn max_batch_ops(_env: Env) -> u32 {
+    pub fn max_batch_ops(env: Env) -> u32 {
+        Self::extend_ttl(&env);
         MAX_BATCH_OPS
     }
 
@@ -193,11 +324,12 @@ impl BatchRouter {
         ops: Vec<BatchOp>,
         deadline: u64,
     ) -> Result<Vec<BatchOpResult>, BatchRouterError> {
-        env.storage().instance().extend_ttl(MIN_TTL, BUMP_TO);
+        Self::extend_ttl(&env);
         caller.require_auth();
+        Self::require_not_paused(&env)?;
         Self::check_preconditions(&env, &ops, deadline)?;
 
-        let factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
+        let factory: Address = Self::factory(&env)?;
         let factory_client = FactoryClient::new(&env, &factory);
 
         let mut results = Vec::new(&env);
@@ -236,7 +368,9 @@ impl BatchRouter {
         env: Env,
         ops: Vec<BatchOp>,
     ) -> Result<Vec<BatchOpResult>, BatchRouterError> {
-        let factory: Address = env.storage().instance().get(&DataKey::Factory).unwrap();
+        Self::extend_ttl(&env);
+        Self::require_not_paused(&env)?;
+        let factory: Address = Self::factory(&env)?;
         let factory_client = FactoryClient::new(&env, &factory);
 
         let mut pools: Vec<SimPoolState> = Vec::new(&env);
@@ -261,6 +395,8 @@ impl BatchRouter {
         ops: Vec<BatchOp>,
         deadline: u64,
     ) -> Result<(), BatchRouterError> {
+        Self::extend_ttl(&env);
+        Self::require_not_paused(&env)?;
         Self::check_preconditions(&env, &ops, deadline)?;
         Self::simulate_batch(env, ops)?;
         Ok(())
@@ -277,12 +413,54 @@ impl BatchRouter {
 
     /// Honest call-savings breakdown. See [`CallSavingsEstimate`] — the
     /// cross-contract call count does not shrink with batching.
-    pub fn estimate_call_savings_v2(_env: Env, ops_len: u32) -> CallSavingsEstimate {
+    pub fn estimate_call_savings_v2(env: Env, ops_len: u32) -> CallSavingsEstimate {
+        Self::extend_ttl(&env);
         CallSavingsEstimate {
             top_level_calls_individual: ops_len,
             top_level_calls_batched: 1,
             cross_contract_calls: ops_len,
         }
+    }
+
+    fn extend_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(MIN_TTL, BUMP_TO);
+    }
+
+    fn read_admin(env: &Env) -> Result<Address, BatchRouterError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(BatchRouterError::NotInitialized)
+    }
+
+    fn factory(env: &Env) -> Result<Address, BatchRouterError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Factory)
+            .ok_or(BatchRouterError::NotInitialized)
+    }
+
+    /// The supplied address must equal the stored admin *and* sign the call.
+    fn require_admin(env: &Env, admin: &Address) -> Result<(), BatchRouterError> {
+        if *admin != Self::read_admin(env)? {
+            return Err(BatchRouterError::Unauthorized);
+        }
+        admin.require_auth();
+        Ok(())
+    }
+
+    fn paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    fn require_not_paused(env: &Env) -> Result<(), BatchRouterError> {
+        if Self::paused(env) {
+            return Err(BatchRouterError::Paused);
+        }
+        Ok(())
     }
 
     fn check_preconditions(
@@ -660,9 +838,9 @@ mod tests {
     use concentrated_liquidity::ConcentratedLiquidityClient as ClContractClient;
     use factory::{Factory, FactoryClient};
     use soroban_sdk::{
-        testutils::{Address as _, Events, Ledger as _},
+        testutils::{storage::Instance as _, Address as _, Events, Ledger as _},
         token::{StellarAssetClient, TokenClient as StellarTokenClient},
-        vec, Env, TryFromVal,
+        vec, Env, IntoVal, TryFromVal,
     };
 
     fn setup_env_and_factory(env: &Env) -> Address {
@@ -708,7 +886,7 @@ mod tests {
     fn deploy_router<'a>(env: &'a Env, factory_addr: &Address) -> BatchRouterClient<'a> {
         let batch_addr = env.register_contract(None, BatchRouter);
         let batch_client = BatchRouterClient::new(env, &batch_addr);
-        batch_client.initialize(factory_addr);
+        batch_client.initialize(&Address::generate(env), factory_addr);
         batch_client
     }
 
@@ -1761,6 +1939,451 @@ mod tests {
         assert_eq!(
             client.try_validate_batch(&ops, &deadline),
             Err(Ok(BatchRouterError::InvalidAmount))
+        );
+    }
+
+    // ── Admin lifecycle (#1161) ────────────────────────────────────────────────
+
+    struct Lifecycle {
+        env: Env,
+        addr: Address,
+        admin: Address,
+        factory: Address,
+    }
+
+    impl Lifecycle {
+        fn client(&self) -> BatchRouterClient<'_> {
+            BatchRouterClient::new(&self.env, &self.addr)
+        }
+    }
+
+    fn lifecycle() -> Lifecycle {
+        let env = Env::default();
+        env.mock_all_auths();
+        let factory = setup_env_and_factory(&env);
+        let admin = Address::generate(&env);
+        let addr = env.register_contract(None, BatchRouter);
+        BatchRouterClient::new(&env, &addr).initialize(&admin, &factory);
+        Lifecycle {
+            env,
+            addr,
+            admin,
+            factory,
+        }
+    }
+
+    fn event_count(env: &Env, contract: &Address, name: &str) -> usize {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = (Symbol::new(env, name),).into_val(env);
+        env.events()
+            .all()
+            .iter()
+            .filter(|e| e.0 == *contract && e.1 == topics)
+            .count()
+    }
+
+    fn router_wasm(env: &Env) -> BytesN<32> {
+        env.budget().reset_unlimited();
+        let wasm = soroban_sdk::Bytes::from_slice(
+            env,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../target/wasm32v1-none/release/batch_router.wasm"
+            )),
+        );
+        env.deployer().upload_contract_wasm(wasm)
+    }
+
+    #[test]
+    fn test_initialize_stores_admin_and_factory() {
+        let l = lifecycle();
+        assert_eq!(l.client().get_admin(), l.admin);
+        assert_eq!(l.client().get_factory(), l.factory);
+        assert_eq!(l.client().get_pending_admin(), None);
+        assert!(!l.client().is_paused());
+    }
+
+    #[test]
+    fn test_initialize_emits_initialized_event() {
+        let l = lifecycle();
+        assert_eq!(event_count(&l.env, &l.addr, "initialized"), 1);
+    }
+
+    #[test]
+    fn test_initialize_twice_rejected_and_keeps_first_values() {
+        let l = lifecycle();
+        let other = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_initialize(&other, &other),
+            Err(Ok(BatchRouterError::AlreadyInitialized))
+        );
+        assert_eq!(l.client().get_admin(), l.admin);
+        assert_eq!(l.client().get_factory(), l.factory);
+    }
+
+    #[test]
+    fn test_initialize_needs_no_signature_so_deployers_verify_by_reading_back() {
+        // Deliberate (see the doc on `initialize`): an auth check cannot stop a
+        // front-run, so the deploy script verifies `get_admin` / `get_factory`.
+        let env = Env::default();
+        let addr = env.register_contract(None, BatchRouter);
+        let client = BatchRouterClient::new(&env, &addr);
+        let admin = Address::generate(&env);
+        let factory = Address::generate(&env);
+        client.initialize(&admin, &factory);
+        assert_eq!(client.get_admin(), admin);
+        assert_eq!(client.get_factory(), factory);
+    }
+
+    #[test]
+    fn test_views_fail_before_initialize() {
+        let env = Env::default();
+        let addr = env.register_contract(None, BatchRouter);
+        let client = BatchRouterClient::new(&env, &addr);
+        assert_eq!(
+            client.try_get_admin(),
+            Err(Ok(BatchRouterError::NotInitialized))
+        );
+        assert_eq!(
+            client.try_get_factory(),
+            Err(Ok(BatchRouterError::NotInitialized))
+        );
+        assert!(!client.is_paused());
+    }
+
+    #[test]
+    fn test_pause_halts_execute_simulate_and_validate_with_the_same_error() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let factory_addr = setup_env_and_factory(&env);
+        let (ta, tb, pool, _) = setup_pool(&env, &factory_addr);
+        let trader = Address::generate(&env);
+        fund(&env, &ta, &trader, 100_000);
+        fund(&env, &tb, &trader, 100_000);
+        let admin = Address::generate(&env);
+        let addr = env.register_contract(None, BatchRouter);
+        let client = BatchRouterClient::new(&env, &addr);
+        client.initialize(&admin, &factory_addr);
+
+        let ops = vec![&env, swap_op(&pool, &ta, 10_000, PoolType::Amm, false)];
+        let deadline = env.ledger().timestamp() + 1_000;
+        assert!(client.try_validate_batch(&ops, &deadline).is_ok());
+
+        client.pause(&admin);
+        assert!(client.is_paused());
+        assert_eq!(
+            client.try_execute_batch(&trader, &ops, &deadline),
+            Err(Ok(BatchRouterError::Paused))
+        );
+        assert_eq!(
+            client.try_simulate_batch(&ops),
+            Err(Ok(BatchRouterError::Paused))
+        );
+        assert_eq!(
+            client.try_validate_batch(&ops, &deadline),
+            Err(Ok(BatchRouterError::Paused))
+        );
+        // Paused wins over a malformed batch so the three never disagree.
+        let empty = Vec::<BatchOp>::new(&env);
+        assert_eq!(
+            client.try_validate_batch(&empty, &deadline),
+            Err(Ok(BatchRouterError::Paused))
+        );
+
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+        assert!(client.try_simulate_batch(&ops).is_ok());
+        assert!(client.try_validate_batch(&ops, &deadline).is_ok());
+        assert_eq!(client.execute_batch(&trader, &ops, &deadline).len(), 1);
+    }
+
+    #[test]
+    fn test_pause_by_stranger_rejected() {
+        let l = lifecycle();
+        let stranger = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_pause(&stranger),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        assert!(!l.client().is_paused());
+    }
+
+    #[test]
+    fn test_pause_requires_the_admin_signature() {
+        let l = lifecycle();
+        l.env.set_auths(&[]);
+        assert!(l.client().try_pause(&l.admin).is_err());
+        assert!(!l.client().is_paused());
+    }
+
+    #[test]
+    fn test_unpause_by_stranger_rejected_and_requires_signature() {
+        let l = lifecycle();
+        l.client().pause(&l.admin);
+        let stranger = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_unpause(&stranger),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        l.env.set_auths(&[]);
+        assert!(l.client().try_unpause(&l.admin).is_err());
+        assert!(l.client().is_paused());
+    }
+
+    #[test]
+    fn test_pause_and_unpause_emit_events() {
+        let l = lifecycle();
+        l.client().pause(&l.admin);
+        assert_eq!(event_count(&l.env, &l.addr, "pause"), 1);
+        l.client().unpause(&l.admin);
+        assert_eq!(event_count(&l.env, &l.addr, "unpause"), 1);
+    }
+
+    #[test]
+    fn test_propose_admin_by_stranger_rejected_and_requires_signature() {
+        let l = lifecycle();
+        let nominee = Address::generate(&l.env);
+        let stranger = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_propose_admin(&stranger, &nominee),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        l.env.set_auths(&[]);
+        assert!(l.client().try_propose_admin(&l.admin, &nominee).is_err());
+        assert_eq!(l.client().get_pending_admin(), None);
+    }
+
+    #[test]
+    fn test_admin_rotation_hands_over_all_rights() {
+        let l = lifecycle();
+        let new_admin = Address::generate(&l.env);
+        l.client().propose_admin(&l.admin, &new_admin);
+        assert_eq!(l.client().get_pending_admin(), Some(new_admin.clone()));
+        assert_eq!(event_count(&l.env, &l.addr, "admin_nominated"), 1);
+        // The nominee has no rights until it accepts.
+        assert_eq!(
+            l.client().try_pause(&new_admin),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+
+        l.client().accept_admin(&new_admin);
+        assert_eq!(l.client().get_admin(), new_admin);
+        assert_eq!(l.client().get_pending_admin(), None);
+        assert_eq!(event_count(&l.env, &l.addr, "admin_changed"), 1);
+
+        // The old admin loses every right; the new admin has them.
+        assert_eq!(
+            l.client().try_pause(&l.admin),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        l.client().pause(&new_admin);
+        assert!(l.client().is_paused());
+    }
+
+    #[test]
+    fn test_accept_admin_without_a_proposal_rejected() {
+        let l = lifecycle();
+        let anyone = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_accept_admin(&anyone),
+            Err(Ok(BatchRouterError::NoPendingAdmin))
+        );
+    }
+
+    #[test]
+    fn test_accept_admin_by_wrong_address_rejected_and_requires_signature() {
+        let l = lifecycle();
+        let nominee = Address::generate(&l.env);
+        let stranger = Address::generate(&l.env);
+        l.client().propose_admin(&l.admin, &nominee);
+        assert_eq!(
+            l.client().try_accept_admin(&stranger),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        l.env.set_auths(&[]);
+        assert!(l.client().try_accept_admin(&nominee).is_err());
+        assert_eq!(l.client().get_admin(), l.admin);
+        assert_eq!(l.client().get_pending_admin(), Some(nominee));
+    }
+
+    #[test]
+    fn test_upgrade_by_stranger_rejected_and_requires_signature() {
+        let l = lifecycle();
+        let hash = router_wasm(&l.env);
+        let stranger = Address::generate(&l.env);
+        assert_eq!(
+            l.client().try_upgrade(&stranger, &hash),
+            Err(Ok(BatchRouterError::Unauthorized))
+        );
+        l.env.set_auths(&[]);
+        assert!(l.client().try_upgrade(&l.admin, &hash).is_err());
+    }
+
+    #[test]
+    fn test_upgrade_to_same_hash_preserves_state_and_emits_event() {
+        let l = lifecycle();
+        l.client().pause(&l.admin);
+        let hash = router_wasm(&l.env);
+        l.client().upgrade(&l.admin, &hash);
+        assert_eq!(event_count(&l.env, &l.addr, "upgraded"), 1);
+        assert_eq!(l.client().get_admin(), l.admin);
+        assert_eq!(l.client().get_factory(), l.factory);
+        assert!(l.client().is_paused());
+    }
+
+    fn assert_ttl_bumped(call: impl FnOnce(&Lifecycle)) {
+        let l = lifecycle();
+        l.env.ledger().set_sequence_number(BUMP_TO - MIN_TTL + 1);
+        call(&l);
+        assert_eq!(
+            l.env
+                .as_contract(&l.addr, || { l.env.storage().instance().get_ttl() }),
+            BUMP_TO
+        );
+    }
+
+    #[test]
+    fn test_ttl_bump_initialize() {
+        let env = Env::default();
+        let addr = env.register_contract(None, BatchRouter);
+        let before = env.as_contract(&addr, || env.storage().instance().get_ttl());
+        assert!(before < MIN_TTL);
+        BatchRouterClient::new(&env, &addr)
+            .initialize(&Address::generate(&env), &Address::generate(&env));
+        assert_eq!(
+            env.as_contract(&addr, || env.storage().instance().get_ttl()),
+            BUMP_TO
+        );
+    }
+
+    #[test]
+    fn test_ttl_bump_pause() {
+        assert_ttl_bumped(|l| l.client().pause(&l.admin));
+    }
+
+    #[test]
+    fn test_ttl_bump_unpause() {
+        assert_ttl_bumped(|l| l.client().unpause(&l.admin));
+    }
+
+    #[test]
+    fn test_ttl_bump_is_paused() {
+        assert_ttl_bumped(|l| {
+            l.client().is_paused();
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_propose_admin() {
+        assert_ttl_bumped(|l| {
+            l.client()
+                .propose_admin(&l.admin, &Address::generate(&l.env))
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_accept_admin() {
+        let l = lifecycle();
+        let nominee = Address::generate(&l.env);
+        l.client().propose_admin(&l.admin, &nominee);
+        l.env.ledger().set_sequence_number(BUMP_TO - MIN_TTL + 1);
+        l.client().accept_admin(&nominee);
+        assert_eq!(
+            l.env
+                .as_contract(&l.addr, || { l.env.storage().instance().get_ttl() }),
+            BUMP_TO
+        );
+    }
+
+    #[test]
+    fn test_ttl_bump_upgrade() {
+        assert_ttl_bumped(|l| l.client().upgrade(&l.admin, &router_wasm(&l.env)));
+    }
+
+    #[test]
+    fn test_ttl_bump_get_admin() {
+        assert_ttl_bumped(|l| {
+            l.client().get_admin();
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_get_pending_admin() {
+        assert_ttl_bumped(|l| {
+            l.client().get_pending_admin();
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_get_factory() {
+        assert_ttl_bumped(|l| {
+            l.client().get_factory();
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_max_batch_ops() {
+        assert_ttl_bumped(|l| {
+            l.client().max_batch_ops();
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_estimate_call_savings_v2() {
+        assert_ttl_bumped(|l| {
+            l.client().estimate_call_savings_v2(&3);
+        });
+    }
+
+    #[test]
+    fn test_ttl_bump_simulate_batch() {
+        assert_ttl_bumped(|l| {
+            let empty = Vec::<BatchOp>::new(&l.env);
+            l.client().simulate_batch(&empty);
+        });
+    }
+
+    /// A router whose instance TTL is still the registration default (below
+    /// `MIN_TTL`), wired to a real factory and pool so a valid batch succeeds.
+    /// State is written directly so nothing but the entrypoint under test can
+    /// have bumped the TTL.
+    fn fresh_router_with_pool(env: &Env) -> (Address, Address, Address, Address) {
+        env.mock_all_auths();
+        let factory_addr = setup_env_and_factory(env);
+        let (ta, tb, pool, _) = setup_pool(env, &factory_addr);
+        let trader = Address::generate(env);
+        fund(env, &ta, &trader, 100_000);
+        fund(env, &tb, &trader, 100_000);
+        let addr = env.register_contract(None, BatchRouter);
+        env.as_contract(&addr, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::Factory, &factory_addr);
+        });
+        assert!(env.as_contract(&addr, || env.storage().instance().get_ttl()) < MIN_TTL);
+        (addr, ta, pool, trader)
+    }
+
+    #[test]
+    fn test_ttl_bump_validate_batch() {
+        let env = Env::default();
+        let (addr, ta, pool, _) = fresh_router_with_pool(&env);
+        let ops = vec![&env, swap_op(&pool, &ta, 10_000, PoolType::Amm, false)];
+        BatchRouterClient::new(&env, &addr).validate_batch(&ops, &u64::MAX);
+        assert_eq!(
+            env.as_contract(&addr, || env.storage().instance().get_ttl()),
+            BUMP_TO
+        );
+    }
+
+    #[test]
+    fn test_ttl_bump_execute_batch() {
+        let env = Env::default();
+        let (addr, ta, pool, trader) = fresh_router_with_pool(&env);
+        let ops = vec![&env, swap_op(&pool, &ta, 10_000, PoolType::Amm, false)];
+        BatchRouterClient::new(&env, &addr).execute_batch(&trader, &ops, &u64::MAX);
+        assert_eq!(
+            env.as_contract(&addr, || env.storage().instance().get_ttl()),
+            BUMP_TO
         );
     }
 }

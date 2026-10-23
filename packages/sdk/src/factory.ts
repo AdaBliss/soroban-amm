@@ -16,7 +16,7 @@ import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
-import { toText } from "./internal/decode.js";
+import { toBigInt, toText } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -117,7 +117,7 @@ export class FactoryClient {
     // The exported entrypoint is `get_pool_count`; the contract's `pool_count`
     // is a private helper and is not callable over RPC.
     const raw = await this.simulate("get_pool_count");
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   // ── Write-method parameter types ───────────────────────────────────────────

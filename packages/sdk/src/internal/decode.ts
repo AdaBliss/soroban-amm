@@ -15,13 +15,67 @@ function describe(value: unknown): string {
   return typeof value;
 }
 
+export class ContractDecodeError extends TypeError {
+  constructor(structName: string, field: string, keys: string[]) {
+    super(`failed to decode ${structName}.${field}; present keys: ${keys.join(", ") || "<none>"}`);
+    this.name = "ContractDecodeError";
+  }
+}
+
+export function requireValue(
+  value: Record<string, unknown>,
+  field: string,
+  structName: string
+): unknown {
+  if (value[field] === null || value[field] === undefined) {
+    throw new ContractDecodeError(structName, field, Object.keys(value));
+  }
+  return value[field];
+}
+
+export function requireBigInt(
+  value: Record<string, unknown>,
+  field: string,
+  structName: string
+): bigint {
+  return toBigInt(requireValue(value, field, structName));
+}
+
+export function requireText(
+  value: Record<string, unknown>,
+  field: string,
+  structName: string
+): string {
+  return toText(requireValue(value, field, structName));
+}
+
+export function requireBoolean(
+  value: Record<string, unknown>,
+  field: string,
+  structName: string
+): boolean {
+  const result = requireValue(value, field, structName);
+  if (typeof result !== "boolean") {
+    throw new TypeError(`expected a boolean ${structName}.${field}, got ${describe(result)}`);
+  }
+  return result;
+}
+
+/** Decode an explicitly optional integer (`Option<T>`). */
+export function optionalBigInt(value: unknown): bigint | null {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value.length === 0 ? null : toBigInt(value[0]);
+  return toBigInt(value);
+}
+
 /**
- * Decode an integer field (`u32`, `u64`, `i128`, ...). A missing field
- * (`null`/`undefined`) decodes as `0n`, matching the contract defaults the
- * clients have always assumed.
+ * Decode an integer value (`u32`, `u64`, `i128`, ...). Missing required values
+ * are rejected; callers decoding an optional field must use `optionalBigInt`.
  */
 export function toBigInt(value: unknown): bigint {
-  if (value === null || value === undefined) return 0n;
+  if (value === null || value === undefined) {
+    throw new TypeError(`expected an integer contract value, got ${describe(value)}`);
+  }
   if (typeof value === "bigint") return value;
   if (typeof value === "number" || typeof value === "string") return BigInt(value);
   throw new TypeError(`expected an integer contract value, got ${describe(value)}`);

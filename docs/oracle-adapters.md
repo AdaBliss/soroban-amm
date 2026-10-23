@@ -29,10 +29,12 @@ Register both deployed adapters as ordinary aggregator sources:
 ```bash
 stellar contract invoke --id "$ORACLE_AGGREGATOR_CONTRACT_ID" --source "$ADMIN" \
   -- register_source --admin "$ADMIN_ADDRESS" \
+  --pair '{"token_a":"'"$TOKEN_A"'","token_b":"'"$TOKEN_B"'"}' \
   --source_contract "$AMM_TWAP_ADAPTER_CONTRACT_ID" --source_type AmmTwap --weight 10000
 
 stellar contract invoke --id "$ORACLE_AGGREGATOR_CONTRACT_ID" --source "$ADMIN" \
   -- register_source --admin "$ADMIN_ADDRESS" \
+  --pair '{"token_a":"'"$TOKEN_A"'","token_b":"'"$TOKEN_B"'"}' \
   --source_contract "$CL_TWAP_ADAPTER_CONTRACT_ID" --source_type ClTwap --weight 10000
 ```
 

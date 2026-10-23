@@ -1,6 +1,6 @@
 # Flash Loan Receiver Reference Implementation
 
-A production-ready reference implementation of a Soroban AMM flash loan receiver, demonstrating safe and profitable usage patterns, common pitfalls, and comprehensive testing strategies.
+A reference implementation of a Soroban AMM flash loan receiver, demonstrating safe usage patterns, authentication requirements, common pitfalls, and testing strategies.
 
 ## What is a flash loan?
 
@@ -10,7 +10,7 @@ A flash loan is a loan that is borrowed and repaid within a single atomic transa
 
 1. Caller invokes `pool.flash_loan(receiver, amount_a, amount_b, data)`
 2. Pool transfers tokens to the receiver contract
-3. Pool calls `receiver.on_flash_loan(amount_a, amount_b, fee_a, fee_b, data)`
+3. Pool calls `receiver.on_flash_loan(token_a_amount, token_b_amount, fee_a, fee_b, data)`
 4. Receiver must transfer back `amount_a + fee_a` and `amount_b + fee_b` to the pool
 5. Pool verifies repayment
 6. Transaction commits (or reverts if repayment incomplete)
@@ -18,6 +18,21 @@ A flash loan is a loan that is borrowed and repaid within a single atomic transa
 Flash loans are powerful for arbitrage, liquidations, and collateral swaps — but require careful implementation. Getting the repayment or reentrancy guard wrong costs all borrowed funds.
 
 ## Callback contract guarantees
+
+The callback signature matches the AMM pool interface:
+
+```rust
+pub trait FlashLoanReceiver {
+    fn on_flash_loan(
+        env: Env,
+        token_a_amount: i128,
+        token_b_amount: i128,
+        fee_a: i128,
+        fee_b: i128,
+        data: Bytes,
+    ) -> bool;
+}
+```
 
 ### What the pool guarantees
 
@@ -31,9 +46,28 @@ Flash loans are powerful for arbitrage, liquidations, and collateral swaps — b
 - **Before returning**, transfer back to the pool:
     - `amount_a + fee_a` of token A
     - `amount_b + fee_b` of token B
-- **Missing the repayment** → entire transaction reverts
-- **Partial repayment** → entire transaction reverts
-- **Attempting reentrancy** → transaction reverts with error code 14
+- **Missing the repayment** → entire transaction reverts with `FlashLoanRepaymentFailed` (error code 18)
+- **Partial repayment** → entire transaction reverts with `FlashLoanRepaymentFailed` (error code 18)
+- **Attempting reentrancy** → transaction reverts with `Reentrant` (error code 14)
+
+## Security checklist for receivers
+
+When designing or integrating a flash loan receiver, follow these essential security rules:
+
+1. **Authenticate the pool caller**:
+   In `on_flash_loan`, always verify that the direct caller is the configured pool contract by calling `pool.require_auth()`. Without this check, any stranger can invoke your callback directly with arbitrary amounts and drain funds held by the receiver into the pool.
+2. **Once-only initialization (`initialize`)**:
+   Ensure `initialize` cannot be called more than once. If re-initialization is allowed, an attacker can re-point your receiver to a malicious pool contract and siphon receiver funds.
+3. **Deployment-window caveat**:
+   Because `initialize` is typically unauthenticated on initial deployment, immediately verify the initialization parameters (e.g. read back the stored pool address and owner) or execute deployment and initialization atomically within the same transaction envelope.
+4. **No unsolicited-call funds movement**:
+   Never move funds or execute trading strategies in response to unsolicited calls. Only move assets when invoked through the authenticated pool callback.
+5. **Repay-or-revert**:
+   Ensure all execution branches guarantee either full repayment (`principal + fee`) or an explicit revert/abort (`return false` or panic).
+6. **Rescue function for stranded funds**:
+   Provide an owner-authenticated `rescue(token, amount, to)` function allowing recovery of trapped tokens, protected by `owner.require_auth()`.
+7. **Avoid storing keys or secrets**:
+   Do not store private signing keys or sensitive configuration on-chain.
 
 ## Strategies implemented
 
@@ -94,7 +128,7 @@ The receiver returns `false`, the pool reverts atomically, and no funds are lost
 
 ```rust
 fn on_flash_loan(...) -> bool {
-    let pool = Address::generate(&env); // Can't read from storage due to guard
+    // Attempting to call the pool during callback triggers the reentrancy guard:
     let client = AmmPoolClient::new(&env, &pool);
     let info = client.get_info(); // <- REJECTED: Reentrant error (code 14)
 }
@@ -102,7 +136,7 @@ fn on_flash_loan(...) -> bool {
 
 The pool's reentrancy guard rejects any pool call during the callback.
 
-**Workaround:** Pass token addresses in the `data` parameter.
+**Workaround:** Cache token addresses at `initialize` time or pass them in the `data` parameter.
 
 **Test:** [`tests/flash_loan_test.rs::reentrancy_attempt_rejected`](tests/flash_loan_test.rs)
 
@@ -118,7 +152,7 @@ fn on_flash_loan(env, amount_a, amount_b, fee_a, fee_b, _data) -> bool {
     true
 }
 // Pool post-check: balance_after < balance_before + amount + fee
-// Result: InsufficientLiquidity error, entire transaction reverts
+// Result: FlashLoanRepaymentFailed (code 18) error, entire transaction reverts
 ```
 
 The pool checks total repayment after the callback returns. Shortfall = revert.
@@ -136,7 +170,7 @@ fn on_flash_loan(...) -> bool {
     true
 }
 // Pool post-check: balance_after < balance_before + amount + fee
-// Result: InsufficientLiquidity error, entire transaction reverts
+// Result: FlashLoanRepaymentFailed (code 18) error, entire transaction reverts
 ```
 
 The pool checks its own balance, not whether a transfer happened. Send to the wrong
@@ -200,7 +234,7 @@ This returns the contract address.
 
 ### Step 3: Initialize the receiver
 
-Call the `initialize` entry point with the pool address:
+Call the `initialize` entry point with the pool address and owner address:
 
 ```bash
 soroban contract invoke \
@@ -208,8 +242,11 @@ soroban contract invoke \
   --network testnet \
   --source <your-key> \
   -- initialize \
-  --pool <pool-address>
+  --pool <pool-address> \
+  --owner <owner-address>
 ```
+
+> **Note on Deployment Window**: `initialize` is one-shot. Read back the configured pool and owner after invoking `initialize` to ensure it was not initialized by an unauthorized party during the deployment window.
 
 ### Step 4: Trigger a flash loan
 
@@ -248,8 +285,8 @@ around this, pass all required data in the `data` parameter:
 ```rust
 fn on_flash_loan(
     env: Env,
-    amount_a: i128,
-    amount_b: i128,
+    token_a_amount: i128,
+    token_b_amount: i128,
     fee_a: i128,
     fee_b: i128,
     data: Bytes,
@@ -258,7 +295,7 @@ fn on_flash_loan(
     let (token_a, token_b) = decode_tokens(&data);
 
     // Now you can repay without calling the pool
-    TokenClient::new(&env, &token_a).transfer(&receiver, &pool, &(amount_a + fee_a));
+    TokenClient::new(&env, &token_a).transfer(&receiver, &pool, &(token_a_amount + fee_a));
 
     true
 }

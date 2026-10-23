@@ -151,11 +151,18 @@ Borrowers must implement a callback contract with this interface:
 
 ```rust
 pub trait FlashLoanReceiver {
-    fn on_flash_loan(env: Env, token: Address, amount: i128, fee: i128, data: Bytes) -> bool;
+  fn on_flash_loan(
+    env: Env,
+    token_a_amount: i128,
+    token_b_amount: i128,
+    fee_a: i128,
+    fee_b: i128,
+    data: Bytes,
+  ) -> bool;
 }
 ```
 
-During `flash_loan`, the AMM transfers `amount` of `token` to `receiver`, invokes `on_flash_loan`, and verifies that the pool's token balance increased by at least `fee`. If the receiver does not return `amount + fee` before the callback finishes, the transaction reverts. See [examples/flash_loan_receiver/README.md](examples/flash_loan_receiver/README.md) for a reference implementation covering arbitrage, collateral swaps, and failure modes.
+During `flash_loan`, the AMM transfers the requested amounts of both pool tokens to `receiver`, then invokes `on_flash_loan(token_a_amount, token_b_amount, fee_a, fee_b, data)`. The receiver must return each borrowed amount plus its corresponding fee before the callback finishes, or the transaction reverts. See [examples/flash_loan_receiver/README.md](examples/flash_loan_receiver/README.md) for a reference implementation covering arbitrage, collateral swaps, and failure modes.
 
 ### LP Token Contract
 
@@ -525,14 +532,18 @@ stellar contract invoke \
 
 **4. Create a pool (deploys AMM + LP token, registers the pair):**
 
+<!-- contract: factory -->
 ```sh
 stellar contract invoke \
   --id <FACTORY_CONTRACT_ID> \
   --network testnet --source <YOUR_KEY> \
   -- create_pool \
+  --caller <YOUR_ADDRESS> \
   --token_a <TOKEN_A_CONTRACT_ID> \
   --token_b <TOKEN_B_CONTRACT_ID> \
-  --fee_bps 30
+  --fee_tier 2 \
+  --governance_wasm_hash <GOVERNANCE_WASM_HASH>
+# fee_tier 0-3 maps to 1, 5, 30 and 100 bps; 2 is the 0.30% default
 # → prints the new POOL_CONTRACT_ID
 ```
 
@@ -584,12 +595,14 @@ stellar contract invoke \
 
 Initialize the AMM pool (fee of 30 bps = 0.30%):
 
+<!-- contract: amm -->
 ```sh
 stellar contract invoke \
   --id <AMM_CONTRACT_ID> \
   --network testnet \
   --source <YOUR_KEY> \
   -- initialize \
+  --admin <ADMIN_ADDRESS> \
   --token_a <TOKEN_A_CONTRACT_ID> \
   --token_b <TOKEN_B_CONTRACT_ID> \
   --lp_token <LP_TOKEN_CONTRACT_ID> \
@@ -617,6 +630,7 @@ stellar contract invoke \
 
 ### Swap Tokens
 
+<!-- contract: amm -->
 ```sh
 stellar contract invoke \
   --id <AMM_CONTRACT_ID> \
@@ -671,6 +685,7 @@ The AMM exposes cumulative price state with `get_price_cumulative()`. The exampl
 1. Deploy `twap_consumer.wasm`.
 2. Save a snapshot (for example every minute):
 
+<!-- contract: twap_consumer -->
 ```sh
 stellar contract invoke \
   --id <TWAP_CONSUMER_CONTRACT_ID> \
@@ -717,6 +732,7 @@ Notes:
 | Language | Package | Covers |
 |---|---|---|
 | TypeScript | [`packages/sdk`](packages/sdk) (`@soroban-amm/sdk`) | AMM pool, factory, governance, concentrated liquidity, staking, incentive campaigns, router |
+| TypeScript (middleware client) | [`packages/ts-advanced-client`](packages/ts-advanced-client) (`@soroban-amm/ts-advanced-client`) | Chainable signing, validation, price-feed, retry and plugin middleware around a Soroban simulate → sign → send → poll submitter |
 | Go | [`packages/go-sdk`](packages/go-sdk) | AMM pool (`contracts/amm`), with its own envelope, ScVal and RPC code and no third-party dependencies |
 | Rust | [`contracts/amm-sdk`](contracts/amm-sdk) (`soroban_amm_sdk`) | typed client, shared types and event decoders for the AMM contracts |
 

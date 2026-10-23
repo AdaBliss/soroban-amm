@@ -16,6 +16,7 @@ import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
+import { toBigInt, toText } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -109,13 +110,13 @@ export class RouterClient {
       addressVec(path),
       i128(amountIn)
     );
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /** Returns the factory address this router resolves pools through. */
   async getFactory(): Promise<string> {
     const raw = await this.simulate("get_factory");
-    return String(scValToNative(raw));
+    return toText(scValToNative(raw));
   }
 
   // ── Write-method parameter types ───────────────────────────────────────────

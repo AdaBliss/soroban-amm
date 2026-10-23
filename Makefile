@@ -47,6 +47,12 @@ check-abi: build ## Verify docs/abi.json matches committed contract WASM interfa
 test-abi: ## Run ABI generator/checker script tests
 	node --test scripts/check_abi.test.mjs
 
+check-doc-commands: build ## Verify documented contract invokes against built WASM interfaces
+	node scripts/check_doc_commands.mjs $(WASM_DIR)
+
+test-doc-commands: ## Run fixture tests for the documentation command checker
+	node --test scripts/check_doc_commands.test.mjs
+
 test: build ## Build, then run the full workspace test suite
 	cargo test --workspace
 

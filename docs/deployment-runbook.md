@@ -455,6 +455,7 @@ stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- get_info
 #        fee_bps == 30, protocol_fee_bps == 0, admin is governance or ADMIN_ADDRESS
 
 # 3. LP token admin is the pool
+# contract: token
 stellar contract invoke --id $LP_TOKEN_CONTRACT_ID -- admin
 # Must equal $AMM_POOL_CONTRACT_ID
 
@@ -470,9 +471,11 @@ stellar contract invoke --id $LP_TOKEN_CONTRACT_ID -- locker
 # Must equal $GOVERNANCE_CONTRACT_ID
 
 # 7. Oracle aggregator admin
+# contract: oracle_aggregator
 stellar contract invoke --id $ORACLE_AGGREGATOR_CONTRACT_ID -- get_admin
 
 # 8. TWAP consumer keeper
+# contract: twap_consumer
 stellar contract invoke --id $TWAP_CONSUMER_CONTRACT_ID -- get_keeper
 
 # 9. Staking pool info
@@ -561,6 +564,7 @@ stellar contract upload --wasm target/wasm32v1-none/release/amm.wasm --network $
 # -> NEW_HASH=abc123...
 
 # 2. Upgrade the live contract (admin auth required)
+# contract: amm
 stellar contract invoke --id $AMM_POOL_CONTRACT_ID --network $NETWORK --source $ADMIN_ADDRESS -- upgrade --new_wasm_hash $NEW_HASH
 
 # 3. Verify upgrade took — read back liveness and a known getter
@@ -576,6 +580,7 @@ For the **factory**, the upgrade path is:
 
 ```sh
 # Upgrade factory bytecode itself
+# contract: factory
 stellar contract invoke --id $FACTORY_CONTRACT_ID -- upgrade --new_wasm_hash $NEW_HASH
 # Update future-pool WASM hashes (existing pools unaffected):
 stellar contract invoke --id $FACTORY_CONTRACT_ID -- update_wasm_hashes --amm_wasm_hash $NEW_AMM_HASH --token_wasm_hash $NEW_TOKEN_HASH
@@ -588,6 +593,7 @@ hash. Keep the previous hash in `.soroban-amm.deploy.env` history or in git
 tags:
 
 ```sh
+# contract: factory
 stellar contract invoke --id $FACTORY_CONTRACT_ID -- upgrade --new_wasm_hash $PREVIOUS_HASH
 ```
 
@@ -706,14 +712,15 @@ rejection of a non-admin caller.
 ### 6.1 Pausing a pool
 
 ```sh
-# Anyone with admin auth can pause — halts swaps, add/remove liquidity, flash loans
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- pause --admin $ADMIN_ADDRESS
+# The stored admin authorizes the call; pause takes no contract arguments.
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID --network $NETWORK --source $ADMIN_KEY -- pause
 # Check:
 stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- is_paused
 # -> true
 
 # Resume:
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- unpause --admin $ADMIN_ADDRESS
+# contract: amm
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID --network $NETWORK --source $ADMIN_KEY -- unpause
 ```
 
 The CL pool has the same `pause`/`unpause` interface. Factory pools can be
@@ -746,7 +753,8 @@ stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- try_circuit_breaker_recove
 # -> true if cooldown elapsed and pool was tripped; reverts otherwise
 
 # Admin can also unpause directly without waiting (governance review path):
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- unpause --admin $ADMIN_ADDRESS
+# contract: amm
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID --network $NETWORK --source $ADMIN_KEY -- unpause
 
 # Tune threshold/cooldown (admin-only):
 stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- set_circuit_breaker_config --threshold_bps 3000 --cooldown_secs 1800
@@ -762,18 +770,19 @@ single-admin `emergency_withdraw` path is **disabled** — funds can only be
 moved via the multisig flow:
 
 ```sh
-# 1. A signer proposes the recipient
+# 1. A signer proposes the recipient; the call returns the proposal id
 stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- propose_emergency_withdraw --signer $SIGNER_A --recipient $SAFE_ADDRESS
+# -> PROPOSAL_ID
 
-# 2. Other signers approve the same recipient (each calls the same function — approvals accumulate)
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- propose_emergency_withdraw --signer $SIGNER_B --recipient $SAFE_ADDRESS
+# 2. Other signers approve that proposal by id (the proposer's approval counts already)
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- approve_multisig_proposal --signer $SIGNER_B --proposal_id $PROPOSAL_ID
 # ... until approvals >= quorum
 
 # 3. Any signer executes once quorum is reached and before expiry (7 days)
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- exec_multisig_emergency_wd --signer $SIGNER_A
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- exec_multisig_emergency_wd --signer $SIGNER_A --proposal_id $PROPOSAL_ID
 
 # 4. Verify
-stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- get_multisig_proposal
+stellar contract invoke --id $AMM_POOL_CONTRACT_ID -- get_multisig_proposal --proposal_id $PROPOSAL_ID
 # Reserves are zeroed; TotalShares reset; MinLiquidityLocked cleared so deposits can resume
 ```
 
@@ -805,21 +814,28 @@ manipulated fees while the root cause is investigated.
 ## 7. Admin Key Management
 
 Every contract uses a **two-step `propose_admin` / `accept_admin`** rotation —
-there is no single-transaction admin steal. The pattern is identical across
-`token`, `amm`, `factory`, `oracle_aggregator`, `batch_auction`, etc.
+there is no single-transaction admin steal. The `propose_admin` argument is
+named `admin` on factory, staking, concentrated-liquidity, and reserve-manager
+contracts, and `current_admin` on AMM and governance contracts.
 
 ### 7.1 Rotation procedure
 
 ```sh
-# 1. Current admin nominates the new admin
-stellar contract invoke --id $CONTRACT_ID -- propose_admin --current_admin $OLD --new_admin $NEW
+# 1. Current admin nominates the new admin (AMM/governance pools)
+# contract: amm
+stellar contract invoke --id $CONTRACT_ID --source $OLD_KEY -- propose_admin --current_admin $OLD --new_admin $NEW
+
+# Factory, staking, concentrated-liquidity, and reserve-manager contracts use `admin` instead
+# contract: factory
+stellar contract invoke --id $CONTRACT_ID --source $OLD_KEY -- propose_admin --admin $OLD --new_admin $NEW
 
 # 2. New admin must accept from its own key (require_auth on $NEW)
-stellar contract invoke --id $CONTRACT_ID -- accept_admin --new_admin $NEW \
-  --source $NEW_KEY
+# contract: amm
+stellar contract invoke --id $CONTRACT_ID --source $NEW_KEY -- accept_admin --new_admin $NEW
 
-# Verify:
-stellar contract invoke --id $CONTRACT_ID -- admin   # or get_admin / get_info
+# Verify (the getter is `admin` on token and cl_position_nft, `get_admin` on most others, `get_info` on the AMM):
+# contract: token
+stellar contract invoke --id $CONTRACT_ID -- admin
 ```
 
 If step 2 is not completed, the nomination sits as `PendingAdmin` and the old
@@ -844,8 +860,10 @@ for ((offset = 0; offset < count; offset += page)); do
     -- get_pools --offset "$offset" --limit "$page" | grep -Eo 'C[A-Z0-9]{55}')
   for pool in $pools; do
     echo "Rotating $pool"
-    stellar contract invoke --id $pool -- propose_admin --current_admin $OLD --new_admin $NEW --source $OLD
-    stellar contract invoke --id $pool -- accept_admin --new_admin $NEW --source $NEW
+    # contract: amm
+    stellar contract invoke --id $pool --source $OLD_KEY -- propose_admin --current_admin $OLD --new_admin $NEW
+    # contract: amm
+    stellar contract invoke --id $pool --source $NEW_KEY -- accept_admin --new_admin $NEW
   done
 done
 ```
@@ -1082,7 +1100,7 @@ are also untouched.
 | twal_consumer | `initialize(keeper)` | `contracts/twal_consumer/src/lib.rs` |
 | oracle_aggregator | `initialize(admin, max_staleness_seconds)` | `contracts/oracle_aggregator/src/lib.rs` |
 | router | `initialize(factory)` | `contracts/router/src/lib.rs` |
-| batch_router | `initialize(factory)` | `contracts/batch_router/src/lib.rs` |
+| batch_router | `initialize(admin, factory)` | `contracts/batch_router/src/lib.rs` |
 | dex_aggregator | `initialize(admin, factory)` | `contracts/dex_aggregator/src/lib.rs` |
 | batch_auction | `initialize(admin, batch_window_secs)` | `contracts/batch_auction/src/lib.rs` |
 | cl_position_nft | `initialize(admin, cl_pool)` | `contracts/cl_position_nft/src/lib.rs` |

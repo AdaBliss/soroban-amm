@@ -53,11 +53,16 @@ Before calling `initialize`, verify:
 
 ```sh
 # Initialize via factory (recommended)
+# contract: factory
 stellar contract invoke --id <FACTORY> --source <ADMIN> \
   -- create_pool \
+  --caller <ADMIN_ADDRESS> \
   --token_a <TOKEN_A> \
   --token_b <TOKEN_B> \
-  --fee_bps 30
+  --fee_tier 2 \
+  --governance_wasm_hash <GOVERNANCE_WASM_HASH>
+# fee_tier 0-3 maps to 1, 5, 30 and 100 bps. The governance hash is an Option: pass
+# `null` to create a pool without a governance contract.
 
 # Or manually
 stellar contract invoke --id <POOL> --source <ADMIN> \
@@ -204,12 +209,14 @@ The pool admin can pause the pool, update fees, set the protocol fee, and initia
 
 ```sh
 # Step 1: current admin nominates a new admin
+# contract: amm
 stellar contract invoke --id <POOL> --source <CURRENT_ADMIN> \
   -- propose_admin \
   --current_admin <CURRENT_ADMIN_ADDRESS> \
   --new_admin <NEW_ADMIN_ADDRESS>
 
 # Step 2: new admin accepts
+# contract: amm
 stellar contract invoke --id <POOL> --source <NEW_ADMIN> \
   -- accept_admin \
   --new_admin <NEW_ADMIN_ADDRESS>
@@ -247,7 +254,8 @@ stellar contract invoke --id <GOVERNANCE> --source <VOTER> \
   -- vote \
   --voter <VOTER_ADDRESS> \
   --proposal_id 1 \
-  --support true
+  --choice '{"For":[]}'
+# choice is For, Against or Abstain, written as {"For":[]}, {"Against":[]} or {"Abstain":[]}
 
 # Check proposal status
 stellar contract invoke --id <GOVERNANCE> -- proposal_status --proposal_id 1
@@ -282,6 +290,7 @@ stellar contract invoke --id <POOL> -- get_circuit_breaker_config
 stellar contract invoke --id <POOL> -- try_circuit_breaker_recovery
 
 # Admin can also manually unpause
+# contract: amm
 stellar contract invoke --id <POOL> --source <ADMIN> -- unpause
 ```
 
@@ -305,6 +314,7 @@ Protocol fees accrue in the pool and must be explicitly withdrawn by the `fee_re
 stellar contract invoke --id <POOL> -- get_accrued_fees
 
 # Withdraw to fee_recipient
+# contract: amm
 stellar contract invoke --id <POOL> --source <FEE_RECIPIENT> \
   -- withdraw_protocol_fees
 ```
@@ -359,6 +369,7 @@ stellar contract invoke --id <POOL> --source <ADMIN> \
   --to <RECIPIENT>
 
 # 2. Pause the pool (required before executing)
+# contract: amm
 stellar contract invoke --id <POOL> --source <ADMIN> -- pause
 
 # 3. Wait out the emergency delay (default 24 h)
@@ -392,6 +403,7 @@ stellar contract invoke --id <POOL> --source <SIGNER_2> \
   --proposal_id <ID>
 
 # 3. Pause the pool
+# contract: amm
 stellar contract invoke --id <POOL> --source <ADMIN> -- pause
 
 # 4. Once the delay has passed since quorum, any signer executes
@@ -446,6 +458,7 @@ Contract upgrades replace bytecode while preserving all storage. Follow this che
 6. Verify `get_info()` returns expected values post-upgrade.
 
 ```sh
+# contract: amm
 stellar contract invoke --id <POOL> --source <ADMIN> \
   -- upgrade \
   --new_wasm_hash <NEW_WASM_HASH>

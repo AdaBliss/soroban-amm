@@ -19,6 +19,7 @@ jobs:
                   bash scripts/check_repo_hygiene.test.sh
                   bash scripts/check_staking_deploy.test.sh
                   bash scripts/check_pol_vesting_deploy.test.sh
+                  bash scripts/check_batch_router_deploy.test.sh
             # Channel, components and targets all come from
             # rust-toolchain.toml, so CI cannot drift onto a newer stable than
             # contributors are running; `rustup show` installs what it asks
@@ -56,6 +57,10 @@ jobs:
             # locked dependency tree the way `cargo install` would.
             - name: Install Stellar CLI
               uses: stellar/stellar-cli@v27.1.0
+            - name: Setup Node for documentation checks
+              uses: actions/setup-node@v7
+              with:
+                  node-version-file: .nvmrc
             - name: Check committed ABI against contract interfaces
               run: make check-abi
             - name: Test ABI generator and checker
@@ -94,6 +99,10 @@ jobs:
               run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --exclude amm_fuzz
             - name: Check error docs sync
               run: make check-docs
+            - name: Check documented contract commands
+              run: make check-doc-commands
+            - name: Test documentation command checker
+              run: make test-doc-commands
             - name: Check storage keys do not depend on the ledger clock
               run: make check-storage-keys
             # BRANCH_PROTECTION.md must list the checks this workflow reports.

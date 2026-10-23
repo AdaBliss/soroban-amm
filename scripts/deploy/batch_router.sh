@@ -49,11 +49,12 @@ deploy_batch_router() {
       log "skipping batch_router initialize (--only/--skip filter)"
     else
       CURRENT_STEP="initialize batch_router"
-      log "initializing batch_router factory=$FACTORY_CONTRACT_ID"
-      if invoke "$BATCH_ROUTER_CONTRACT_ID" initialize --factory "$FACTORY_CONTRACT_ID" >/dev/null 2>&1; then
+      log "initializing batch_router admin=$ADMIN_ADDRESS factory=$FACTORY_CONTRACT_ID"
+      if invoke "$BATCH_ROUTER_CONTRACT_ID" initialize --admin "$ADMIN_ADDRESS" --factory "$FACTORY_CONTRACT_ID" >/dev/null 2>&1; then
         log "batch_router initialized"
-      elif batch_router_is_initialized "$BATCH_ROUTER_CONTRACT_ID"; then
+      elif invoke_read "$BATCH_ROUTER_CONTRACT_ID" get_factory >/dev/null 2>&1; then
         # A previous run initialized it but died before persisting the marker.
+        # The verification below decides whether its values are the intended ones.
         log "batch_router already initialized"
       else
         die "failed to initialize batch_router at $BATCH_ROUTER_CONTRACT_ID"
@@ -62,20 +63,29 @@ deploy_batch_router() {
     fi
   fi
 
-  # batch_router exposes no factory getter. simulate_batch loads the stored
-  # factory unconditionally, so an empty batch returns `[]` once initialize
-  # has run and traps before it has — a read-only probe of the init state.
   CURRENT_STEP="verify batch_router"
-  if batch_router_is_initialized "$BATCH_ROUTER_CONTRACT_ID"; then
-    log "verified batch_router $BATCH_ROUTER_CONTRACT_ID is initialized (simulate_batch readable)"
-  else
-    die "batch_router $BATCH_ROUTER_CONTRACT_ID verification failed: simulate_batch did not return an empty result"
-  fi
+  verify_batch_router "$BATCH_ROUTER_CONTRACT_ID" "$ADMIN_ADDRESS" "$FACTORY_CONTRACT_ID"
 }
 
-# batch_router_is_initialized ID — true when simulate_batch([]) succeeds.
-batch_router_is_initialized() {
-  local out
-  out=$(invoke_read "$1" simulate_batch --ops '[]' || true)
-  printf '%s\n' "$out" | grep -qE '^\[\]$'
+# verify_batch_router ID EXPECTED_ADMIN EXPECTED_FACTORY
+# batch_router `initialize` takes no require_auth (an attacker would just
+# authorize their own address), so whoever calls it first picks the admin and
+# the factory. Read both back and abort the deploy on any difference instead of
+# carrying on with a hijacked instance.
+verify_batch_router() {
+  local router_id="$1"
+  local expected_admin="$2"
+  local expected_factory="$3"
+  verify_contract_admin batch_router "$router_id" "$expected_admin" get_admin
+  local out factory
+  out=$(read_back batch_router "$router_id" get_factory) \
+    || die "batch_router $router_id get_factory returned nothing after retries — contract is not initialized"
+  factory=$(printf '%s\n' "$out" | extract_contract_id || true)
+  if [[ -z "$factory" ]]; then
+    die "batch_router $router_id get_factory returned no address — contract is not initialized"
+  fi
+  if [[ "$factory" != "$expected_factory" ]]; then
+    die "batch_router $router_id factory mismatch: expected $expected_factory got $factory — possible front-run, aborting deploy"
+  fi
+  log "verified batch_router $router_id config (admin, factory)"
 }

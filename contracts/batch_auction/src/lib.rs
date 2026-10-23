@@ -1427,9 +1427,10 @@ mod tests {
     use factory::{Factory, FactoryClient};
     use pool_interfaces::{AmmError, PoolInfo};
     use soroban_sdk::{
-        testutils::{Address as _, Events, Ledger},
+        testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
         token::{StellarAssetClient, TokenClient as StellarTokenClient},
-        Env, String, TryFromVal,
+        xdr::{ScErrorCode, ScErrorType},
+        Env, IntoVal, String, Symbol, TryFromVal, Val, Vec,
     };
     use token::{LpToken, LpTokenClient};
 
@@ -1495,6 +1496,63 @@ mod tests {
     /// previously used `u64::MAX` before the ceiling existed (issue #700).
     fn far_future_deadline(env: &Env) -> u64 {
         env.ledger().timestamp() + MAX_ORDER_LIFETIME_SECS - 1
+    }
+
+    fn auth_invalid_action() -> soroban_sdk::Error {
+        soroban_sdk::Error::from_type_and_code(ScErrorType::Context, ScErrorCode::InvalidAction)
+    }
+
+    fn assert_requires_auth(
+        env: &Env,
+        contract_id: &Address,
+        signer_expected: &Address,
+        stranger: &Address,
+        fn_name: &str,
+        args: Vec<Val>,
+        success: impl FnOnce(),
+    ) {
+        env.set_auths(&[]);
+        let no_auth = env.try_invoke_contract::<(), soroban_sdk::Error>(
+            contract_id,
+            &Symbol::new(env, fn_name),
+            args.clone(),
+        );
+        assert_eq!(
+            no_auth,
+            Err(Ok(auth_invalid_action())),
+            "{fn_name}: missing auth should fail with Auth/InvalidAction"
+        );
+
+        env.mock_auths(&[MockAuth {
+            address: stranger,
+            invoke: &MockAuthInvoke {
+                contract: contract_id,
+                fn_name,
+                args: args.clone(),
+                sub_invokes: &[],
+            },
+        }]);
+        let wrong_signer = env.try_invoke_contract::<(), soroban_sdk::Error>(
+            contract_id,
+            &Symbol::new(env, fn_name),
+            args.clone(),
+        );
+        assert_eq!(
+            wrong_signer,
+            Err(Ok(auth_invalid_action())),
+            "{fn_name}: stranger signature should fail with Auth/InvalidAction"
+        );
+
+        env.mock_auths(&[MockAuth {
+            address: signer_expected,
+            invoke: &MockAuthInvoke {
+                contract: contract_id,
+                fn_name,
+                args: args.clone(),
+                sub_invokes: &[],
+            },
+        }]);
+        success();
     }
 
     /// Deploy a concentrated-liquidity pool over `(token_a, token_b)`, seed a
@@ -2518,6 +2576,258 @@ mod tests {
                 .unwrap()
         });
         assert_eq!(claimable, (trader, fake_token_in, 10_000_i128));
+    }
+
+    // ── Admin authorization regression tests ────────────────────────────────────
+
+    #[test]
+    fn test_initialize_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let args = Vec::from_array(&env, [admin.clone().into_val(&env), 30_u64.into_val(&env)]);
+
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "initialize",
+            args,
+            || {
+                BatchAuctionClient::new(&env, &auction_addr).initialize(&admin, &30_u64);
+            },
+        );
+    }
+
+    #[test]
+    fn test_set_batch_window_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+
+        let args = Vec::from_array(&env, [60_u64.into_val(&env)]);
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "set_batch_window",
+            args,
+            || {
+                client.set_batch_window(&60_u64);
+            },
+        );
+    }
+
+    #[test]
+    fn test_set_max_orders_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+
+        let args = Vec::from_array(&env, [admin.clone().into_val(&env), 10_u32.into_val(&env)]);
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "set_max_orders",
+            args,
+            || {
+                client.set_max_orders(&admin, &10_u32);
+            },
+        );
+
+        let err = client
+            .try_set_max_orders(&stranger, &10_u32)
+            .err()
+            .unwrap()
+            .unwrap();
+        assert_eq!(err, AuctionError::Unauthorized);
+    }
+
+    #[test]
+    fn test_set_factory_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let factory_addr = env.register_contract(None, Factory);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+
+        let args = Vec::from_array(
+            &env,
+            [
+                admin.clone().into_val(&env),
+                factory_addr.clone().into_val(&env),
+            ],
+        );
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "set_factory",
+            args,
+            || {
+                client.set_factory(&admin, &factory_addr);
+            },
+        );
+
+        let err = client
+            .try_set_factory(&stranger, &factory_addr)
+            .err()
+            .unwrap()
+            .unwrap();
+        assert_eq!(err, AuctionError::Unauthorized);
+    }
+
+    #[test]
+    fn test_add_venue_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+
+        let args = Vec::from_array(
+            &env,
+            [
+                admin.clone().into_val(&env),
+                pool.clone().into_val(&env),
+                PoolType::Amm.into_val(&env),
+            ],
+        );
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "add_venue",
+            args,
+            || {
+                client.add_venue(&admin, &pool, &PoolType::Amm);
+            },
+        );
+
+        let err = client
+            .try_add_venue(&stranger, &pool, &PoolType::Amm)
+            .err()
+            .unwrap()
+            .unwrap();
+        assert_eq!(err, AuctionError::Unauthorized);
+    }
+
+    #[test]
+    fn test_remove_venue_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let pool = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+        client.add_venue(&admin, &pool, &PoolType::Amm);
+
+        let args = Vec::from_array(
+            &env,
+            [admin.clone().into_val(&env), pool.clone().into_val(&env)],
+        );
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "remove_venue",
+            args,
+            || {
+                client.remove_venue(&admin, &pool);
+            },
+        );
+
+        let err = client
+            .try_remove_venue(&stranger, &pool)
+            .err()
+            .unwrap()
+            .unwrap();
+        assert_eq!(err, AuctionError::Unauthorized);
+    }
+
+    #[test]
+    fn test_propose_admin_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+
+        let args = Vec::from_array(
+            &env,
+            [admin.clone().into_val(&env), nominee.clone().into_val(&env)],
+        );
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &admin,
+            &stranger,
+            "propose_admin",
+            args,
+            || {
+                client.propose_admin(&admin, &nominee);
+            },
+        );
+
+        let err = client
+            .try_propose_admin(&stranger, &nominee)
+            .err()
+            .unwrap()
+            .unwrap();
+        assert_eq!(err, AuctionError::Unauthorized);
+    }
+
+    #[test]
+    fn test_accept_admin_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let nominee = Address::generate(&env);
+        let auction_addr = env.register_contract(None, BatchAuction);
+        let client = BatchAuctionClient::new(&env, &auction_addr);
+        env.mock_all_auths();
+        client.initialize(&admin, &30_u64);
+        client.propose_admin(&admin, &nominee);
+
+        let args = Vec::from_array(&env, [nominee.clone().into_val(&env)]);
+        assert_requires_auth(
+            &env,
+            &auction_addr,
+            &nominee,
+            &stranger,
+            "accept_admin",
+            args,
+            || {
+                client.accept_admin(&nominee);
+            },
+        );
     }
 
     // ── Issue #553: two-step admin rotation ─────────────────────────────────────

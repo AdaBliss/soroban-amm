@@ -16,6 +16,7 @@ import type { NetworkConfig } from "./types.js";
 import { simulateRead } from "./internal/simulate.js";
 import { invoke } from "./internal/invoke.js";
 import type { InvocationResult, InvokeOptions, Signer } from "./internal/invoke.js";
+import { toBigInt, toText } from "./internal/decode.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -70,13 +71,13 @@ export class TokenClient {
   /** Returns the token name. */
   async name(): Promise<string> {
     const raw = await this.simulate("name");
-    return String(scValToNative(raw));
+    return toText(scValToNative(raw));
   }
 
   /** Returns the token symbol. */
   async symbol(): Promise<string> {
     const raw = await this.simulate("symbol");
-    return String(scValToNative(raw));
+    return toText(scValToNative(raw));
   }
 
   /** Returns the number of decimal places used to represent token amounts. */
@@ -88,13 +89,13 @@ export class TokenClient {
   /** Returns the total number of tokens currently in circulation. */
   async totalSupply(): Promise<bigint> {
     const raw = await this.simulate("total_supply");
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /** Returns the token balance of `address`. Returns `0n` if no balance. */
   async balance(address: string): Promise<bigint> {
     const raw = await this.simulate("balance", addr(address));
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   /**
@@ -103,7 +104,7 @@ export class TokenClient {
    */
   async allowance(from: string, spender: string): Promise<bigint> {
     const raw = await this.simulate("allowance", addr(from), addr(spender));
-    return BigInt(String(scValToNative(raw)));
+    return toBigInt(scValToNative(raw));
   }
 
   // ── Write-method parameter types ───────────────────────────────────────────
